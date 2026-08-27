@@ -1,0 +1,147 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #2b1d14;
+  color: #3a2b20;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+}
+
+#app {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+#game-canvas {
+  background: #fff6e8;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+#overlay {
+  width: 384px;
+  max-width: 100%;
+}
+
+.screen {
+  background: #fff6e8;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 24px;
+  text-align: center;
+}
+
+.screen h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+}
+
+.screen h2 {
+  margin: 20px 0 8px;
+  font-size: 16px;
+  text-align: left;
+}
+
+.subtitle {
+  margin: 0 0 16px;
+  font-size: 14px;
+  opacity: 0.75;
+}
+
+.stat {
+  margin: 4px 0;
+  font-size: 15px;
+}
+
+.stat.small {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.primary {
+  width: 100%;
+  margin-top: 16px;
+  padding: 14px;
+  border: none;
+  border-radius: 10px;
+  background: #3fae5c;
+  color: white;
+  font-size: 17px;
+  font-weight: bold;
+}
+
+.primary:active {
+  background: #339049;
+}
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  text-align: left;
+}
+
+.shop-item {
+  border: 1px solid rgba(58, 43, 32, 0.15);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.shop-item-title {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.shop-item-desc {
+  font-size: 12px;
+  opacity: 0.75;
+  margin: 4px 0;
+}
+
+.shop-item-owned {
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.buy-btn {
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: #f2960b;
+  color: white;
+  font-weight: bold;
+}
+
+.buy-btn:disabled {
+  background: #cfc3b3;
+  cursor: not-allowed;
+}
+
+.toggle {
+  display: block;
+  text-align: left;
+  font-size: 14px;
+  margin: 6px 0;
+}
+
+.hint {
+  font-size: 12px;
+  opacity: 0.7;
+  text-align: left;
+}
