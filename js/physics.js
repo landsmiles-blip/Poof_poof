@@ -5,7 +5,7 @@ import {
   COLS, CELL, GRAVITY_PX_PER_SEC, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
 } from './constants.js';
-import { effectiveRows, randomSpawnTier, addScore } from './state.js';
+import { effectiveRows, randomSpawnTier, addScore, registerComboHit } from './state.js';
 
 export function spawnFruit(state) {
   const tier = state.nextTier;
@@ -109,13 +109,24 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
 
   state.grid[clearR][clearC] = null;
 
+  // Every merge extends the combo streak; the multiplier applies to the
+  // points this merge awards.
+  const multiplier = registerComboHit(state);
+
   if (tier >= MAX_TIER) {
     state.grid[keepR][keepC] = null;
-    addScore(state, WATERMELON_CLEAR_BONUS);
+    addScore(state, Math.round(WATERMELON_CLEAR_BONUS * multiplier));
+    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, multiplier });
   } else {
     const newTier = tier + 1;
     state.grid[keepR][keepC] = newTier;
-    addScore(state, TIERS[newTier].points);
+    addScore(state, Math.round(TIERS[newTier].points * multiplier));
+    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, multiplier });
+    if (newTier >= MAX_TIER) {
+      // Reaching the highest tier for the first time is its own moment,
+      // distinct from clearing a pair of them.
+      state.events.push({ type: 'reachedTop', tier: newTier, row: keepR, col: keepC });
+    }
   }
 }
 

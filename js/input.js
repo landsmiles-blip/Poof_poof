@@ -1,9 +1,15 @@
-// Pointer input (unifies mouse + touch) for dragging the falling fruit
-// and using the Fruit Remover power-up.
+// Pointer input (unifies mouse + touch) for dragging the falling fruit,
+// using the Fruit Remover power-up, and toggling sound.
 
-import { CELL, HUD_HEIGHT, BOARD_WIDTH } from './constants.js';
+import { CELL, HUD_HEIGHT, BOARD_WIDTH, COLS, MUTE_RECT } from './constants.js';
 import { removeFruitAt } from './physics.js';
 import { saveInventory } from './storage.js';
+import { unlockAudio, toggleMuted, playUiTick } from './audio.js';
+
+function inRect(point, rect) {
+  return point.x >= rect.x && point.x <= rect.x + rect.w
+    && point.y >= rect.y && point.y <= rect.y + rect.h;
+}
 
 export function attachInput(canvas, state, callbacks = {}) {
   let dragging = false;
@@ -19,16 +25,26 @@ export function attachInput(canvas, state, callbacks = {}) {
   }
 
   function onPointerDown(evt) {
+    // Browsers only allow audio to start from a user gesture.
+    unlockAudio();
+
     const point = toCanvasPoint(evt);
+
+    if (inRect(point, MUTE_RECT)) {
+      toggleMuted();
+      playUiTick();
+      return;
+    }
 
     if (state.removerArmed && point.y > HUD_HEIGHT) {
       const col = Math.floor(point.x / CELL);
       const row = Math.floor((point.y - HUD_HEIGHT) / CELL);
-      if (col >= 0 && col < 6 && row >= 0 && row < state.grid.length) {
+      if (col >= 0 && col < COLS && row >= 0 && row < state.grid.length) {
         if (removeFruitAt(state, row, col)) {
           state.inventory.remover -= 1;
           state.removerArmed = false;
           saveInventory(state.inventory);
+          playUiTick();
           callbacks.onRemoverUsed?.();
         }
       }
@@ -38,6 +54,7 @@ export function attachInput(canvas, state, callbacks = {}) {
     // Tap the HUD remover label to arm it.
     if (point.y <= HUD_HEIGHT && state.inventory.remover > 0 && point.x < BOARD_WIDTH / 2) {
       state.removerArmed = !state.removerArmed;
+      playUiTick();
       return;
     }
 

@@ -1,6 +1,6 @@
 // Minimal offline cache. Bump CACHE_NAME whenever shipped files change so
 // clients pick up the new version instead of serving stale assets forever.
-const CACHE_NAME = 'poofpoof-v1';
+const CACHE_NAME = 'poofpoof-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './css/style.css',
   './js/constants.js',
   './js/storage.js',
+  './js/audio.js',
   './js/state.js',
   './js/physics.js',
   './js/render.js',

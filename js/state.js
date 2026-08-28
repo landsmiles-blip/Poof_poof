@@ -1,8 +1,17 @@
 // Game state container + lifecycle transitions (menu -> playing -> gameover/shop).
-// No rendering or input logic here, just plain data and state transitions.
+// No rendering, input, or audio logic here, just plain data and state transitions.
 
-import { COLS, ROWS, SPAWN_POOL, COINS_PER_SCORE } from './constants.js';
-import { loadHighScore, saveHighScore, loadCoins, saveCoins, loadInventory, saveInventory } from './storage.js';
+import {
+  COLS, ROWS, SPAWN_POOL, COINS_PER_SCORE,
+  COMBO_WINDOW_SEC, COMBO_STEP, COMBO_MAX_MULTIPLIER,
+  SKINS, DEFAULT_SKIN_ID,
+} from './constants.js';
+import {
+  loadHighScore, saveHighScore, loadCoins, saveCoins,
+  loadInventory, saveInventory,
+  loadUnlockedSkins, saveUnlockedSkins,
+  loadSelectedSkin, saveSelectedSkin,
+} from './storage.js';
 
 export const SCREEN = {
   MENU: 'menu',
@@ -11,11 +20,19 @@ export const SCREEN = {
 };
 
 export function createInitialState() {
+  const highScore = loadHighScore();
+  const unlockedSkins = reconcileUnlocks(loadUnlockedSkins(), highScore);
+  const selectedSkin = validSkinId(loadSelectedSkin(), unlockedSkins);
+
   return {
     screen: SCREEN.MENU,
-    highScore: loadHighScore(),
+    highScore,
     coins: loadCoins(),
     inventory: loadInventory(),
+
+    unlockedSkins,
+    selectedSkin,
+    newlyUnlockedSkins: [], // skins earned by the run that just ended
 
     grid: makeEmptyGrid(),
     stackHeight: new Array(COLS).fill(0),
@@ -27,6 +44,14 @@ export function createInitialState() {
 
     slowDropActive: false,
     removerArmed: false,
+
+    comboCount: 0,
+    comboTimer: 0,
+    bestComboThisRun: 0,
+
+    // Physics pushes {type, ...} here; main.js drains it each frame and turns
+    // entries into sound. Keeps physics.js free of audio/DOM imports.
+    events: [],
 
     lastRunCoinsEarned: 0,
     gameOverReason: null,
@@ -45,7 +70,73 @@ export function effectiveRows(state) {
   return state.extraRowActive ? ROWS + 1 : ROWS;
 }
 
-// Starts a new run, consuming any power-ups the player toggled on in the shop.
+// --- Skins ---------------------------------------------------------------
+
+function reconcileUnlocks(stored, highScore) {
+  const ids = new Set(stored);
+  ids.add(DEFAULT_SKIN_ID);
+  // Re-derive from the best score so a stored list can never lag behind
+  // (or be missing an unlock the player has clearly earned).
+  for (const skin of SKINS) {
+    if (highScore >= skin.unlockScore) ids.add(skin.id);
+  }
+  return SKINS.filter((s) => ids.has(s.id)).map((s) => s.id);
+}
+
+function validSkinId(id, unlocked) {
+  return unlocked.includes(id) ? id : DEFAULT_SKIN_ID;
+}
+
+export function getSkin(state) {
+  return SKINS.find((s) => s.id === state.selectedSkin) || SKINS[0];
+}
+
+export function skinColor(state, tierIndex) {
+  const skin = getSkin(state);
+  return skin.colors[tierIndex] || SKINS[0].colors[tierIndex];
+}
+
+export function selectSkin(state, id) {
+  if (!state.unlockedSkins.includes(id)) return false;
+  state.selectedSkin = id;
+  saveSelectedSkin(id);
+  return true;
+}
+
+// --- Combo ---------------------------------------------------------------
+
+export function comboMultiplier(comboCount) {
+  if (comboCount <= 1) return 1;
+  return Math.min(COMBO_MAX_MULTIPLIER, 1 + (comboCount - 1) * COMBO_STEP);
+}
+
+// Called on every merge: extends the streak and returns the multiplier that
+// should apply to this merge's points.
+export function registerComboHit(state) {
+  state.comboCount += 1;
+  state.comboTimer = COMBO_WINDOW_SEC;
+  if (state.comboCount > state.bestComboThisRun) {
+    state.bestComboThisRun = state.comboCount;
+  }
+  return comboMultiplier(state.comboCount);
+}
+
+export function tickCombo(state, dt) {
+  if (state.comboCount === 0) return;
+  state.comboTimer -= dt;
+  if (state.comboTimer <= 0) {
+    state.comboTimer = 0;
+    state.comboCount = 0;
+  }
+}
+
+export function resetCombo(state) {
+  state.comboCount = 0;
+  state.comboTimer = 0;
+}
+
+// --- Run lifecycle -------------------------------------------------------
+
 export function startRun(state, { useSlowDrop, useExtraRow } = {}) {
   if (useSlowDrop && state.inventory.slowDrop > 0) {
     state.inventory.slowDrop -= 1;
@@ -71,6 +162,10 @@ export function startRun(state, { useSlowDrop, useExtraRow } = {}) {
   state.active = null;
   state.nextTier = randomSpawnTier();
   state.gameOverReason = null;
+  state.newlyUnlockedSkins = [];
+  state.events.length = 0;
+  state.bestComboThisRun = 0;
+  resetCombo(state);
   state.screen = SCREEN.PLAYING;
 }
 
@@ -78,10 +173,20 @@ export function endRun(state, reason) {
   state.screen = SCREEN.GAMEOVER;
   state.gameOverReason = reason;
   state.active = null;
+  resetCombo(state);
 
   if (state.score > state.highScore) {
     state.highScore = state.score;
     saveHighScore(state.highScore);
+  }
+
+  // Unlock any skin whose milestone this run's score reached.
+  const before = new Set(state.unlockedSkins);
+  const after = reconcileUnlocks(state.unlockedSkins, state.highScore);
+  state.newlyUnlockedSkins = after.filter((id) => !before.has(id));
+  if (state.newlyUnlockedSkins.length > 0) {
+    state.unlockedSkins = after;
+    saveUnlockedSkins(after);
   }
 
   const earned = Math.floor(state.score * COINS_PER_SCORE);

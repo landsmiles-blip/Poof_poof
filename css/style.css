@@ -133,6 +133,103 @@ button {
   cursor: not-allowed;
 }
 
+.skin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  text-align: left;
+}
+
+.skin-item {
+  border: 1px solid rgba(58, 43, 32, 0.15);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.skin-item.is-selected {
+  border-color: #3fae5c;
+  box-shadow: inset 0 0 0 1px #3fae5c;
+}
+
+.skin-item.locked {
+  opacity: 0.55;
+}
+
+.skin-name {
+  font-weight: bold;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.swatches {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+/* Mirrors the two canvas shapes so the swatches preview the real look. */
+.swatch-circle {
+  border-radius: 50%;
+}
+
+.swatch-flower {
+  border-radius: 45% 55% 50% 50% / 50% 45% 55% 50%;
+  clip-path: polygon(
+    50% 0%, 68% 18%, 93% 12%, 88% 37%, 100% 50%,
+    88% 63%, 93% 88%, 68% 82%, 50% 100%,
+    32% 82%, 7% 88%, 12% 63%, 0% 50%, 12% 37%, 7% 12%, 32% 18%
+  );
+}
+
+.skin-btn {
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: #8e44ad;
+  color: white;
+  font-weight: bold;
+  font-size: 13px;
+}
+
+.skin-btn:disabled {
+  background: #cfc3b3;
+  cursor: not-allowed;
+}
+
+.skin-btn.selected:disabled {
+  background: #3fae5c;
+  color: white;
+}
+
+.unlock-banner {
+  margin: 10px 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: #3fae5c;
+  color: white;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.sound-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid rgba(58, 43, 32, 0.2);
+  border-radius: 8px;
+  background: transparent;
+  color: #3a2b20;
+  font-size: 13px;
+}
+
 .toggle {
   display: block;
   text-align: left;

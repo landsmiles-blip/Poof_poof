@@ -20,14 +20,53 @@ Then open `http://localhost:8000/`.
 
 ## Code layout
 
-- `js/constants.js` -- all tunable numbers (grid size, tiers, costs, speeds).
-- `js/state.js` -- game state shape and lifecycle transitions (menu / playing / game over).
-- `js/physics.js` -- falling motion, landing, merge resolution, column settling. No DOM access.
+- `js/constants.js` -- all tunable numbers (grid size, tiers, shapes, combo, skins, costs, speeds).
+- `js/state.js` -- game state shape and lifecycle transitions (menu / playing / game over), combo tracking, skin unlocks.
+- `js/physics.js` -- falling motion, landing, merge resolution, column settling. No DOM, canvas, or audio access.
 - `js/render.js` -- canvas drawing only. No state mutation.
 - `js/input.js` -- pointer (mouse + touch, unified via Pointer Events) handling.
+- `js/audio.js` -- runtime-synthesized sound effects (WebAudio). No audio files.
 - `js/shop.js` -- DOM-based menu / game-over / shop screens.
-- `js/storage.js` -- the only file that touches `localStorage`.
+- `js/storage.js` -- the only file that touches `localStorage`, and the only one that needs to.
 - `js/main.js` -- wires it together and runs the `requestAnimationFrame` loop.
+
+Physics never imports audio or the DOM. Merges push events onto `state.events`,
+and `main.js` drains that queue into sound each frame -- so gameplay logic stays
+testable in isolation and there is exactly one place where the game becomes audible.
+
+## Features
+
+**Fruit shapes.** Each tier carries a `shape` (`'circle' | 'flower'`) in
+`constants.js`, alternating by default. It is per-tier data rather than an
+index calculation, so any single tier can be changed without touching
+`render.js`. A flower's petals are sized so it occupies exactly the same
+footprint as the circle it replaces -- grid geometry and landing math are
+untouched.
+
+**Sound.** Every effect is synthesized at runtime with WebAudio: no audio
+files, so the payload cost is zero and there is no sample licensing to
+resolve. Merge pops rise one semitone per tier (320 Hz -> 508 Hz across the
+nine tiers); reaching the top tier plays a five-note major arpeggio on a
+different waveform so it is unmistakable. Audio starts only on a user
+gesture (browsers require it), silences itself when the tab is hidden, and
+every call is a no-op if audio is unavailable -- sound failing must never
+take gameplay with it. Mute toggles from the HUD speaker icon or the
+shop/menu button, and persists.
+
+**Combo multiplier.** Every merge extends a window; the multiplier climbs
+`+0.25` per merge in the streak, capped at `3x`. Cascades inside one drop
+always chain. Chaining *across* drops depends on fall time, which is shorter
+when the stack is tall -- so the combo pays for playing dangerously rather
+than for playing patiently. The window is tuned to `1.2s` against simulated
+runs; at `2.0s` a competent player never dropped out of the streak and the
+multiplier degenerated into a permanent flat bonus.
+
+**Unlockable skins.** Three skins beyond the default, earned at best-score
+milestones (1000 / 3000 / 8000) and selectable in the shop. Thresholds are
+calibrated against 250-run simulations at three skill levels (median score:
+novice ~1000, casual ~3000, expert ~9000) so they land on successive rungs
+of the skill curve. Unlocks are re-derived from the best score on load, so
+the stored list can never drift out of sync with what the player has earned.
 
 ## PWA / Android (Trusted Web Activity) distribution
 
