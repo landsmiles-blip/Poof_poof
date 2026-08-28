@@ -19,21 +19,27 @@ export function isRainbow(tier) {
 }
 
 export function spawnFruit(state) {
-  // Rainbow charges ride the normal spawn path: they simply replace what the
-  // pool would otherwise have produced, at random points through the run.
-  let tier = state.nextTier;
-  if (state.rainbowRemaining > 0 && Math.random() < state.rainbowChance) {
-    tier = RAINBOW_TIER;
-    state.rainbowRemaining -= 1;
-  }
-
-  state.nextTier = randomSpawnTier();
   const startCol = Math.floor(COLS / 2);
   const rows = effectiveRows(state);
 
+  // Bail before consuming anything. A blocked spawn ends the run, and eating a
+  // scheduled wild (or advancing the index) on the way out would silently
+  // destroy a charge the player paid for.
   if (state.stackHeight[startCol] >= rows) {
     return { blocked: true };
   }
+
+  // Rainbow charges ride the normal spawn path, arriving at indices fixed when
+  // the run started rather than being rolled for each spawn. The schedule is
+  // strictly increasing, so only the head can ever match.
+  let tier = state.nextTier;
+  const schedule = state.rainbowSchedule;
+  if (schedule && schedule.length > 0 && schedule[0] === state.spawnIndex) {
+    schedule.shift();
+    tier = RAINBOW_TIER;
+  }
+  state.spawnIndex += 1;
+  state.nextTier = randomSpawnTier();
 
   state.active = {
     tier,
@@ -215,6 +221,11 @@ export function detonateBomb(state, row, col) {
   }
   if (cleared.length === 0) return null;
 
+  // Emitted before settling, so the coordinates still point at where each fruit
+  // actually was when it was destroyed. main.js turns this into one burst per
+  // cell; physics stays free of audio/DOM imports, as everywhere else here.
+  state.events.push({ type: 'bombCleared', cells: cleared.slice() });
+
   settleColumns(state);
   state.suppressCombo = true;
   try {
@@ -229,9 +240,15 @@ export function detonateBomb(state, row, col) {
 // matching the held fruit's tier slides ONE column toward the column being
 // dragged over, and only if the destination has room.
 //
-// Deliberately narrow: it never moves buried fruit, never moves more than one
-// column per step, and never places a fruit directly into a merge position
-// that the player did not set up. It nudges the board, it does not solve it.
+// Deliberately narrow: it never moves a fruit more than one column per step,
+// and it never resolves the merge itself. It nudges the board, it does not
+// solve it -- repositioning only. Any adjacency it creates sits there until the
+// player's next drop lands and lockFruit() resolves it through the normal path,
+// so the merge still costs the player a placement.
+//
+// (An earlier version called resolveMerges() here, which cashed in the merge --
+// and any chain cascade behind it -- with no further player input, contradicting
+// this very comment. A compliance review caught it.)
 export function stepMagnet(state, dt) {
   if (!state.magnetActive || !state.active) return [];
 
@@ -286,10 +303,14 @@ export function stepMagnet(state, dt) {
     moves.push({ from: move.from, to: move.to, tier: move.tier });
   }
 
-  if (moves.length > 0) {
-    settleColumns(state);
-    resolveMerges(state);
-  }
+  // settleColumns is required, not cosmetic. When one column is both a source
+  // and a destination in the same step, the second move uses the snapshot's
+  // fromRow and so nulls a cell that the first move has just buried, leaving a
+  // hole with a fruit floating above it. Each fruit still travels only one
+  // column; this repairs the transient gap and recomputes stackHeight.
+  //
+  // Note there is NO resolveMerges() here on purpose -- see the header comment.
+  if (moves.length > 0) settleColumns(state);
   return moves;
 }
 

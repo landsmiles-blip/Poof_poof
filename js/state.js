@@ -5,7 +5,7 @@ import {
   COLS, ROWS, SPAWN_POOL, COINS_PER_SCORE,
   COMBO_WINDOW_SEC, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_PER_CHARGE,
+  MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_PER_CHARGE, RAINBOW_SCHEDULE_BANDS,
 } from './constants.js';
 import {
   loadHighScore, saveHighScore, loadCoins, saveCoins,
@@ -63,8 +63,8 @@ export function createInitialState() {
     magnetActive: false,
     magnetTimer: 0,
     magnetStepTimer: 0,
-    rainbowRemaining: 0,
-    rainbowChance: 0,
+    rainbowSchedule: [],
+    spawnIndex: 0,
 
     comboCount: 0,
     comboTimer: 0,
@@ -110,6 +110,27 @@ export function randomSpawnTier() {
 
 export function effectiveRows(state) {
   return state.extraRowActive ? ROWS + 1 : ROWS;
+}
+
+// Spawn indices for a run's wild fruit, one per band, randomised inside the
+// band so runs vary while delivery stays guaranteed. Returns a strictly
+// increasing list, so spawnFruit can just compare against the head.
+export function buildRainbowSchedule(count) {
+  const bands = RAINBOW_SCHEDULE_BANDS;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const band = bands[Math.min(i, bands.length - 1)];
+    // Wilds beyond the defined bands (only reachable if PER_CHARGE grows) are
+    // pushed progressively later rather than colliding on the last band.
+    const offset = i < bands.length ? 0 : (i - bands.length + 1) * 6;
+    const span = band[1] - band[0] + 1;
+    out.push(offset + band[0] + Math.floor(Math.random() * span));
+  }
+  out.sort((a, b) => a - b);
+  for (let i = 1; i < out.length; i++) {
+    if (out[i] <= out[i - 1]) out[i] = out[i - 1] + 1;
+  }
+  return out;
 }
 
 // --- Skins ---------------------------------------------------------------
@@ -226,16 +247,14 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
     state.extraRowActive = false;
   }
 
-  // Rainbow charges are spent up front and then dribbled into the run through
-  // the ordinary spawn path, rather than all arriving at once.
-  if (useRainbow && state.inventory.rainbow > 0) {
-    state.inventory.rainbow -= 1;
-    state.rainbowRemaining = RAINBOW_PER_CHARGE;
-    state.rainbowChance = 0.12;
-  } else {
-    state.rainbowRemaining = 0;
-    state.rainbowChance = 0;
-  }
+  // Rainbow charges are spent up front and delivered on a schedule fixed at run
+  // start, so a paid charge always arrives. Previously this set a 12% per-spawn
+  // roll that could deliver nothing at all.
+  state.rainbowSchedule = (useRainbow && state.inventory.rainbow > 0)
+    ? buildRainbowSchedule(RAINBOW_PER_CHARGE)
+    : [];
+  if (state.rainbowSchedule.length > 0) state.inventory.rainbow -= 1;
+  state.spawnIndex = 0;
 
   state.removerArmed = false;
   state.bombArmed = false;

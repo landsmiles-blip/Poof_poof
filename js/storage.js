@@ -13,14 +13,40 @@ import { STORAGE_KEYS } from './constants.js';
 const memoryStore = new Map();
 let backendChecked = false;
 let hasLocalStorage = false;
+let readOnly = false;
+
+// Read-only mode: reads still come from the real save, but nothing is ever
+// written back to it. Used by `?dev=1`, which inflates inventory and highScore
+// in memory purely for testing.
+//
+// This is enforced HERE rather than at the call sites on purpose. Dev mode used
+// to corrupt real saves through six separate paths -- startRun, buyPowerUp,
+// activateMagnet, consumeBomb, consumeRemover and selectSkin -- with startRun
+// firing unconditionally on the very first Play tap. Guarding the single choke
+// point every save funnels through means no present or future call site can
+// bypass it.
+export function setStorageReadOnly(value) {
+  readOnly = Boolean(value);
+}
+
+export function isStorageReadOnly() {
+  return readOnly;
+}
 
 function localStorageAvailable() {
   if (backendChecked) return hasLocalStorage;
   backendChecked = true;
   try {
     const probe = '__poofpoof_probe__';
-    window.localStorage.setItem(probe, '1');
-    window.localStorage.removeItem(probe);
+    if (readOnly) {
+      // The usual probe writes and removes a key. In read-only mode that would
+      // still be a write, so confirm access with a read instead -- reads must
+      // keep working, since dev mode should show the real save's contents.
+      window.localStorage.getItem(probe);
+    } else {
+      window.localStorage.setItem(probe, '1');
+      window.localStorage.removeItem(probe);
+    }
     hasLocalStorage = true;
   } catch {
     hasLocalStorage = false;
@@ -33,6 +59,10 @@ export function storageIsPersistent() {
 }
 
 function readRaw(key) {
+  // In read-only mode anything written this session lives only in the memory
+  // store, and must win over the real save we are deliberately not updating --
+  // otherwise a dev-session value would read back as the untouched old one.
+  if (readOnly && memoryStore.has(key)) return memoryStore.get(key);
   if (localStorageAvailable()) {
     try {
       return window.localStorage.getItem(key);
@@ -44,7 +74,10 @@ function readRaw(key) {
 }
 
 function writeRaw(key, value) {
+  // Memory store first, so an in-session value still round-trips (dev progress
+  // survives screen transitions) even when the real save is off limits.
   memoryStore.set(key, value);
+  if (readOnly) return;
   if (!localStorageAvailable()) return;
   try {
     window.localStorage.setItem(key, value);

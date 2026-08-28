@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-4';
+export const BUILD_VERSION = '2026.08.28-5';
 
 export const COLS = 6;
 export const ROWS = 7;
@@ -170,6 +170,19 @@ export const RAINBOW_TIER = 99;
 export const RAINBOW_DEF = { name: 'rainbow', color: '#ffffff', radius: 22, points: 0, shape: 'rainbow' };
 export const RAINBOW_PER_CHARGE = 2; // wild fruits injected into a run per charge
 
+// Spawn indices at which a charge's wilds arrive, decided once at run start.
+//
+// This replaces a 12% per-spawn roll that could simply fail to deliver: a paid
+// 80-coin charge was consumed up front and then, in 7-28% of runs depending on
+// length, produced nothing. A purchased consumable must never silently not
+// arrive, so delivery is now scheduled rather than gambled.
+//
+// Both bands sit far below the shortest run measured across 3,800 simulated
+// games (26 spawns; 1st percentile 27), so every realistic run reaches both.
+// The index is randomised WITHIN its band only, so successive runs do not feel
+// identical while delivery stays guaranteed.
+export const RAINBOW_SCHEDULE_BANDS = [[2, 5], [7, 12]];
+
 // --- Merge feel ----------------------------------------------------------
 // All three scale with tier so the visuals escalate in step with merge pitch.
 export const SQUASH_DURATION_SEC = 0.26;
@@ -192,6 +205,9 @@ export const SHAKE_MAX_PX = 5; // deliberately small -- readable, not disorienti
 // Haptics, in ms. Only fires where navigator.vibrate exists.
 export const HAPTIC_MERGE_MS = 12;
 export const HAPTIC_TOP_TIER_MS = 45;
+// One deliberate pulse for a whole bomb detonation. Longer than a top-tier
+// merge because clearing nine fruit is the biggest single thing a player can do.
+export const HAPTIC_BOMB_MS = 70;
 
 // --- Theme ---------------------------------------------------------------
 // One palette per milestone; the live palette is interpolated continuously
@@ -203,6 +219,22 @@ export const THEMES = [
   { page: '#1b2340', board: '#eef3ff', text: '#25325c', grid: 'rgba(37,50,92,0.10)', accent: '#4c6ef5' },
   { page: '#0d1f24', board: '#e8fbf6', text: '#12403a', grid: 'rgba(18,64,58,0.11)', accent: '#0ca678' },
 ];
+
+// Canvas text face. Single source of truth -- the family string used to be
+// repeated verbatim in seven separate ctx.font assignments in render.js.
+// system-ui is a fallback only; the face itself is self-hosted in assets/fonts.
+export const FONT_FAMILY = "'Fredoka', system-ui, sans-serif";
+
+// How many device pixels to render per game pixel. The board is only 384 game
+// px wide, so without this the canvas draws at its intrinsic size and is capped
+// there on any large screen -- `max-width:100%` can shrink a replaced element
+// but never grow it. Raising the backing store instead of just stretching with
+// CSS keeps 9px text and 1px grid lines sharp when scaled up.
+// 3, not 2: the board can now be displayed ~1100px tall, so a 2x backing store
+// (1132px) is only ~1:1 with the display and would still look soft on a
+// high-DPI screen. 3x leaves headroom. Purely a quality/memory trade-off --
+// nothing else depends on the value, since input maps from the logical size.
+export const RENDER_SCALE = 3;
 
 // Tap target for the mute toggle, in canvas space within the HUD.
 export const MUTE_RECT = { x: BOARD_WIDTH - 32, y: 58, w: 24, h: 24 };

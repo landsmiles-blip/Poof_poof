@@ -1,8 +1,13 @@
 // Entry point: owns the requestAnimationFrame loop and wires state, physics,
 // render, input, audio, effects, theme, and the shop screens together.
 
-import { CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF } from './constants.js';
-import { createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor } from './state.js';
+import {
+  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, RENDER_SCALE,
+} from './constants.js';
+import {
+  createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
+} from './state.js';
+import { setStorageReadOnly } from './storage.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
 import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
@@ -12,24 +17,47 @@ import {
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
 } from './audio.js';
 import { attachContext, startMusic, stopMusic } from './music.js';
-import { createEffects, updateEffects, spawnMergeEffects, clearEffects } from './effects.js';
+import { createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate } from './effects.js';
 import { themeForScore, applyPageTheme } from './theme.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
 
+// MUST run before createInitialState(): dev mode inflates inventory and
+// highScore in memory, and the very first startRun() would otherwise persist
+// that inflated stock over the player's real save.
+setStorageReadOnly(devModeEnabled());
+
 const state = createInitialState();
 const fx = createEffects();
 
-canvas.width = CANVAS_WIDTH;
-canvas.height = canvasHeightFor(state);
+// The canvas has two sizes that must not be confused:
+//   - the BACKING STORE (canvas.width/height), in device pixels, scaled up by
+//     RENDER_SCALE so text and hairlines stay sharp when the board is displayed
+//     larger than its 384px logical width;
+//   - the LOGICAL size the game draws in, always 384 x canvasHeightFor(state).
+// CSS sizing is left to the stylesheet, which fits the board to the viewport.
+function sizeCanvas() {
+  const logicalH = canvasHeightFor(state);
+  const w = CANVAS_WIDTH * RENDER_SCALE;
+  const h = logicalH * RENDER_SCALE;
+  // Compare against the backing size, not the logical one: the old guard
+  // compared canvas.height to the logical height, so under scaling it never
+  // matched and reassigned (resetting the context) on every call.
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  canvas.style.setProperty('--canvas-aspect', `${CANVAS_WIDTH} / ${logicalH}`);
+}
+
+sizeCanvas();
 
 attachInput(canvas, state);
 
 function resizeCanvasToState() {
-  const h = canvasHeightFor(state);
-  if (canvas.height !== h) canvas.height = h;
+  sizeCanvas();
 }
 
 // Tells index.html whether it is safe to reload for a service worker update.
@@ -110,6 +138,21 @@ function drainEvents() {
         tier: TIERS.length - 1,
         color: colorForTier(TIERS.length - 1),
       });
+    } else if (event.type === 'bombCleared') {
+      // One max-intensity burst per destroyed fruit. Detonation previously
+      // produced no visual or tactile response at all, despite clearing up to
+      // nine cells -- the loudest action in the game happened in silence.
+      const topTier = TIERS.length - 1;
+      for (const cell of event.cells) {
+        spawnMergeEffects(fx, {
+          row: cell.row,
+          col: cell.col,
+          tier: topTier,
+          color: colorForTier(cell.tier),
+          silent: true, // one pulse for the batch, fired below
+        });
+      }
+      vibrate(HAPTIC_BOMB_MS);
     }
   }
   state.events.length = 0;
@@ -166,4 +209,13 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pointerdown', unlockAudio, { once: true });
 
 applyPageTheme(themeForScore(0));
-requestAnimationFrame(loop);
+
+// ctx.font silently falls back when the face has not loaded -- canvas has no
+// equivalent of font-display -- so starting the loop immediately would paint
+// the first frames in system-ui and then snap to Fredoka. Wait for fonts, but
+// never let a font failure stop the game starting.
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => requestAnimationFrame(loop)).catch(() => requestAnimationFrame(loop));
+} else {
+  requestAnimationFrame(loop);
+}

@@ -27,7 +27,13 @@ function tierRatio(tier) {
   return Math.max(0, Math.min(1, tier / MAX_TIER));
 }
 
-export function spawnMergeEffects(fx, { row, col, tier, color }) {
+// `silent: true` skips the haptic only -- visuals still fire. Used when a batch
+// of bursts is spawned in one frame (a bomb clears up to nine cells): each
+// navigator.vibrate() cancels the one in flight, so nine calls would collapse
+// into a single arbitrary-length tick decided by whichever cell the scan
+// visited last. The caller fires one deliberate pulse for the whole batch
+// instead. Mirrors the state.suppressCombo pattern used for the same reason.
+export function spawnMergeEffects(fx, { row, col, tier, color, silent = false }) {
   const ratio = tierRatio(tier);
 
   fx.squashes.push({
@@ -74,7 +80,7 @@ export function spawnMergeEffects(fx, { row, col, tier, color }) {
     }
   }
 
-  vibrate(tier >= SHAKE_MIN_TIER ? HAPTIC_TOP_TIER_MS : HAPTIC_MERGE_MS);
+  if (!silent) vibrate(tier >= SHAKE_MIN_TIER ? HAPTIC_TOP_TIER_MS : HAPTIC_MERGE_MS);
 }
 
 // Feature-checked and fully swallowed: unsupported browsers, and the ones that

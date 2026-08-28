@@ -3,6 +3,7 @@
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, MUTE_RECT, COMBO_WINDOW_SEC,
   RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
+  FONT_FAMILY, RENDER_SCALE,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps } from './state.js';
 import { isMuted } from './audio.js';
@@ -31,6 +32,13 @@ export function drawFrame(ctx, state, fx) {
   const height = canvasHeightFor(state);
   const theme = themeForScore(state.score);
 
+  // Re-established every frame rather than once at startup. Assigning
+  // canvas.width/height resets the 2D context including its transform, and
+  // resizeCanvasToState() reassigns height whenever Extra Row changes the row
+  // count -- a one-time ctx.scale() would be silently wiped mid-run and drop
+  // the game to half size in the corner.
+  ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
+
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = theme.board;
   ctx.fillRect(0, 0, width, height);
@@ -49,19 +57,19 @@ export function drawFrame(ctx, state, fx) {
 
 function drawHUD(ctx, state, width, theme) {
   ctx.fillStyle = theme.text;
-  ctx.font = 'bold 20px system-ui, sans-serif';
+  ctx.font = `bold 20px ${FONT_FAMILY}`;
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
   ctx.fillText(`Score ${state.score}`, 10, 6);
 
-  ctx.font = '13px system-ui, sans-serif';
+  ctx.font = `13px ${FONT_FAMILY}`;
   ctx.fillText(`Best ${state.highScore}`, 10, 32);
   ctx.fillText(`Coins ${state.coins}`, 10, 50);
 
   drawComboMeter(ctx, state, width, theme);
 
   ctx.textAlign = 'right';
-  ctx.font = '13px system-ui, sans-serif';
+  ctx.font = `13px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
   ctx.fillText('Next', width - 10, 6);
   const nextDef = tierDefFor(state.nextTier);
@@ -73,7 +81,7 @@ function drawHUD(ctx, state, width, theme) {
   // Build stamp: low-contrast, but the fastest way to confirm which code a
   // browser is actually running when a deploy appears not to have landed.
   ctx.save();
-  ctx.font = '9px system-ui, sans-serif';
+  ctx.font = `9px ${FONT_FAMILY}`;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
   ctx.globalAlpha = 0.38;
@@ -95,10 +103,10 @@ function drawComboMeter(ctx, state, width, theme) {
   ctx.globalAlpha = 0.35 + 0.65 * remaining;
 
   ctx.fillStyle = theme.accent;
-  ctx.font = 'bold 19px system-ui, sans-serif';
+  ctx.font = `bold 19px ${FONT_FAMILY}`;
   ctx.fillText(`${multiplier.toFixed(2)}x`, width / 2, 26);
 
-  ctx.font = 'bold 11px system-ui, sans-serif';
+  ctx.font = `bold 11px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
   ctx.globalAlpha = (0.35 + 0.65 * remaining) * 0.75;
   ctx.fillText(`COMBO ${state.comboCount}`, width / 2, 48);
@@ -142,7 +150,7 @@ function drawPowerBar(ctx, state, theme) {
     drawIcon(ctx, item.icon, cx, cy, rect.w * 0.72, armed ? theme.board : theme.text);
 
     // Below each slot: the unlock score while locked, otherwise the count.
-    ctx.font = 'bold 9px system-ui, sans-serif';
+    ctx.font = `bold 9px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = theme.text;

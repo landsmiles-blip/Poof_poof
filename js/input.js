@@ -1,8 +1,9 @@
 // Pointer input (unifies mouse + touch) for dragging the falling fruit,
 // using power-ups, and toggling sound.
 
-import { CELL, HUD_HEIGHT, COLS, MUTE_RECT, powerSlotRect } from './constants.js';
+import { CELL, HUD_HEIGHT, COLS, MUTE_RECT, powerSlotRect, CANVAS_WIDTH } from './constants.js';
 import { removeFruitAt, detonateBomb, setDragTarget } from './physics.js';
+import { canvasHeightFor } from './render.js';
 import {
   hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
   consumeBomb, consumeRemover,
@@ -17,10 +18,19 @@ function inRect(point, rect) {
 export function attachInput(canvas, state, callbacks = {}) {
   let dragging = false;
 
+  // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
+  //
+  // Deliberately derived from the logical size, not `canvas.width`. The backing
+  // store is RENDER_SCALE times larger, so dividing by it would return
+  // backing-store pixels -- a uniform 2x error that silently breaks every hit
+  // target: taps in the right half of the board fall outside COLS and do
+  // nothing, the whole power-up bar drops below the HUD gate and becomes
+  // untappable, and dragging pins the fruit against the right wall. Using the
+  // logical size stays correct whatever RENDER_SCALE is set to.
   function toCanvasPoint(evt) {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const scaleX = CANVAS_WIDTH / rect.width;
+    const scaleY = canvasHeightFor(state) / rect.height;
     return {
       x: (evt.clientX - rect.left) * scaleX,
       y: (evt.clientY - rect.top) * scaleY,
