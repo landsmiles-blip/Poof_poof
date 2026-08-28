@@ -1,49 +1,63 @@
 // DOM-based menu / game-over / shop screens. Canvas is only used for
 // active gameplay; these overlay screens are plain HTML for accessible,
 // easy-to-hit buttons on touch devices.
+//
+// The menu and the game-over screen render the SAME shop body. They used to
+// differ: only game-over had the shop and the run toggles, which meant coins
+// could not be spent and Slow Drop / Extra Row / Rainbow could not be armed
+// until the player had already lost a run. After a page load the first run was
+// always unequipped, no matter how full the inventory was.
 
-import { POWERUPS, SKINS, TIERS } from './constants.js';
+import { POWERUPS, SKINS, TIERS, BUILD_VERSION } from './constants.js';
 import { buyPowerUp, startRun, selectSkin, isUnlockedByScore } from './state.js';
 import { unlockAudio, toggleMuted, isMuted, playUiTick } from './audio.js';
+import { isMusicOn, toggleMusic } from './music.js';
 import { iconCanvas } from './icons.js';
 
 // Tiers sampled for the little skin swatch previews.
 const SWATCH_TIERS = [0, 3, 6, 8];
 
 export function renderMenu(root, state, onStart) {
-  root.innerHTML = `
-    <div class="screen">
-      <h1>Poof Poof</h1>
+  renderShopScreen(root, state, {
+    title: 'Poof Poof',
+    lead: `
       <p class="subtitle">Drag falling fruit, merge matching pairs, chase the watermelon.</p>
       <p class="stat">Best score: <strong>${state.highScore}</strong></p>
       <p class="stat">Coins: <strong>${state.coins}</strong></p>
-      ${renderInventorySummary(state)}
-      <button class="primary" id="start-btn">Play</button>
-      ${soundButtonHTML()}
-    </div>
-  `;
-  root.querySelector('#start-btn').addEventListener('click', () => {
-    unlockAudio();
-    onStart();
+    `,
+    playLabel: 'Play',
+    onStart,
   });
-  wireSoundButton(root);
 }
 
 export function renderGameOver(root, state, onPlayAgain) {
+  renderShopScreen(root, state, {
+    title: 'Game Over',
+    lead: `
+      <p class="stat">Score: <strong>${state.score}</strong></p>
+      <p class="stat">Best: <strong>${state.highScore}</strong></p>
+      ${state.bestComboThisRun >= 2 ? `<p class="stat">Best combo: <strong>${state.bestComboThisRun}x chain</strong></p>` : ''}
+      <p class="stat">Coins earned: <strong>+${state.lastRunCoinsEarned}</strong></p>
+      <p class="stat">Coin balance: <strong>${state.coins}</strong></p>
+      ${renderUnlockBanner(state)}
+    `,
+    playLabel: 'Play Again',
+    onStart: onPlayAgain,
+  });
+}
+
+function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
+  // Held across redraws so buying something does not clear the toggles.
   const opts = { useSlowDrop: false, useExtraRow: false, useRainbow: false };
 
   function draw() {
     root.innerHTML = `
       <div class="screen">
-        <h1>Game Over</h1>
-        <p class="stat">Score: <strong>${state.score}</strong></p>
-        <p class="stat">Best: <strong>${state.highScore}</strong></p>
-        ${state.bestComboThisRun >= 2 ? `<p class="stat">Best combo: <strong>${state.bestComboThisRun}x chain</strong></p>` : ''}
-        <p class="stat">Coins earned: <strong>+${state.lastRunCoinsEarned}</strong></p>
-        <p class="stat">Coin balance: <strong>${state.coins}</strong></p>
-        ${renderUnlockBanner(state)}
+        <h1>${title}</h1>
+        ${lead}
 
         <h2>Power-ups</h2>
+        <p class="hint">Remover, Magnet and Bomb are tapped from the bar at the top of the screen during a run.</p>
         <div class="shop-grid">
           ${POWERUPS.map((p) => shopItemHTML(state, p)).join('')}
         </div>
@@ -57,10 +71,13 @@ export function renderGameOver(root, state, onPlayAgain) {
         ${runToggleHTML(state, 'slowDrop', 'toggle-slowdrop', 'Use Slow Drop', opts.useSlowDrop)}
         ${runToggleHTML(state, 'extraRow', 'toggle-extrarow', 'Use Extra Row', opts.useExtraRow)}
         ${runToggleHTML(state, 'rainbow', 'toggle-rainbow', 'Use Rainbow Fruit', opts.useRainbow)}
-        <p class="hint">Fruit Remover, Magnet and Bomb are used from the bar at the top of the screen during a run.</p>
 
-        <button class="primary" id="play-again-btn">Play Again</button>
-        ${soundButtonHTML()}
+        <button class="primary" id="play-btn">${playLabel}</button>
+        <div class="toggle-row">
+          ${soundButtonHTML()}
+          ${musicButtonHTML()}
+        </div>
+        <p class="build-stamp">v${BUILD_VERSION}</p>
       </div>
     `;
 
@@ -87,13 +104,14 @@ export function renderGameOver(root, state, onPlayAgain) {
     bindToggle(root, '#toggle-extrarow', (v) => { opts.useExtraRow = v; });
     bindToggle(root, '#toggle-rainbow', (v) => { opts.useRainbow = v; });
 
-    root.querySelector('#play-again-btn').addEventListener('click', () => {
+    root.querySelector('#play-btn').addEventListener('click', () => {
       unlockAudio();
       startRun(state, opts);
-      onPlayAgain();
+      onStart();
     });
 
     wireSoundButton(root, draw);
+    wireMusicButton(root, draw);
   }
 
   draw();
@@ -198,6 +216,10 @@ function soundButtonHTML() {
   return `<button class="sound-btn" id="sound-btn">${isMuted() ? 'Sound: off' : 'Sound: on'}</button>`;
 }
 
+function musicButtonHTML() {
+  return `<button class="sound-btn" id="music-btn">${isMusicOn() ? 'Music: on' : 'Music: off'}</button>`;
+}
+
 function wireSoundButton(root, redraw) {
   const btn = root.querySelector('#sound-btn');
   if (!btn) return;
@@ -206,14 +228,16 @@ function wireSoundButton(root, redraw) {
     toggleMuted();
     playUiTick();
     if (redraw) redraw();
-    else btn.textContent = isMuted() ? 'Sound: off' : 'Sound: on';
   });
 }
 
-function renderInventorySummary(state) {
-  const owned = POWERUPS
-    .filter((p) => (state.inventory[p.id] || 0) > 0)
-    .map((p) => `${p.name} x${state.inventory[p.id]}`);
-  if (owned.length === 0) return '';
-  return `<p class="stat small">Owned: ${owned.join(', ')}</p>`;
+function wireMusicButton(root, redraw) {
+  const btn = root.querySelector('#music-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    unlockAudio();
+    toggleMusic();
+    playUiTick();
+    if (redraw) redraw();
+  });
 }

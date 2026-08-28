@@ -143,7 +143,12 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
 
   // Every merge extends the combo streak; the multiplier applies to the
   // points this merge awards.
-  const multiplier = registerComboHit(state);
+  //
+  // Except during a bomb's collapse: the bomb is an escape hatch for a bad
+  // board, and letting the cascade it triggers build a streak would make
+  // detonating the cheapest way to run the multiplier up. Those merges still
+  // score (they are real merges) but at 1x, and they do not extend the streak.
+  const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
 
   if (tier >= MAX_TIER) {
     state.grid[keepR][keepC] = null;
@@ -187,10 +192,14 @@ export function removeFruitAt(state, row, col) {
 }
 
 // Bomb: clears every fruit within BOMB_RADIUS of the target cell, regardless of
-// tier. Deliberately awards no score and does NOT touch the combo -- it is an
-// escape hatch for a bad board, not a scoring tool, so it must never be the
-// cheapest way to build a streak. Merges are resolved afterwards because the
-// collapse can legitimately bring matching fruit together.
+// tier. The cleared fruit itself awards nothing.
+//
+// Merges are still resolved afterwards, because the collapse can legitimately
+// bring matching fruit together -- but with the combo suppressed, so the bomb
+// cannot be used to farm the multiplier. An earlier version of this comment
+// claimed the bomb "does not touch the combo" while resolveMerges below routed
+// straight into registerComboHit; the suppression flag is what makes the claim
+// actually true.
 export function detonateBomb(state, row, col) {
   const rows = state.grid.length;
   if (row < 0 || row >= rows || col < 0 || col >= COLS) return null;
@@ -207,7 +216,12 @@ export function detonateBomb(state, row, col) {
   if (cleared.length === 0) return null;
 
   settleColumns(state);
-  resolveMerges(state);
+  state.suppressCombo = true;
+  try {
+    resolveMerges(state);
+  } finally {
+    state.suppressCombo = false;
+  }
   return cleared;
 }
 

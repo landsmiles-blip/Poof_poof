@@ -9,8 +9,9 @@ import { attachInput } from './input.js';
 import { renderMenu, renderGameOver } from './shop.js';
 import {
   playMerge, playCelebration, playGameOver,
-  suspendAudio, resumeAudio, unlockAudio,
+  suspendAudio, resumeAudio, unlockAudio, getAudioContext,
 } from './audio.js';
+import { attachContext, startMusic, stopMusic } from './music.js';
 import { createEffects, updateEffects, spawnMergeEffects, clearEffects } from './effects.js';
 import { themeForScore, applyPageTheme } from './theme.js';
 
@@ -31,16 +32,42 @@ function resizeCanvasToState() {
   if (canvas.height !== h) canvas.height = h;
 }
 
+// Tells index.html whether it is safe to reload for a service worker update.
+// A refresh mid-run would discard the player's game, so updates wait for a menu.
+function syncReloadGuard() {
+  const playing = state.screen === SCREEN.PLAYING;
+  window.__poofDeferReload = playing;
+  if (!playing) window.__poofApplyPendingUpdate?.();
+}
+
+// Music shares audio.js's context, which only exists after a user gesture, so
+// this is called at every point where a gesture has just happened.
+function syncMusic() {
+  unlockAudio();
+  attachContext(getAudioContext());
+  if (state.screen === SCREEN.PLAYING) startMusic();
+  else stopMusic();
+}
+
 function showScreen() {
+  syncReloadGuard();
+  // The overlay screens use the same CSS variables as the board, so they need
+  // the theme applied too. Previously applyPageTheme ran only inside the
+  // PLAYING branch of the loop, leaving the palette frozen at the run's final
+  // value behind the game-over screen and never returning to base on the menu.
+  applyPageTheme(themeForScore(state.screen === SCREEN.MENU ? 0 : state.score));
   if (state.screen === SCREEN.MENU) {
     overlay.hidden = false;
     canvas.hidden = true;
+    // startRun is called inside shop.js now, so the menu's run toggles (Slow
+    // Drop / Extra Row / Rainbow) actually reach it.
     renderMenu(overlay, state, () => {
-      startRun(state);
       clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
       canvas.hidden = false;
+      syncReloadGuard();
+      syncMusic();
     });
   } else if (state.screen === SCREEN.GAMEOVER) {
     overlay.hidden = false;
@@ -50,6 +77,8 @@ function showScreen() {
       resizeCanvasToState();
       overlay.hidden = true;
       canvas.hidden = false;
+      syncReloadGuard();
+      syncMusic();
     });
   }
 }
@@ -113,6 +142,7 @@ function update(dt) {
     if (result.blocked || isGameOver(state)) {
       endRun(state, 'grid-full');
       playGameOver();
+      stopMusic();
       showScreen();
     }
   }

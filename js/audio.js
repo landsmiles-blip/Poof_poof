@@ -23,6 +23,12 @@ export function unlockAudio() {
     return;
   }
   try {
+    // NOTE: the resume() below is deliberately unconditional at the end of this
+    // function. Resuming only on the early-return path above worked purely
+    // because a window pointerdown listener always constructed the context
+    // before the Play button's click handler ran; if that order ever changed,
+    // iOS Safari would be left with a permanently suspended context and a
+    // silent game.
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) {
       unavailable = true;
@@ -32,9 +38,18 @@ export function unlockAudio() {
     masterGain = ctx.createGain();
     masterGain.gain.value = muted ? 0 : 0.9;
     masterGain.connect(ctx.destination);
+    // A context constructed outside a user gesture starts suspended; resume
+    // unconditionally rather than relying on listener ordering.
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
   } catch {
     unavailable = true;
   }
+}
+
+// Exposed so music.js can share this context rather than opening a second one
+// (browsers cap contexts per page, and two would double the unlock problem).
+export function getAudioContext() {
+  return ctx;
 }
 
 export function isMuted() {

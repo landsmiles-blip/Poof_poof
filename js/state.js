@@ -4,7 +4,7 @@
 import {
   COLS, ROWS, SPAWN_POOL, COINS_PER_SCORE,
   COMBO_WINDOW_SEC, COMBO_STEP, COMBO_MAX_MULTIPLIER,
-  SKINS, DEFAULT_SKIN_ID, POWERUPS,
+  SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_PER_CHARGE,
 } from './constants.js';
 import {
@@ -20,8 +20,20 @@ export const SCREEN = {
   GAMEOVER: 'gameover',
 };
 
+// `?dev=1` unlocks and stocks everything. Purely a testing affordance -- it
+// only ever reads the URL, never storage, so a normal load is unaffected.
+export function devModeEnabled() {
+  try {
+    return new URLSearchParams(window.location.search).get('dev') === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function createInitialState() {
-  const highScore = loadHighScore();
+  const dev = devModeEnabled();
+  const storedHigh = loadHighScore();
+  const highScore = dev ? Math.max(storedHigh, MILESTONE_SCORES[MILESTONE_SCORES.length - 1]) : storedHigh;
   const unlockedSkins = reconcileUnlocks(loadUnlockedSkins(), highScore);
   const selectedSkin = validSkinId(loadSelectedSkin(), unlockedSkins);
 
@@ -29,7 +41,7 @@ export function createInitialState() {
     screen: SCREEN.MENU,
     highScore,
     coins: loadCoins(),
-    inventory: loadInventory(),
+    inventory: startingInventory(dev),
 
     unlockedSkins,
     selectedSkin,
@@ -57,6 +69,9 @@ export function createInitialState() {
     comboCount: 0,
     comboTimer: 0,
     bestComboThisRun: 0,
+    // Set while a bomb's collapse resolves, so those merges score at 1x and do
+    // not extend the streak.
+    suppressCombo: false,
 
     // Physics pushes {type, ...} here; main.js drains it each frame and turns
     // entries into sound. Keeps physics.js free of audio/DOM imports.
@@ -65,6 +80,24 @@ export function createInitialState() {
     lastRunCoinsEarned: 0,
     gameOverReason: null,
   };
+}
+
+// A brand-new save gets one Fruit Remover. Without it the HUD power bar is
+// empty for the whole of a player's first run -- and since coins only arrive at
+// game over, the earliest a chip could otherwise appear was run 2. One free
+// charge means the bar is populated and tappable from the very first drop.
+function startingInventory(dev) {
+  const inv = loadInventory();
+  if (dev) {
+    for (const p of POWERUPS) inv[p.id] = Math.max(inv[p.id] || 0, 5);
+    return inv;
+  }
+  const isFreshSave = Object.values(inv).every((n) => !n) && loadHighScore() === 0;
+  if (isFreshSave) {
+    inv.remover = 1;
+    saveInventory(inv);
+  }
+  return inv;
 }
 
 export function makeEmptyGrid(rows = ROWS) {
@@ -93,11 +126,24 @@ export function unlockedPowerUps(state) {
   return POWERUPS.filter((p) => isUnlockedByScore(p, state.highScore));
 }
 
-// Power-ups the player can act on mid-run: unlocked, owned, and usable in play.
-export function activePowerUps(state) {
-  return unlockedPowerUps(state).filter(
-    (p) => (p.usage === 'tap' || p.usage === 'activate') && (state.inventory[p.id] || 0) > 0
-  );
+// Power-ups that get a chip in the HUD bar.
+//
+// This deliberately includes ones that are locked or out of stock, rendered
+// greyed. The previous version filtered on `inventory > 0`, which had two bad
+// consequences: a brand-new player saw a completely empty bar and had no way to
+// learn power-ups existed at all, and activating the Magnet -- which decrements
+// stock to zero -- made its own chip disappear at the instant of use, so its
+// six-second duration ran with no indicator anywhere on screen.
+export function hudPowerUps() {
+  return POWERUPS.filter((p) => p.usage === 'tap' || p.usage === 'activate');
+}
+
+// Whether a chip is actually actionable right now. Rendering asks hudPowerUps()
+// what to draw; input asks this what a tap may do. Keeping them separate is what
+// lets a locked chip be visible but inert.
+export function canUsePowerUp(state, item) {
+  if (!isUnlockedByScore(item, state.highScore)) return false;
+  return (state.inventory[item.id] || 0) > 0;
 }
 
 function reconcileUnlocks(stored, highScore) {

@@ -134,3 +134,13 @@ export function loadMuted() {
 export function saveMuted(muted) {
   writeRaw(STORAGE_KEYS.muted, muted ? '1' : '0');
 }
+
+// Music is tracked separately from the sound-effect mute: wanting the merge
+// pops without a backing loop is a common preference. Defaults to on.
+export function loadMusicOn() {
+  return readRaw(STORAGE_KEYS.musicOn) !== '0';
+}
+
+export function saveMusicOn(on) {
+  writeRaw(STORAGE_KEYS.musicOn, on ? '1' : '0');
+}

@@ -2,9 +2,10 @@
 // using power-ups, and toggling sound.
 
 import { CELL, HUD_HEIGHT, COLS, MUTE_RECT, powerSlotRect } from './constants.js';
-import { removeFruitAt, detonateBomb } from './physics.js';
+import { removeFruitAt, detonateBomb, setDragTarget } from './physics.js';
 import {
-  activePowerUps, activateMagnet, armBomb, armRemover, consumeBomb, consumeRemover,
+  hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
+  consumeBomb, consumeRemover,
 } from './state.js';
 import { unlockAudio, toggleMuted, playUiTick } from './audio.js';
 
@@ -34,11 +35,19 @@ export function attachInput(canvas, state, callbacks = {}) {
   }
 
   // Returns true if the tap was consumed by a power-up slot.
+  //
+  // Slots are drawn for every tappable power-up including locked and empty
+  // ones, so the chip is discoverable; this is where a tap on one of those is
+  // absorbed harmlessly instead of acting.
   function handlePowerSlot(point) {
-    const items = activePowerUps(state);
+    const items = hudPowerUps();
     for (let i = 0; i < items.length; i++) {
       if (!inRect(point, powerSlotRect(i))) continue;
       const item = items[i];
+      if (!canUsePowerUp(state, item)) {
+        callbacks.onLockedPowerUp?.(item);
+        return true;
+      }
       if (item.id === 'magnet') {
         if (activateMagnet(state)) playUiTick();
       } else if (item.id === 'bomb') {
@@ -96,14 +105,17 @@ export function attachInput(canvas, state, callbacks = {}) {
 
     if (state.active) {
       dragging = true;
-      state.active.targetX = point.x;
+      // Via setDragTarget rather than assigning targetX directly: it clamps to
+      // the fruit's radius, so dragging to the edge no longer renders the fruit
+      // half off-screen.
+      setDragTarget(state, point.x);
     }
   }
 
   function onPointerMove(evt) {
     if (!dragging || !state.active) return;
     const point = toCanvasPoint(evt);
-    state.active.targetX = point.x;
+    setDragTarget(state, point.x);
   }
 
   function onPointerUp() {

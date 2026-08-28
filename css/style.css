@@ -265,6 +265,23 @@ button {
   opacity: 0.55;
 }
 
+.toggle-row {
+  display: flex;
+  gap: 8px;
+}
+
+.toggle-row .sound-btn {
+  flex: 1;
+}
+
+/* Build stamp: deliberately quiet, but always present -- it is the fastest way
+   to confirm which build a browser is actually running. */
+.build-stamp {
+  margin: 10px 0 0;
+  font-size: 11px;
+  opacity: 0.45;
+}
+
 .toggle {
   display: block;
   text-align: left;

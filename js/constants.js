@@ -2,6 +2,12 @@
 // Keeping every magic number here means physics.js / render.js / state.js
 // can be edited independently without hunting for hardcoded values.
 
+// Shown in the HUD and on the menu, and used to derive the service worker's
+// cache name. Bump this on every deploy: it is the only way either a player or
+// a developer can tell which build a browser is actually running, which is
+// exactly the question that went unanswerable across three earlier deploys.
+export const BUILD_VERSION = '2026.08.28-4';
+
 export const COLS = 6;
 export const ROWS = 7;
 export const CELL = 64; // px, size of one grid cell
@@ -47,13 +53,20 @@ export const COINS_PER_SCORE = 1 / 25; // score-to-coin conversion at run end
 // Every merge extends the window. Cascades within a single drop always chain
 // (they resolve in one tick); chaining ACROSS drops has to be earned.
 //
-// Tuned against simulated runs: a fruit falling to an empty board takes ~1.7s,
-// but only ~0.5s to a tall stack. A window below that spread means steady safe
-// play breaks the streak, while playing with a high (dangerous) stack chains
-// merges -- so the combo pays for risk instead of paying for patience. At 2.0s
-// a competent player simply never dropped out of the streak and the multiplier
-// degenerated into a flat 3x bonus.
-export const COMBO_WINDOW_SEC = 1.2;
+// A fruit falling to an empty board takes ~1.66s; to a tall stack, ~0.4s.
+//
+// This was 1.2s, which sat BELOW the empty-board fall time and so made early
+// combos arithmetically impossible: a new player could not chain across drops
+// at all until a column was three high, and simulation put the first sighting
+// of the combo meter at a median of drop 13.
+//
+// 1.8s sits just above one fall, which gives a clean, learnable rule: two
+// merges in a row chain, and any drop that fails to merge breaks the streak
+// (two falls is ~3.3s, well past the window). That keeps the multiplier honest
+// -- it still measures merge consistency rather than mere patience, so it
+// cannot degenerate into the permanent flat 3x an earlier 2.0s value produced
+// -- while letting a first-run player actually see a combo.
+export const COMBO_WINDOW_SEC = 1.8;
 export const COMBO_STEP = 0.25; // multiplier gained per extra merge in the streak
 export const COMBO_MAX_MULTIPLIER = 3;
 
@@ -160,10 +173,15 @@ export const RAINBOW_PER_CHARGE = 2; // wild fruits injected into a run per char
 // --- Merge feel ----------------------------------------------------------
 // All three scale with tier so the visuals escalate in step with merge pitch.
 export const SQUASH_DURATION_SEC = 0.26;
-export const SQUASH_MIN = 0.18; // scale overshoot at tier 0
+// Floors raised from 0.18 / 5. A new player spends their whole first run on
+// tier 0-2 merges, and at the old floor those produced ~6 small particles and a
+// 21% squash -- technically present, but easy to miss entirely, which is most of
+// why the merge feel went unnoticed. The top-end values are unchanged, so the
+// escalation with tier still reads.
+export const SQUASH_MIN = 0.26; // scale overshoot at tier 0
 export const SQUASH_MAX = 0.42; // ...and at the top tier
-export const PARTICLE_MIN = 5;
-export const PARTICLE_MAX = 16;
+export const PARTICLE_MIN = 9;
+export const PARTICLE_MAX = 18;
 export const PARTICLE_LIFE_SEC = 0.5;
 export const PARTICLE_SPEED = 130;
 export const PARTICLE_GRAVITY = 420;
@@ -191,7 +209,11 @@ export const MUTE_RECT = { x: BOARD_WIDTH - 32, y: 58, w: 24, h: 24 };
 
 // Power-up bar along the bottom of the HUD. Slots are laid out left to right;
 // render.js and input.js both derive hit boxes from these so they cannot drift.
-export const POWER_SLOT = { y: 86, size: 26, gap: 8, x0: 10 };
+//
+// y is chosen so the slot (y..y+size) AND the count label drawn beneath it both
+// finish above HUD_HEIGHT -- at y=86 the digits spilled ~6px over the top of the
+// board and sat still while the board shook beneath them.
+export const POWER_SLOT = { y: 80, size: 26, gap: 8, x0: 10 };
 
 export function powerSlotRect(index) {
   return {
@@ -209,4 +231,15 @@ export const STORAGE_KEYS = {
   unlockedSkins: 'poofpoof.unlockedSkins',
   selectedSkin: 'poofpoof.selectedSkin',
   muted: 'poofpoof.muted',
+  musicOn: 'poofpoof.musicOn',
 };
+
+// Optional recorded background track.
+//
+// null means music is generated at runtime by js/music.js -- original by
+// construction, so there is no licence to honour and no attribution to carry.
+// To use a real (copyright-free) track instead, drop the file in the repo and
+// set this to its path, e.g. 'assets/music/theme.ogg'. It is an explicit
+// setting rather than a probe so the game never fires a 404 looking for a file
+// that was never meant to exist.
+export const MUSIC_TRACK_URL = null;

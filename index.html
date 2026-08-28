@@ -18,9 +18,49 @@
 </div>
 <script type="module" src="js/main.js"></script>
 <script>
+  // Service worker update handshake.
+  //
+  // The worker calls skipWaiting()/clients.claim(), which fires controllerchange
+  // here. Without this listener that signal was thrown away and the new build
+  // only appeared on the NEXT visit -- the reason shipped features went unseen.
+  //
+  // Two guards matter. We only reload if a controller already existed at load
+  // time, so a first-ever install (which also fires controllerchange) does not
+  // pointlessly reload someone with nothing stale. And we never reload during a
+  // run: losing an in-progress game to an automatic refresh would be its own
+  // bug, so the reload is deferred until the player is back on a menu.
   if ('serviceWorker' in navigator) {
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloading = false;
+
+    const applyUpdate = () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    };
+
+    // main.js sets this to true while a run is in progress.
+    window.__poofDeferReload = false;
+    window.__poofPendingUpdate = false;
+    window.__poofApplyPendingUpdate = () => {
+      if (window.__poofPendingUpdate) applyUpdate();
+    };
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return; // first install, nothing stale to replace
+      if (window.__poofDeferReload) {
+        window.__poofPendingUpdate = true; // applied at the next menu
+        return;
+      }
+      applyUpdate();
+    });
+
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js').catch(() => {});
+      navigator.serviceWorker.register('service-worker.js').catch((err) => {
+        // Previously swallowed entirely, which hid even an all-or-nothing
+        // precache failure that leaves the old worker serving forever.
+        console.warn('[poofpoof] service worker registration failed:', err);
+      });
     });
   }
 </script>

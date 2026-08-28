@@ -2,9 +2,9 @@
 
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, MUTE_RECT, COMBO_WINDOW_SEC,
-  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC,
+  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
 } from './constants.js';
-import { skinColor, comboMultiplier, activePowerUps } from './state.js';
+import { skinColor, comboMultiplier, hudPowerUps } from './state.js';
 import { isMuted } from './audio.js';
 import { squashScaleAt, shakeOffset, drawParticles } from './effects.js';
 import { themeForScore } from './theme.js';
@@ -69,6 +69,17 @@ function drawHUD(ctx, state, width, theme) {
 
   drawMuteToggle(ctx, theme);
   drawPowerBar(ctx, state, theme);
+
+  // Build stamp: low-contrast, but the fastest way to confirm which code a
+  // browser is actually running when a deploy appears not to have landed.
+  ctx.save();
+  ctx.font = '9px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.globalAlpha = 0.38;
+  ctx.fillStyle = theme.text;
+  ctx.fillText(`v${BUILD_VERSION}`, width - 8, HUD_HEIGHT - 3);
+  ctx.restore();
 }
 
 // Combo readout fades as the window runs out, so the player can see the streak
@@ -103,42 +114,61 @@ function drawComboMeter(ctx, state, width, theme) {
   ctx.restore();
 }
 
-// One tappable slot per usable power-up, with its count and armed/active state.
-// Slot order comes straight from activePowerUps() so render and input agree.
+// One slot per tappable power-up, always drawn -- locked and empty ones appear
+// greyed so the player can see what exists and what unlocks it. Slot order comes
+// straight from hudPowerUps() so render and input hit-testing cannot drift.
 function drawPowerBar(ctx, state, theme) {
-  const items = activePowerUps(state);
+  const items = hudPowerUps();
   items.forEach((item, i) => {
     const rect = powerSlotRect(i);
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
 
+    const locked = state.highScore < (item.unlockScore || 0);
+    const count = state.inventory[item.id] || 0;
+    const usable = !locked && count > 0;
     const armed = (item.id === 'bomb' && state.bombArmed)
       || (item.id === 'remover' && state.removerArmed)
       || (item.id === 'magnet' && state.magnetActive);
 
     ctx.save();
+    if (!usable && !armed) ctx.globalAlpha = 0.4;
+
     ctx.beginPath();
     ctx.roundRect(rect.x, rect.y, rect.w, rect.h, 6);
     ctx.fillStyle = armed ? theme.accent : theme.grid;
     ctx.fill();
-    ctx.restore();
 
     drawIcon(ctx, item.icon, cx, cy, rect.w * 0.72, armed ? theme.board : theme.text);
 
-    // Count, centred under its own slot. Right-aligning it past the slot edge
-    // put it in the gap where it collided with the neighbouring chip.
-    ctx.save();
-    ctx.font = 'bold 10px system-ui, sans-serif';
+    // Below each slot: the unlock score while locked, otherwise the count.
+    ctx.font = 'bold 9px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.globalAlpha = 0.8;
     ctx.fillStyle = theme.text;
-    ctx.fillText(`${state.inventory[item.id] || 0}`, cx, rect.y + rect.h + 2);
+    ctx.fillText(locked ? `${item.unlockScore}` : `${count}`, cx, rect.y + rect.h + 2);
     ctx.restore();
+
+    // Padlock corner marker, so "locked" is not conveyed by dimming alone.
+    if (locked) {
+      ctx.save();
+      ctx.globalAlpha = 0.75;
+      ctx.fillStyle = theme.text;
+      ctx.beginPath();
+      ctx.roundRect(rect.x + rect.w - 8, rect.y + 2, 6, 5, 1);
+      ctx.fill();
+      ctx.strokeStyle = theme.text;
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.w - 5, rect.y + 2.5, 2, Math.PI, 0);
+      ctx.stroke();
+      ctx.restore();
+    }
   });
 
-  // Remaining magnet duration, along the top edge of its slot -- the space
-  // below now belongs to the count.
+  // Remaining magnet duration, along the top edge of its slot. The chip now
+  // stays on the bar while active even at zero stock, so this always has an
+  // anchor to draw against.
   if (state.magnetActive) {
     const idx = items.findIndex((p) => p.id === 'magnet');
     if (idx >= 0) {
@@ -213,7 +243,7 @@ function drawBoard(ctx, state, fx, theme) {
       const def = tierDefFor(tierIndex);
       const color = colorFor(state, tierIndex);
 
-      const squash = fx ? squashScaleAt(fx, r, c) : null;
+      const squash = fx ? squashScaleAt(fx, r, c, tierIndex) : null;
       if (squash) {
         // Scale about the fruit's own centre so it pops in place.
         ctx.save();

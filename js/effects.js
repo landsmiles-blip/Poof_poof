@@ -33,6 +33,11 @@ export function spawnMergeEffects(fx, { row, col, tier, color }) {
   fx.squashes.push({
     row,
     col,
+    // Recorded so the lookup can reject a cell whose contents changed. During a
+    // cascade, settleColumns can drop a different fruit into a cell that still
+    // has a live squash, and matching on position alone made that fruit inherit
+    // a pop it never earned.
+    tier,
     t: 0,
     duration: SQUASH_DURATION_SEC,
     amount: SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio,
@@ -115,9 +120,11 @@ export function updateEffects(fx, dt) {
 
 // Scale factors for the fruit at (row, col), if it is mid-pop.
 // Overshoots outward then settles, preserving area so it reads as squash.
-export function squashScaleAt(fx, row, col) {
+export function squashScaleAt(fx, row, col, tier) {
   for (const s of fx.squashes) {
     if (s.row !== row || s.col !== col) continue;
+    // Reject if the cell no longer holds the fruit this pop belongs to.
+    if (tier !== undefined && s.tier !== tier) continue;
     const p = Math.min(1, s.t / s.duration);
     // One damped oscillation: big overshoot, quick settle.
     const wave = Math.sin(p * Math.PI * 1.5) * (1 - p);
