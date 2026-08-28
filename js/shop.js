@@ -2,15 +2,10 @@
 // active gameplay; these overlay screens are plain HTML for accessible,
 // easy-to-hit buttons on touch devices.
 
-import { POWERUP_COSTS, SKINS, TIERS } from './constants.js';
-import { buyPowerUp, startRun, selectSkin } from './state.js';
+import { POWERUPS, SKINS, TIERS } from './constants.js';
+import { buyPowerUp, startRun, selectSkin, isUnlockedByScore } from './state.js';
 import { unlockAudio, toggleMuted, isMuted, playUiTick } from './audio.js';
-
-const POWERUP_LABELS = {
-  slowDrop: { title: 'Slow Drop', desc: 'Fruits fall slower for one run.' },
-  remover: { title: 'Fruit Remover', desc: 'Tap to delete one fruit mid-run.' },
-  extraRow: { title: 'Extra Row', desc: 'One extra row of headroom for one run.' },
-};
+import { iconCanvas } from './icons.js';
 
 // Tiers sampled for the little skin swatch previews.
 const SWATCH_TIERS = [0, 3, 6, 8];
@@ -35,7 +30,7 @@ export function renderMenu(root, state, onStart) {
 }
 
 export function renderGameOver(root, state, onPlayAgain) {
-  const opts = { useSlowDrop: false, useExtraRow: false };
+  const opts = { useSlowDrop: false, useExtraRow: false, useRainbow: false };
 
   function draw() {
     root.innerHTML = `
@@ -50,7 +45,7 @@ export function renderGameOver(root, state, onPlayAgain) {
 
         <h2>Power-ups</h2>
         <div class="shop-grid">
-          ${Object.keys(POWERUP_COSTS).map((key) => shopItemHTML(state, key)).join('')}
+          ${POWERUPS.map((p) => shopItemHTML(state, p)).join('')}
         </div>
 
         <h2>Fruit skins</h2>
@@ -59,26 +54,23 @@ export function renderGameOver(root, state, onPlayAgain) {
         </div>
 
         <h2>Next run</h2>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-slowdrop" ${opts.useSlowDrop ? 'checked' : ''} ${state.inventory.slowDrop > 0 ? '' : 'disabled'}>
-          Use Slow Drop (${state.inventory.slowDrop} owned)
-        </label>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-extrarow" ${opts.useExtraRow ? 'checked' : ''} ${state.inventory.extraRow > 0 ? '' : 'disabled'}>
-          Use Extra Row (${state.inventory.extraRow} owned)
-        </label>
-        <p class="hint">Fruit Remover: ${state.inventory.remover} charge${state.inventory.remover === 1 ? '' : 's'} in stock, usable any time during a run until spent.</p>
+        ${runToggleHTML(state, 'slowDrop', 'toggle-slowdrop', 'Use Slow Drop', opts.useSlowDrop)}
+        ${runToggleHTML(state, 'extraRow', 'toggle-extrarow', 'Use Extra Row', opts.useExtraRow)}
+        ${runToggleHTML(state, 'rainbow', 'toggle-rainbow', 'Use Rainbow Fruit', opts.useRainbow)}
+        <p class="hint">Fruit Remover, Magnet and Bomb are used from the bar at the top of the screen during a run.</p>
 
         <button class="primary" id="play-again-btn">Play Again</button>
         ${soundButtonHTML()}
       </div>
     `;
 
+    mountIcons(root);
+
     root.querySelectorAll('.buy-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         unlockAudio();
-        const key = btn.dataset.key;
-        if (buyPowerUp(state, key, POWERUP_COSTS[key])) playUiTick();
+        const item = POWERUPS.find((p) => p.id === btn.dataset.key);
+        if (item && buyPowerUp(state, item.id, item.cost)) playUiTick();
         draw();
       });
     });
@@ -91,12 +83,9 @@ export function renderGameOver(root, state, onPlayAgain) {
       });
     });
 
-    root.querySelector('#toggle-slowdrop').addEventListener('change', (e) => {
-      opts.useSlowDrop = e.target.checked;
-    });
-    root.querySelector('#toggle-extrarow').addEventListener('change', (e) => {
-      opts.useExtraRow = e.target.checked;
-    });
+    bindToggle(root, '#toggle-slowdrop', (v) => { opts.useSlowDrop = v; });
+    bindToggle(root, '#toggle-extrarow', (v) => { opts.useExtraRow = v; });
+    bindToggle(root, '#toggle-rainbow', (v) => { opts.useRainbow = v; });
 
     root.querySelector('#play-again-btn').addEventListener('click', () => {
       unlockAudio();
@@ -110,28 +99,73 @@ export function renderGameOver(root, state, onPlayAgain) {
   draw();
 }
 
-function renderUnlockBanner(state) {
-  if (!state.newlyUnlockedSkins || state.newlyUnlockedSkins.length === 0) return '';
-  const names = state.newlyUnlockedSkins
-    .map((id) => SKINS.find((s) => s.id === id)?.name)
-    .filter(Boolean)
-    .join(', ');
-  if (!names) return '';
-  return `<p class="unlock-banner">New skin unlocked: ${names}!</p>`;
+function bindToggle(root, selector, set) {
+  const el = root.querySelector(selector);
+  if (el) el.addEventListener('change', (e) => set(e.target.checked));
 }
 
-function shopItemHTML(state, key) {
-  const cost = POWERUP_COSTS[key];
-  const label = POWERUP_LABELS[key];
-  const affordable = state.coins >= cost;
+// Only offered when the power-up is both unlocked and owned.
+function runToggleHTML(state, id, domId, label, checked) {
+  const item = POWERUPS.find((p) => p.id === id);
+  if (!isUnlockedByScore(item, state.highScore)) return '';
+  const owned = state.inventory[id] || 0;
   return `
-    <div class="shop-item">
-      <div class="shop-item-title">${label.title}</div>
-      <div class="shop-item-desc">${label.desc}</div>
-      <div class="shop-item-owned">Owned: ${state.inventory[key] || 0}</div>
-      <button class="buy-btn" data-key="${key}" ${affordable ? '' : 'disabled'}>Buy for ${cost}</button>
+    <label class="toggle">
+      <input type="checkbox" id="${domId}" ${checked ? 'checked' : ''} ${owned > 0 ? '' : 'disabled'}>
+      ${label} (${owned} owned)
+    </label>
+  `;
+}
+
+function renderUnlockBanner(state) {
+  const parts = [];
+  if (state.newlyUnlockedSkins && state.newlyUnlockedSkins.length > 0) {
+    const names = state.newlyUnlockedSkins
+      .map((id) => SKINS.find((s) => s.id === id)?.name)
+      .filter(Boolean);
+    parts.push(...names.map((n) => `${n} skin`));
+  }
+  // A milestone unlocks a skin and a power-up together, so surface both.
+  if (state.newlyUnlockedPowerUps && state.newlyUnlockedPowerUps.length > 0) {
+    const names = state.newlyUnlockedPowerUps
+      .map((id) => POWERUPS.find((p) => p.id === id)?.name)
+      .filter(Boolean);
+    parts.push(...names);
+  }
+  if (parts.length === 0) return '';
+  return `<p class="unlock-banner">Unlocked: ${parts.join(' + ')}!</p>`;
+}
+
+function shopItemHTML(state, item) {
+  const unlocked = isUnlockedByScore(item, state.highScore);
+  const affordable = state.coins >= item.cost;
+
+  const action = unlocked
+    ? `<button class="buy-btn" data-key="${item.id}" ${affordable ? '' : 'disabled'}>Buy for ${item.cost}</button>`
+    : `<button class="buy-btn" disabled>Reach ${item.unlockScore}</button>`;
+
+  return `
+    <div class="shop-item ${unlocked ? '' : 'locked'}">
+      <div class="shop-item-head">
+        <span class="icon-slot" data-icon="${item.icon}"></span>
+        <span class="shop-item-title">${item.name}</span>
+      </div>
+      <div class="shop-item-desc">${item.desc}</div>
+      <div class="shop-item-owned">Owned: ${state.inventory[item.id] || 0}</div>
+      ${action}
     </div>
   `;
+}
+
+// Icons are canvases drawn in code, so they are injected after the HTML lands.
+function mountIcons(root) {
+  root.querySelectorAll('.icon-slot').forEach((slot) => {
+    const name = slot.dataset.icon;
+    if (!name) return;
+    const color = getComputedStyle(document.documentElement)
+      .getPropertyValue('--text-color').trim() || '#3a2b20';
+    slot.replaceChildren(iconCanvas(name, 22, color));
+  });
 }
 
 function skinItemHTML(state, skin) {
@@ -177,8 +211,9 @@ function wireSoundButton(root, redraw) {
 }
 
 function renderInventorySummary(state) {
-  const owned = Object.entries(state.inventory).filter(([, n]) => n > 0);
+  const owned = POWERUPS
+    .filter((p) => (state.inventory[p.id] || 0) > 0)
+    .map((p) => `${p.name} x${state.inventory[p.id]}`);
   if (owned.length === 0) return '';
-  const parts = owned.map(([key, n]) => `${POWERUP_LABELS[key].title} x${n}`).join(', ');
-  return `<p class="stat small">Owned: ${parts}</p>`;
+  return `<p class="stat small">Owned: ${owned.join(', ')}</p>`;
 }

@@ -1,9 +1,9 @@
-// Entry point: owns the requestAnimationFrame loop and wires state,
-// physics, render, input, audio, and the shop screens together.
+// Entry point: owns the requestAnimationFrame loop and wires state, physics,
+// render, input, audio, effects, theme, and the shop screens together.
 
-import { CANVAS_WIDTH } from './constants.js';
-import { createInitialState, SCREEN, startRun, endRun, tickCombo } from './state.js';
-import { spawnFruit, stepPhysics, isGameOver } from './physics.js';
+import { CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF } from './constants.js';
+import { createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor } from './state.js';
+import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
 import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver } from './shop.js';
@@ -11,12 +11,15 @@ import {
   playMerge, playCelebration, playGameOver,
   suspendAudio, resumeAudio, unlockAudio,
 } from './audio.js';
+import { createEffects, updateEffects, spawnMergeEffects, clearEffects } from './effects.js';
+import { themeForScore, applyPageTheme } from './theme.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
 
 const state = createInitialState();
+const fx = createEffects();
 
 canvas.width = CANVAS_WIDTH;
 canvas.height = canvasHeightFor(state);
@@ -34,6 +37,7 @@ function showScreen() {
     canvas.hidden = true;
     renderMenu(overlay, state, () => {
       startRun(state);
+      clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
       canvas.hidden = false;
@@ -42,6 +46,7 @@ function showScreen() {
     overlay.hidden = false;
     canvas.hidden = true;
     renderGameOver(overlay, state, () => {
+      clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
       canvas.hidden = false;
@@ -51,16 +56,31 @@ function showScreen() {
 
 showScreen();
 
-// Turns queued physics events into sound. Physics never imports audio, so
-// this is the single place gameplay becomes audible.
+function colorForTier(tier) {
+  return tier === RAINBOW_TIER ? RAINBOW_DEF.color : skinColor(state, tier);
+}
+
+// Turns queued physics events into sound and visual feedback. Physics never
+// imports audio, effects, or the DOM, so this is the single place gameplay
+// becomes audible and tactile.
 function drainEvents() {
   for (const event of state.events) {
     if (event.type === 'merge') {
       playMerge(event.tier);
-    } else if (event.type === 'reachedTop') {
+      spawnMergeEffects(fx, {
+        row: event.row,
+        col: event.col,
+        tier: event.tier,
+        color: colorForTier(event.tier),
+      });
+    } else if (event.type === 'reachedTop' || event.type === 'topTier') {
       playCelebration();
-    } else if (event.type === 'topTier') {
-      playCelebration();
+      spawnMergeEffects(fx, {
+        row: event.row,
+        col: event.col,
+        tier: TIERS.length - 1,
+        color: colorForTier(TIERS.length - 1),
+      });
     }
   }
   state.events.length = 0;
@@ -74,7 +94,8 @@ function loop(now) {
 
   if (state.screen === SCREEN.PLAYING) {
     update(dt);
-    drawFrame(ctx, state);
+    drawFrame(ctx, state, fx);
+    applyPageTheme(themeForScore(state.score));
   }
 
   requestAnimationFrame(loop);
@@ -82,8 +103,10 @@ function loop(now) {
 
 function update(dt) {
   tickCombo(state, dt);
+  updateEffects(fx, dt);
 
   if (state.active) {
+    stepMagnet(state, dt);
     stepPhysics(state, dt);
   } else {
     const result = spawnFruit(state);
@@ -112,4 +135,5 @@ document.addEventListener('visibilitychange', () => {
 // Any first interaction anywhere is a valid moment to start audio.
 window.addEventListener('pointerdown', unlockAudio, { once: true });
 
+applyPageTheme(themeForScore(0));
 requestAnimationFrame(loop);

@@ -98,7 +98,10 @@ export function saveCoins(value) {
   writeRaw(STORAGE_KEYS.coins, String(value));
 }
 
-const DEFAULT_INVENTORY = { slowDrop: 0, remover: 0, extraRow: 0 };
+const DEFAULT_INVENTORY = {
+  slowDrop: 0, remover: 0, extraRow: 0,
+  magnet: 0, bomb: 0, rainbow: 0,
+};
 
 export function loadInventory() {
   return readJSON(STORAGE_KEYS.inventory, DEFAULT_INVENTORY);

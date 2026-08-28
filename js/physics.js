@@ -4,11 +4,29 @@
 import {
   COLS, CELL, GRAVITY_PX_PER_SEC, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
+  RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, MAGNET_STEP_SEC,
 } from './constants.js';
 import { effectiveRows, randomSpawnTier, addScore, registerComboHit } from './state.js';
 
+// Tier lookup that also answers for the rainbow sentinel, so callers that only
+// need geometry (radius) never have to special-case it.
+export function tierDef(tier) {
+  return tier === RAINBOW_TIER ? RAINBOW_DEF : TIERS[tier];
+}
+
+export function isRainbow(tier) {
+  return tier === RAINBOW_TIER;
+}
+
 export function spawnFruit(state) {
-  const tier = state.nextTier;
+  // Rainbow charges ride the normal spawn path: they simply replace what the
+  // pool would otherwise have produced, at random points through the run.
+  let tier = state.nextTier;
+  if (state.rainbowRemaining > 0 && Math.random() < state.rainbowChance) {
+    tier = RAINBOW_TIER;
+    state.rainbowRemaining -= 1;
+  }
+
   state.nextTier = randomSpawnTier();
   const startCol = Math.floor(COLS / 2);
   const rows = effectiveRows(state);
@@ -22,14 +40,14 @@ export function spawnFruit(state) {
     col: startCol,
     x: startCol * CELL + CELL / 2,
     targetX: startCol * CELL + CELL / 2,
-    y: -TIERS[tier].radius,
+    y: -tierDef(tier).radius,
   };
   return { blocked: false };
 }
 
 export function setDragTarget(state, pixelX) {
   if (!state.active) return;
-  const radius = TIERS[state.active.tier].radius;
+  const radius = tierDef(state.active.tier).radius;
   const clamped = Math.min(BOARD_WIDTH - radius, Math.max(radius, pixelX));
   state.active.targetX = clamped;
 }
@@ -80,21 +98,35 @@ export function resolveMerges(state) {
   }
 }
 
+// Two cells merge when they hold the same tier, OR when either is a rainbow
+// (which adopts whatever it touches). Returns the tier the pair resolves as,
+// or null when they do not merge at all.
+function pairTier(a, b) {
+  if (a === null || b === null) return null;
+  const aWild = a === RAINBOW_TIER;
+  const bWild = b === RAINBOW_TIER;
+  if (aWild && bWild) return 0; // two wilds settle to the lowest tier
+  if (aWild) return b;
+  if (bWild) return a;
+  return a === b ? a : null;
+}
+
 function mergeOnePair(state) {
   const rows = state.grid.length;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < COLS; c++) {
-      const tier = state.grid[r][c];
-      if (tier === null) continue;
+      if (state.grid[r][c] === null) continue;
 
       // Check right neighbor and down neighbor only -- checking every cell
       // against both directions covers every adjacent pair exactly once.
-      if (c + 1 < COLS && state.grid[r][c + 1] === tier) {
-        mergeCells(state, r, c, r, c + 1, tier);
+      const right = c + 1 < COLS ? pairTier(state.grid[r][c], state.grid[r][c + 1]) : null;
+      if (right !== null) {
+        mergeCells(state, r, c, r, c + 1, right);
         return true;
       }
-      if (r + 1 < rows && state.grid[r + 1][c] === tier) {
-        mergeCells(state, r, c, r + 1, c, tier);
+      const down = r + 1 < rows ? pairTier(state.grid[r][c], state.grid[r + 1][c]) : null;
+      if (down !== null) {
+        mergeCells(state, r, c, r + 1, c, down);
         return true;
       }
     }
@@ -152,6 +184,99 @@ export function removeFruitAt(state, row, col) {
   state.grid[row][col] = null;
   settleColumns(state);
   return true;
+}
+
+// Bomb: clears every fruit within BOMB_RADIUS of the target cell, regardless of
+// tier. Deliberately awards no score and does NOT touch the combo -- it is an
+// escape hatch for a bad board, not a scoring tool, so it must never be the
+// cheapest way to build a streak. Merges are resolved afterwards because the
+// collapse can legitimately bring matching fruit together.
+export function detonateBomb(state, row, col) {
+  const rows = state.grid.length;
+  if (row < 0 || row >= rows || col < 0 || col >= COLS) return null;
+
+  const cleared = [];
+  for (let r = row - BOMB_RADIUS; r <= row + BOMB_RADIUS; r++) {
+    for (let c = col - BOMB_RADIUS; c <= col + BOMB_RADIUS; c++) {
+      if (r < 0 || r >= rows || c < 0 || c >= COLS) continue;
+      if (state.grid[r][c] === null) continue;
+      cleared.push({ row: r, col: c, tier: state.grid[r][c] });
+      state.grid[r][c] = null;
+    }
+  }
+  if (cleared.length === 0) return null;
+
+  settleColumns(state);
+  resolveMerges(state);
+  return cleared;
+}
+
+// Magnet: one gentle step of attraction. The exposed (top-of-column) fruit
+// matching the held fruit's tier slides ONE column toward the column being
+// dragged over, and only if the destination has room.
+//
+// Deliberately narrow: it never moves buried fruit, never moves more than one
+// column per step, and never places a fruit directly into a merge position
+// that the player did not set up. It nudges the board, it does not solve it.
+export function stepMagnet(state, dt) {
+  if (!state.magnetActive || !state.active) return [];
+
+  state.magnetTimer -= dt;
+  if (state.magnetTimer <= 0) {
+    state.magnetActive = false;
+    state.magnetTimer = 0;
+    return [];
+  }
+
+  state.magnetStepTimer -= dt;
+  if (state.magnetStepTimer > 0) return [];
+  state.magnetStepTimer = MAGNET_STEP_SEC;
+
+  const heldTier = state.active.tier;
+  const targetCol = state.active.col;
+  const rows = state.grid.length;
+
+  // Two phases on purpose. Scanning and moving in one pass lets a fruit that
+  // just landed in column c+1 be picked up again when the loop reaches c+1,
+  // so a single fruit could cross several columns in one step and drop
+  // straight into the merge -- exactly the "solves it for you" behaviour this
+  // power-up must not have. Planning against an unmutated snapshot caps every
+  // fruit at one column per step.
+  const planned = [];
+  for (let c = 0; c < COLS; c++) {
+    if (c === targetCol) continue;
+    if (state.stackHeight[c] === 0) continue;
+
+    const topRow = rows - state.stackHeight[c];
+    const tier = state.grid[topRow][c];
+    // A held rainbow attracts everything; a rainbow on the board answers to any hold.
+    if (pairTier(tier, heldTier) === null) continue;
+
+    const dest = c + (targetCol > c ? 1 : -1);
+    if (dest < 0 || dest >= COLS) continue;
+    planned.push({ from: c, to: dest, tier, fromRow: topRow });
+  }
+
+  const moves = [];
+  for (const move of planned) {
+    // Re-check against live state: an earlier move this step may have filled
+    // the destination or emptied the source.
+    if (state.stackHeight[move.to] >= rows) continue;
+    if (state.grid[move.fromRow][move.from] !== move.tier) continue;
+
+    state.grid[move.fromRow][move.from] = null;
+    state.stackHeight[move.from] -= 1;
+    const destRow = rows - 1 - state.stackHeight[move.to];
+    state.grid[destRow][move.to] = move.tier;
+    state.stackHeight[move.to] += 1;
+    moves.push({ from: move.from, to: move.to, tier: move.tier });
+  }
+
+  if (moves.length > 0) {
+    settleColumns(state);
+    resolveMerges(state);
+  }
+  return moves;
 }
 
 export function isGameOver(state) {

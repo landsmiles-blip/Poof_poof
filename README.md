@@ -26,6 +26,9 @@ Then open `http://localhost:8000/`.
 - `js/render.js` -- canvas drawing only. No state mutation.
 - `js/input.js` -- pointer (mouse + touch, unified via Pointer Events) handling.
 - `js/audio.js` -- runtime-synthesized sound effects (WebAudio). No audio files.
+- `js/effects.js` -- squash-and-stretch, particles, screen shake, haptics. Presentational only.
+- `js/theme.js` -- milestone palette interpolation, and pushing it out to CSS.
+- `js/icons.js` -- vector power-up icons drawn in code. No image files.
 - `js/shop.js` -- DOM-based menu / game-over / shop screens.
 - `js/storage.js` -- the only file that touches `localStorage`, and the only one that needs to.
 - `js/main.js` -- wires it together and runs the `requestAnimationFrame` loop.
@@ -61,12 +64,58 @@ than for playing patiently. The window is tuned to `1.2s` against simulated
 runs; at `2.0s` a competent player never dropped out of the streak and the
 multiplier degenerated into a permanent flat bonus.
 
-**Unlockable skins.** Three skins beyond the default, earned at best-score
-milestones (1000 / 3000 / 8000) and selectable in the shop. Thresholds are
-calibrated against 250-run simulations at three skill levels (median score:
-novice ~1000, casual ~3000, expert ~9000) so they land on successive rungs
-of the skill curve. Unlocks are re-derived from the best score on load, so
-the stored list can never drift out of sync with what the player has earned.
+**Milestones.** `MILESTONE_SCORES` (0 / 1000 / 3000 / 8000) is the single
+progression ladder. Skins, power-up availability, and the visual theme all
+key off it, so adding a stop extends every gated system at once. Thresholds
+are calibrated against 250-run simulations at three skill levels (median
+score: novice ~1000, casual ~3000, expert ~9000) so they land on successive
+rungs of the skill curve.
+
+**Unlockable skins.** Three skins beyond the default, earned at those
+milestones and selectable in the shop. Unlocks are re-derived from the best
+score on load, so the stored list can never drift out of sync with what the
+player has earned.
+
+**Power-ups.** The original three (Slow Drop, Fruit Remover, Extra Row) are
+available from the start. Three more unlock on the milestones above,
+alongside that milestone's skin:
+
+- *Magnet* (1000) -- while held, the exposed top-of-column fruit matching the
+  fruit you are dragging slides one column closer, once per 0.45s. It is
+  deliberately narrow: it never moves buried fruit, never moves a fruit more
+  than one column per step, and cannot chain. Planning happens against an
+  unmutated snapshot precisely because a naive single-pass version let one
+  fruit cross the whole board in a single step and drop straight into the
+  merge -- which would make it solve the board rather than nudge it.
+- *Bomb* (3000) -- arm it, tap a cell, and everything within one cell is
+  cleared regardless of tier. Awards no score and does not touch the combo
+  counter, so it stays an escape hatch for a bad board rather than the
+  cheapest way to build a streak.
+- *Rainbow Fruit* (8000) -- wild fruit delivered through the ordinary spawn
+  path, which merges with whatever it touches and becomes that tier. Two
+  wilds settle to the lowest tier; a wild against the top tier clears like a
+  matching top-tier pair.
+
+Power-up icons are vectors drawn in `icons.js`, same as the fruit shapes --
+no image files. Each is a single-colour silhouette taking its colour from the
+caller, verified legible at the real 26px HUD size against a neutral chip, the
+armed accent, and the dark end-game theme.
+
+**Merge feel.** Squash-and-stretch and a particle burst on every merge, both
+scaling with tier (5 -> 16 particles, 0.18 -> 0.42 scale overshoot) so the
+visuals escalate in step with the merge pitch. Canvas shake on the top three
+tiers only, capped at 5px and applied to the board but never the HUD -- a
+shaking score readout reads as a glitch rather than as impact. Haptics via
+the Vibration API, 12ms normally and 45ms for a top-tier merge, feature
+checked and wrapped so browsers that lack it, or that throw when vibration
+is blocked by permissions policy, fail silently.
+
+**Theme.** The palette is interpolated continuously between one palette per
+milestone, driven by the current run score, so the world warms up gradually
+instead of snapping at each threshold -- measured colour distance across
+every threshold crossing is zero. Canvas colours come from the same object
+that feeds the CSS custom properties, so the page chrome and the overlay
+screens move with the board.
 
 ## PWA / Android (Trusted Web Activity) distribution
 
