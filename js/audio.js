@@ -14,11 +14,29 @@ let ctx = null;
 let masterGain = null;
 let muted = false;
 let unavailable = false;
+// Assumed enabled until main.js says otherwise (platform.audioEnabled(),
+// read at boot and again on every platform.onAudioEnabledChange). This is
+// the HOST's permission, separate from the player's own mute toggle above --
+// both must be true for anything to be audible (phase 3.3's requirement) --
+// and it is never written into the save; it belongs to the host, not to the
+// player's persisted preferences.
+let hostAudioEnabled = true;
 
 // Sets the flag from the loaded save (main.js's boot, before the first
 // frame). This module never reads storage itself -- see js/platform.js.
 export function hydrate(save) {
   muted = save ? !save.sfxOn : false;
+}
+
+function targetGain() {
+  return (muted || !hostAudioEnabled) ? 0 : 0.9;
+}
+
+export function setHostAudioEnabled(value) {
+  hostAudioEnabled = Boolean(value);
+  if (masterGain && ctx) {
+    masterGain.gain.setTargetAtTime(targetGain(), ctx.currentTime, 0.01);
+  }
 }
 
 // Called from the first user gesture. Safe to call repeatedly.
@@ -41,7 +59,7 @@ export function unlockAudio() {
     }
     ctx = new AudioCtx();
     masterGain = ctx.createGain();
-    masterGain.gain.value = muted ? 0 : 0.9;
+    masterGain.gain.value = targetGain();
     masterGain.connect(ctx.destination);
     // A context constructed outside a user gesture starts suspended; resume
     // unconditionally rather than relying on listener ordering.
@@ -65,7 +83,7 @@ export function setMuted(value) {
   muted = Boolean(value);
   if (masterGain && ctx) {
     // Ramp rather than jump, so toggling mid-tone doesn't click.
-    masterGain.gain.setTargetAtTime(muted ? 0 : 0.9, ctx.currentTime, 0.01);
+    masterGain.gain.setTargetAtTime(targetGain(), ctx.currentTime, 0.01);
   }
 }
 
@@ -85,7 +103,7 @@ export function resumeAudio() {
 }
 
 function ready() {
-  return ctx && masterGain && !muted && ctx.state === 'running';
+  return ctx && masterGain && !muted && hostAudioEnabled && ctx.state === 'running';
 }
 
 // One short percussive blip: a sine with a fast pitch drop and quick decay.

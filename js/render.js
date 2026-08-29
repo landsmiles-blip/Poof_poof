@@ -1,12 +1,11 @@
 // All canvas drawing lives here. Nothing in this file mutates game state.
 
 import {
-  COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, MUTE_RECT, COMBO_WINDOW_SEC,
+  COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, COMBO_WINDOW_SEC,
   RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
   FONT_FAMILY, RENDER_SCALE, LOCKED_FLASH_DURATION_SEC,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps } from './state.js';
-import { isMuted } from './audio.js';
 import { squashScaleAt, shakeOffset, drawParticles } from './effects.js';
 import { themeForScore } from './theme.js';
 import { drawIcon } from './icons.js';
@@ -75,7 +74,6 @@ function drawHUD(ctx, state, width, theme) {
   const nextDef = tierDefFor(state.nextTier);
   drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier));
 
-  drawMuteToggle(ctx, theme);
   drawPowerBar(ctx, state, theme);
 
   // Build stamp: low-contrast, but the fastest way to confirm which code a
@@ -201,46 +199,6 @@ function drawPowerBar(ctx, state, theme) {
       ctx.fillRect(rect.x, rect.y - 4, rect.w * pct, 2.5);
     }
   }
-}
-
-function drawMuteToggle(ctx, theme) {
-  const { x, y, w, h } = MUTE_RECT;
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  const muted = isMuted();
-
-  ctx.save();
-  ctx.globalAlpha = 0.6;
-  ctx.strokeStyle = theme.text;
-  ctx.fillStyle = theme.text;
-  ctx.lineWidth = 1.6;
-
-  ctx.beginPath();
-  ctx.moveTo(cx - 6, cy - 3);
-  ctx.lineTo(cx - 3, cy - 3);
-  ctx.lineTo(cx + 1, cy - 7);
-  ctx.lineTo(cx + 1, cy + 7);
-  ctx.lineTo(cx - 3, cy + 3);
-  ctx.lineTo(cx - 6, cy + 3);
-  ctx.closePath();
-  ctx.fill();
-
-  if (muted) {
-    ctx.beginPath();
-    ctx.moveTo(cx + 4, cy - 4);
-    ctx.lineTo(cx + 10, cy + 4);
-    ctx.moveTo(cx + 10, cy - 4);
-    ctx.lineTo(cx + 4, cy + 4);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.arc(cx + 2, cy, 5, -Math.PI / 3, Math.PI / 3);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx + 2, cy, 8.5, -Math.PI / 3, Math.PI / 3);
-    ctx.stroke();
-  }
-  ctx.restore();
 }
 
 function drawBoard(ctx, state, fx, theme) {

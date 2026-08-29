@@ -374,44 +374,96 @@ and unlock economics are untouched.
 Both are MUST-level, and both appear in Google's published list of what actually
 fails games.
 
-### [ ] 3.1 Replace the Page Visibility API
+### [x] 3.1 Replace the Page Visibility API — done, `tests/verify-features.js` "Pause actually stops the game" / "Resume continues, no silent context" passing
 
-`js/main.js` listens for `visibilitychange` and suspends audio only — the rAF
-loop keeps running, because `loop()` always re-requests the frame.
+`js/main.js` listened for `visibilitychange` and suspended audio only — the
+rAF loop kept running, because `loop()` always re-requested the frame.
 
-- `onPause`: cancel the rAF handle, suspend audio, clear `js/music.js`'s
-  `setInterval` scheduler, flush the save.
-- `onResume`: reset `lastTime` before the first frame so `dt` does not spike,
-  then restart the loop.
+- `onPause`: `rafHandle` (the return value of `requestAnimationFrame`, now
+  tracked in `js/main.js`) is passed to `cancelAnimationFrame` — gating
+  `loop()`'s body with a flag was explicitly rejected in the brief, since the
+  loop would still wake 60 times a second. Also suspends audio,
+  `music.pauseScheduler()` (clears `setInterval`, added to `js/music.js`), and
+  flushes the save (`persistNow()`, already in place from phase 2).
+- `onResume`: resets `lastTime`, resumes audio, `music.resumeScheduler()`
+  (resets `step`/`nextNoteTime` to "now" before restarting the interval — the
+  music-scheduler trap below), restarts the loop.
+- **The music-scheduler trap:** `setInterval` fires on the wall clock
+  regardless of `AudioContext` suspension, so clearing just the interval on
+  pause and resetting the scheduling clock on resume (exactly what
+  `startMusic()` already did) was necessary, not optional — confirmed by
+  reading `music.js`'s scheduler loop, which would otherwise dump every missed
+  step at once.
 
-**Test.** Pause mid-fall, wait, resume: the fruit continues from where it was.
+**Test, adapted:** a Playwright check (`tests/verify-features.js`) starts a
+run, lets a fruit fall, dispatches a synthetic `visibilitychange`
+(`document.hidden` shadowed via `Object.defineProperty`, since Playwright has
+no first-class "background this tab" primitive), and compares two canvas
+screenshots **both taken during the pause** — comparing a pre-pause shot
+against a during-pause shot was tried first and is wrong on its own terms: a
+frame or two legitimately renders during the dispatch round trip, so that
+pair always differs even with a correct fix. After resume, a further
+screenshot must differ (proving the loop restarted) and the `AudioContext`
+must read `'running'`, not stuck suspended. This checks freeze/resume and a
+live context; it does not check the absence of an audible music burst or
+pixel-exact fruit-position continuity — those would need audio-graph
+introspection or reading `js/main.js`'s private `state`, neither of which
+existed already, and adding either was judged more machinery than this check
+warranted.
 
-### [ ] 3.2 Audio must start without a gesture
+### [x] 3.2 Audio must start without a gesture — done, `tests/verify-features.js` "Audio starts without a gesture" passing
 
-Google's certification FAQ, verbatim: *"The most common audio issue that is seen
-involves games that are expecting user interaction before starting playback.
-However, YouTube Playables may be given focus automatically, so the game must
-handle this case."*
+`js/audio.js` built its `AudioContext` inside `unlockAudio()`, reached only
+from `pointerdown`. `js/main.js`'s `boot()` now calls `unlockAudio()`
+unconditionally when `platform.audioEnabled()` is true (always true for
+`localImpl`), and again from `platform.onAudioEnabledChange` when audio
+becomes enabled. The `pointerdown` fallback stays — a browser autoplay policy
+can still block a gesture-less resume, confirmed live: headless Chromium logs
+*"The AudioContext was not allowed to start... must be resumed after a user
+gesture"* on every boot, then a later real gesture (or, in the test, a second
+`unlockAudio()` call) does successfully resume it. The existing unconditional
+`resume()` inside `unlockAudio()` was already correct; untouched.
 
-`js/audio.js` builds its AudioContext inside `unlockAudio()`, reached only from
-`pointerdown`. Attempt creation at boot when `platform.audioEnabled()` is true,
-and again from `onAudioEnabledChange`. Keep the gesture path for the Pages
-build. The existing unconditional `resume()` is correct — keep it.
+**Test, extended (not a second mechanism):** the existing Playwright "audio"
+block now checks `getAudioContext() !== null` immediately after the menu
+renders, before any pointer event has been dispatched at all. **Found while
+writing it:** headless Chromium takes a variable, sometimes 500ms+ amount of
+time to actually flip a previously-blocked context to `'running'` after a
+resume call — the merge-sound check's fixed 80ms wait was already borderline
+before this phase and became flaky once boot() started attempting (and being
+blocked on) a resume earlier than before. Replaced the fixed wait with a poll
+on `ctx.state === 'running'` (2s deadline). Not a phase-3 requirement, but a
+prerequisite for phase 3.2's own test to be reliable.
 
-**Test.** Boot and play a merge with no pointer event ever dispatched. Sound
-must be audible.
+### [x] 3.3 Follow the host mute; delete the in-HUD mute button — done
 
-### [ ] 3.3 Follow the host mute; delete the in-HUD mute button
+`MUTE_RECT` (`js/constants.js`), `drawMuteToggle` (`js/render.js`, plus its
+now-unused `isMuted` import there), and the mute hit-test (`js/input.js`) are
+gone. The shop's Sound and Music buttons remain as the permitted granular
+controls. Effective audio state, implemented in `js/audio.js`/`js/music.js`:
 
-Remove `MUTE_RECT` from `js/constants.js`, `drawMuteToggle` from `js/render.js`,
-and its hit test from `js/input.js`. The shop's Music and Sound buttons are the
-granular controls and stay. Master mute belongs to YouTube.
+```
+sfx audible   = platform.audioEnabled() && save.sfxOn
+music audible = platform.audioEnabled() && save.musicOn
+```
 
-### [ ] 3.4 Give haptics an off switch
+`setHostAudioEnabled()` in each module ANDs the host flag into `ready()`
+alongside the player's own toggle; neither module persists the host's half —
+`toSaveBlob()` never receives it, only `sfxOn`/`musicOn`, which is why it
+cannot leak into the save. The freed HUD corner is left empty, as instructed;
+nothing new drawn there.
 
-A third toggle beside Sound and Music, stored in the save blob, checked in
-`vibrate()` in `js/effects.js`. Hide the control where `hasHaptics()` is false —
-that helper already exists and is currently unused.
+### [x] 3.4 Give haptics an off switch — done, `unit-tests/haptics.js` and `unit-tests/save-blob.js` passing
+
+`hapticsOn` joins the save blob (`state.js`'s `toSaveBlob`, defaulting to
+`true` when absent — both for a fresh save and for an existing save from
+before this field existed). `js/effects.js` owns the flag the same way
+`js/audio.js`/`js/music.js` own `sfxOn`/`musicOn` (a `hydrate(save)` export,
+no storage import), and `vibrate()` checks it first. The shop's third toggle
+(`js/shop.js`) follows the Sound/Music pattern exactly — same
+toggle/tick/`state.dirty`/redraw shape — and renders nothing at all when
+`hasHaptics()` is false, using the helper that already existed and was
+already unused before this phase.
 
 ---
 

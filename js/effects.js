@@ -22,6 +22,23 @@ export function createEffects() {
   };
 }
 
+let hapticsOn = true;
+
+// Sets the flag from the loaded save (main.js's boot, before the first
+// frame). This module never reads storage itself -- see js/platform.js.
+export function hydrate(save) {
+  hapticsOn = save ? save.hapticsOn !== false : true;
+}
+
+export function isHapticsOn() {
+  return hapticsOn;
+}
+
+export function toggleHaptics() {
+  hapticsOn = !hapticsOn;
+  return hapticsOn;
+}
+
 // 0 at tier 0, 1 at the top tier.
 function tierRatio(tier) {
   return Math.max(0, Math.min(1, tier / MAX_TIER));
@@ -87,6 +104,7 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false })
 // throw when vibration is blocked by permissions policy, must not surface here.
 export function vibrate(ms) {
   try {
+    if (!hapticsOn) return false;
     if (typeof navigator === 'undefined') return false;
     if (typeof navigator.vibrate !== 'function') return false;
     return navigator.vibrate(ms) === true;

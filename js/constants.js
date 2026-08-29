@@ -243,8 +243,11 @@ export const FONT_FAMILY = "'Fredoka', system-ui, sans-serif";
 // nothing else depends on the value, since input maps from the logical size.
 export const RENDER_SCALE = 3;
 
-// Tap target for the mute toggle, in canvas space within the HUD.
-export const MUTE_RECT = { x: BOARD_WIDTH - 32, y: 58, w: 24, h: 24 };
+// The top-right HUD corner previously held the in-game master mute toggle
+// (MUTE_RECT), removed in phase 3: Playables requirements prohibit an
+// in-game master mute (the host has its own), and the Sound/Music buttons in
+// the shop are the granular controls the requirements do permit. Left empty
+// deliberately -- phase 6 has candidates -- do not fill it in the meantime.
 
 // Power-up bar along the bottom of the HUD. Slots are laid out left to right;
 // render.js and input.js both derive hit boxes from these so they cannot drift.

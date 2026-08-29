@@ -168,10 +168,26 @@ async function shot(page, name, full = false) {
       };
     });
     await page.goto(`${BASE}/index.html`);
+    // No click, no pointer event of any kind yet -- waiting for the menu to
+    // render proves boot() has already run past its unconditional
+    // unlockAudio() call (3.2: "YouTube Playables may be given focus
+    // automatically", so the game must not be waiting on a gesture for this).
+    await page.waitForSelector('#play-btn');
+    const bootedWithoutGesture = await page.evaluate(async () => {
+      const a = await import('./js/audio.js');
+      return a.getAudioContext() !== null;
+    });
     const audio = await page.evaluate(async () => {
       const a = await import('./js/audio.js');
       a.unlockAudio();
-      await new Promise((r) => setTimeout(r, 80));
+      // boot() already tried this once before any gesture existed and was
+      // blocked (logged, not thrown); actually resuming from that blocked
+      // state takes headless Chromium a variable, sometimes-500ms+ amount of
+      // time -- poll rather than guess a fixed delay, so this is not flaky.
+      const deadline = Date.now() + 2000;
+      while (a.getAudioContext()?.state !== 'running' && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
       window.__osc = [];
       for (let t = 0; t < 9; t++) a.playMerge(t);
       await new Promise((r) => setTimeout(r, 40));
@@ -185,6 +201,8 @@ async function shot(page, name, full = false) {
         celebrationNotes: window.__osc.length,
       };
     });
+    record('Audio starts without a gesture', bootedWithoutGesture, bootedWithoutGesture,
+      `AudioContext created by boot() before any pointer event: ${bootedWithoutGesture}`);
     record('Merge sound (pitch rises with tier)', true, audio.rising,
       `${audio.merges[0]}Hz -> ${audio.merges[audio.merges.length - 1]}Hz, monotonic: ${audio.rising}`);
     record('Celebration sound', audio.celebrationNotes > 1, false,
@@ -215,6 +233,57 @@ async function shot(page, name, full = false) {
     });
     record('Background music', music.playingAfterStart, music.onByDefault,
       `on by default: ${music.onByDefault}; starts: ${music.playingAfterStart}; stops: ${!music.playingAfterStop}; toggle: ${music.toggleWorks}`);
+    await context.close();
+  }
+
+  // -------------------------------------------- pause must actually stop
+  {
+    const { context, page } = await freshPage(browser, 'pause');
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(250); // a fruit is now actively falling
+
+    const canvas = page.locator('#game-canvas');
+
+    // Simulate the host pausing the game (losing focus / backgrounded), the
+    // same signal platform.js's localImpl listens for.
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    // A frame or two legitimately still renders during the dispatch round
+    // trip, so the freeze check compares two screenshots BOTH taken after
+    // pause has settled, not "before" against "during" -- that pair would
+    // always differ even with a correct cancelAnimationFrame.
+    await page.waitForTimeout(100);
+    const frameEarlyInPause = await canvas.screenshot();
+    await page.waitForTimeout(600);
+    const frameLateInPause = await canvas.screenshot();
+    const frozen = frameEarlyInPause.equals(frameLateInPause);
+    const ctxDuringPause = await page.evaluate(async () => {
+      const a = await import('./js/audio.js');
+      return a.getAudioContext()?.state;
+    });
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForTimeout(600);
+    const frameAfterResume = await canvas.screenshot();
+    const resumedAdvancing = !frameLateInPause.equals(frameAfterResume);
+    const ctxAfterResume = await page.evaluate(async () => {
+      const a = await import('./js/audio.js');
+      return a.getAudioContext()?.state;
+    });
+
+    record('Pause actually stops the game', frozen, frozen,
+      `board unchanged across a 600ms pause (rAF cancelled, not just gated): ${frozen}; ` +
+      `AudioContext during pause: ${ctxDuringPause}`);
+    record('Resume continues, no silent context', resumedAdvancing && ctxAfterResume === 'running', resumedAdvancing,
+      `board resumed advancing: ${resumedAdvancing}; AudioContext after resume: ${ctxAfterResume} ` +
+      `(note: this checks freeze/resume and a live context, not the absence of a music burst or exact continuity of fruit position -- see phase 3.1 in docs/playables-plan.md)`);
     await context.close();
   }
 

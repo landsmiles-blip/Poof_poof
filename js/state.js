@@ -123,7 +123,7 @@ function startingInventory(dev, storedInventory, storedHigh) {
 // flags live outside `state` (js/audio.js, js/music.js own them), so the
 // caller passes them in rather than this function reaching for those modules
 // -- state.js stays free of audio imports.
-export function toSaveBlob(state, { musicOn, sfxOn }) {
+export function toSaveBlob(state, { musicOn, sfxOn, hapticsOn }) {
   return {
     v: SAVE_VERSION,
     highScore: state.highScore,
@@ -133,6 +133,7 @@ export function toSaveBlob(state, { musicOn, sfxOn }) {
     selectedSkin: state.selectedSkin,
     musicOn,
     sfxOn,
+    hapticsOn,
   };
 }
 

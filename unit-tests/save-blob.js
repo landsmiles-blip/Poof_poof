@@ -15,8 +15,9 @@ state.coins = 999999;
 for (let i = 0; i < 6; i++) buyPowerUp(state, 'bomb', 0); // pad inventory a bit
 state.unlockedSkins = ['classic', 'blossom', 'neon', 'midnight'];
 
-const blob = toSaveBlob(state, { musicOn: true, sfxOn: false });
+const blob = toSaveBlob(state, { musicOn: true, sfxOn: false, hapticsOn: true });
 assert.equal(blob.v, SAVE_VERSION);
+assert.equal(blob.hapticsOn, true, 'toSaveBlob should carry hapticsOn through, added in phase 3.4');
 
 const bytes = Buffer.byteLength(JSON.stringify(blob), 'utf8');
 assert.ok(bytes < CAP_BYTES, `save blob is ${bytes} bytes, over the ${CAP_BYTES}-byte cap`);

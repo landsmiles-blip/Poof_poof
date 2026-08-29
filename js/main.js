@@ -16,10 +16,17 @@ import { renderMenu, renderGameOver } from './shop.js';
 import {
   playMerge, playCelebration, playGameOver, playUiTick,
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
-  hydrate as hydrateAudio, isMuted,
+  hydrate as hydrateAudio, isMuted, setHostAudioEnabled as setAudioHostEnabled,
 } from './audio.js';
-import { attachContext, startMusic, stopMusic, hydrate as hydrateMusic, isMusicOn } from './music.js';
-import { createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate } from './effects.js';
+import {
+  attachContext, startMusic, stopMusic, hydrate as hydrateMusic, isMusicOn,
+  setHostAudioEnabled as setMusicHostEnabled, pauseScheduler as pauseMusicScheduler,
+  resumeScheduler as resumeMusicScheduler,
+} from './music.js';
+import {
+  createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
+  hydrate as hydrateHaptics, isHapticsOn,
+} from './effects.js';
 import { themeForScore, applyPageTheme } from './theme.js';
 
 const canvas = document.getElementById('game-canvas');
@@ -76,7 +83,7 @@ function syncMusic() {
 // platform.save()/flush(). state.js stays free of platform imports (and of
 // audio.js/music.js imports) -- this is where those two halves meet.
 function currentSaveBlob() {
-  return toSaveBlob(state, { musicOn: isMusicOn(), sfxOn: !isMuted() });
+  return toSaveBlob(state, { musicOn: isMusicOn(), sfxOn: !isMuted(), hapticsOn: isHapticsOn() });
 }
 
 // Debounced. Not called directly from anywhere else -- state.dirty is the
@@ -187,6 +194,14 @@ function drainEvents() {
 }
 
 let lastTime = performance.now();
+// Tracks the live requestAnimationFrame handle so onPause can actually cancel
+// it. Gating loop()'s body behind a flag would leave the loop itself still
+// waking 60 times a second -- paused means not executing, not just idling.
+let rafHandle = null;
+
+function startLoop() {
+  rafHandle = requestAnimationFrame(loop);
+}
 
 function loop(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
@@ -203,7 +218,7 @@ function loop(now) {
   // not mid-run. Cheap when clean -- one boolean read most frames.
   if (state.dirty) persist();
 
-  requestAnimationFrame(loop);
+  startLoop();
 }
 
 function update(dt) {
@@ -247,6 +262,29 @@ async function boot() {
   state = createInitialState(save);
   hydrateAudio(save);
   hydrateMusic(save);
+  hydrateHaptics(save);
+
+  // Effective audio state is platform.audioEnabled() ANDed with the player's
+  // own sfxOn/musicOn toggles (js/audio.js, js/music.js) -- never the other
+  // way around, and the host's half is never written into the save; it
+  // belongs to YouTube, not to the player's persisted preferences.
+  const hostAudio = platform.audioEnabled();
+  setAudioHostEnabled(hostAudio);
+  setMusicHostEnabled(hostAudio);
+  platform.onAudioEnabledChange((enabled) => {
+    setAudioHostEnabled(enabled);
+    setMusicHostEnabled(enabled);
+    if (enabled) unlockAudio();
+  });
+
+  // The named certification failure: "YouTube Playables may be given focus
+  // automatically, so the game must handle this case" -- i.e. without ever
+  // waiting for a gesture. Attempt unconditionally when the host allows it;
+  // unlockAudio() is idempotent and safe to call again from a real gesture
+  // later (the pointerdown listener below), which is what actually starts
+  // audio on the Pages build, where a browser autoplay policy can still
+  // block a gesture-less resume.
+  if (hostAudio) unlockAudio();
 
   sizeCanvas();
   attachInput(canvas, state);
@@ -269,12 +307,19 @@ async function boot() {
   });
 
   platform.onPause(() => {
+    if (rafHandle !== null) {
+      cancelAnimationFrame(rafHandle);
+      rafHandle = null;
+    }
     suspendAudio();
+    pauseMusicScheduler();
     persistNow();
   });
   platform.onResume(() => {
     lastTime = performance.now(); // avoid a huge dt spike on the first frame back
     resumeAudio();
+    resumeMusicScheduler();
+    if (rafHandle === null) startLoop();
   });
 
   // Any first interaction anywhere is a valid moment to start audio.
@@ -287,9 +332,9 @@ async function boot() {
   // the first frames in system-ui and then snap to Fredoka. Wait for fonts, but
   // never let a font failure stop the game starting.
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => requestAnimationFrame(loop)).catch(() => requestAnimationFrame(loop));
+    document.fonts.ready.then(startLoop).catch(startLoop);
   } else {
-    requestAnimationFrame(loop);
+    startLoop();
   }
 }
 

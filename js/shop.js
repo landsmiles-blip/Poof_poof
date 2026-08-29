@@ -12,6 +12,7 @@ import { POWERUPS, SKINS, TIERS, BUILD_VERSION } from './constants.js';
 import { buyPowerUp, startRun, selectSkin, isUnlockedByScore } from './state.js';
 import { unlockAudio, toggleMuted, isMuted, playUiTick } from './audio.js';
 import { isMusicOn, toggleMusic } from './music.js';
+import { hasHaptics, isHapticsOn, toggleHaptics } from './effects.js';
 import { iconCanvas } from './icons.js';
 
 // Tiers sampled for the little skin swatch previews.
@@ -76,6 +77,7 @@ function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
         <div class="toggle-row">
           ${soundButtonHTML()}
           ${musicButtonHTML()}
+          ${hapticsButtonHTML()}
         </div>
         <p class="build-stamp">v${BUILD_VERSION}</p>
       </div>
@@ -112,6 +114,7 @@ function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
 
     wireSoundButton(root, draw, state);
     wireMusicButton(root, draw, state);
+    wireHapticsButton(root, draw, state);
   }
 
   draw();
@@ -220,8 +223,16 @@ function musicButtonHTML() {
   return `<button class="sound-btn" id="music-btn">${isMusicOn() ? 'Music: on' : 'Music: off'}</button>`;
 }
 
-// Mute/music live in audio.js/music.js, not state.js, so unlike the buttons
-// above these have no state.js export to get state.dirty from for free.
+// Hidden entirely where the device cannot vibrate at all -- a toggle for
+// something that can never do anything is worse than no toggle.
+function hapticsButtonHTML() {
+  if (!hasHaptics()) return '';
+  return `<button class="sound-btn" id="haptics-btn">${isHapticsOn() ? 'Haptics: on' : 'Haptics: off'}</button>`;
+}
+
+// Mute/music/haptics live in audio.js/music.js/effects.js, not state.js, so
+// unlike the buttons above these have no state.js export to get state.dirty
+// from for free.
 function wireSoundButton(root, redraw, state) {
   const btn = root.querySelector('#sound-btn');
   if (!btn) return;
@@ -240,6 +251,20 @@ function wireMusicButton(root, redraw, state) {
   btn.addEventListener('click', () => {
     unlockAudio();
     toggleMusic();
+    playUiTick();
+    state.dirty = true;
+    if (redraw) redraw();
+  });
+}
+
+// Follows exactly the pattern above -- same toggle/tick/dirty/redraw shape,
+// no second mechanism invented for a third toggle.
+function wireHapticsButton(root, redraw, state) {
+  const btn = root.querySelector('#haptics-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    unlockAudio();
+    toggleHaptics();
     playUiTick();
     state.dirty = true;
     if (redraw) redraw();

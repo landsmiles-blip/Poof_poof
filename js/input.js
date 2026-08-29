@@ -1,14 +1,16 @@
-// Pointer input (unifies mouse + touch) for dragging the falling fruit,
-// using power-ups, and toggling sound.
+// Pointer input (unifies mouse + touch) for dragging the falling fruit and
+// using power-ups. No master mute here -- Playables requirements prohibit an
+// in-game master mute button; see js/shop.js for the granular Sound/Music
+// (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
-import { CELL, HUD_HEIGHT, COLS, MUTE_RECT, powerSlotRect, CANVAS_WIDTH } from './constants.js';
+import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH } from './constants.js';
 import { removeFruitAt, detonateBomb, setDragTarget } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
   hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
   consumeBomb, consumeRemover,
 } from './state.js';
-import { unlockAudio, toggleMuted, playUiTick } from './audio.js';
+import { unlockAudio, playUiTick } from './audio.js';
 
 function inRect(point, rect) {
   return point.x >= rect.x && point.x <= rect.x + rect.w
@@ -80,16 +82,6 @@ export function attachInput(canvas, state) {
     unlockAudio();
 
     const point = toCanvasPoint(evt);
-
-    if (inRect(point, MUTE_RECT)) {
-      toggleMuted();
-      playUiTick();
-      // Not a state.js mutation (mute lives in audio.js), so this is the one
-      // place in this file that sets the flag itself rather than getting it
-      // for free from a state.js export.
-      state.dirty = true;
-      return;
-    }
 
     if (point.y <= HUD_HEIGHT) {
       handlePowerSlot(point);

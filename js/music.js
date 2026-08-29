@@ -24,11 +24,25 @@ let musicGain = null;
 let unavailable = false;
 let playing = false;
 let musicOn = true;
+// Assumed enabled until main.js says otherwise -- see js/audio.js's
+// hostAudioEnabled for the full rationale (host permission, ANDed with the
+// player's own musicOn toggle, never persisted).
+let hostAudioEnabled = true;
 
 // Sets the flag from the loaded save (main.js's boot, before the first
 // frame). This module never reads storage itself -- see js/platform.js.
 export function hydrate(save) {
   musicOn = save ? save.musicOn !== false : true;
+}
+
+export function setHostAudioEnabled(value) {
+  hostAudioEnabled = Boolean(value);
+  if (!ctx || !musicGain || unavailable) return;
+  if (!hostAudioEnabled) {
+    fadeTo(0, 0.2);
+  } else if (playing && musicOn) {
+    fadeTo(MUSIC_VOLUME, 0.5);
+  }
 }
 
 let schedulerId = null;
@@ -90,7 +104,7 @@ export function attachContext(sharedCtx) {
 }
 
 function ready() {
-  return ctx && musicGain && !unavailable;
+  return ctx && musicGain && !unavailable && hostAudioEnabled;
 }
 
 function fadeTo(value, seconds) {
@@ -237,4 +251,29 @@ export function stopMusic(immediate = false) {
 
 export function isPlaying() {
   return playing;
+}
+
+// Clears just the JS timer, leaving `playing` and the AudioContext untouched
+// -- used by platform.onPause. Distinct from stopMusic(), which also fades
+// out and stops any recorded-track source: suspendAudio() (js/audio.js)
+// freezes the whole context, so nothing needs fading here, but the interval
+// itself keeps firing on the wall clock regardless of context state and must
+// be stopped explicitly.
+export function pauseScheduler() {
+  if (schedulerId !== null) {
+    clearInterval(schedulerId);
+    schedulerId = null;
+  }
+}
+
+// Resets the scheduling clock to "now", exactly like startMusic() does,
+// before restarting -- otherwise nextNoteTime is still wherever it was when
+// paused, ctx.currentTime has jumped forward by the whole pause duration, and
+// the while loop in scheduler() dumps every missed step at once as an
+// audible burst.
+export function resumeScheduler() {
+  if (!playing || !ready()) return;
+  step = 0;
+  nextNoteTime = ctx.currentTime + 0.08;
+  if (schedulerId === null) schedulerId = setInterval(scheduler, LOOKAHEAD_MS);
 }
