@@ -491,7 +491,12 @@ async function shot(page, name, full = false) {
       s.grid[rows - 1][5] = 2; s.stackHeight[5] = 1;
       s.grid[rows - 1][1] = 7; s.stackHeight[1] = 1;
       s.active = { tier: 2, col: 3, x: 0, targetX: 0, y: 0 };
-      s.magnetActive = true; s.magnetTimer = 9; s.magnetStepTimer = 0;
+      // 8.3: targeting comes from magnetCol (dragged along the rail), not
+      // automatically from active.col -- startRun's default (board centre)
+      // already happens to be column 3, matching this fixture's intent, but
+      // set it explicitly so the test does not depend on that coincidence.
+      ph.setMagnetColumn(s, 3);
+      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX; s.magnetStepTimer = 0;
       const moves = ph.stepMagnet(s, 0.016);
       out.magnet = {
         moves,
@@ -550,6 +555,236 @@ async function shot(page, name, full = false) {
       `wild + tier3 -> tier${pu.rainbow.result[0]} (expected ${pu.rainbow.expected}). Gated at 8000.`);
     record('Milestone gating shared with skins', true, true,
       `skins ${JSON.stringify(pu.skinMilestones)} / power-ups ${JSON.stringify(pu.powerMilestones)}; unlocks by score: ${JSON.stringify(pu.gating)}`);
+    await context.close();
+  }
+
+  // -------------------------------------------------- merge meter earns charges (8.1)
+  {
+    const { context, page } = await freshPage(browser, 'mergemeter');
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(150);
+
+    const result = await page.evaluate(async () => {
+      const st = await import('./js/state.js');
+      const ph = await import('./js/physics.js');
+      const s = window.__poofDebugState;
+      s.highScore = 8000;
+      s.inventory.remover = 0;
+      s.inventory.magnet = 0;
+      s.inventory.bomb = 0;
+      const beforeInventory = JSON.stringify(s.inventory);
+
+      for (let i = 0; i < 30; i++) {
+        s.grid[0][0] = 0;
+        s.grid[1][0] = 0;
+        s.stackHeight[0] = Math.max(s.stackHeight[0], 2);
+        ph.resolveMerges(s);
+      }
+      const earnedTotal = ['remover', 'magnet', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
+      const grantedId = ['remover', 'magnet', 'bomb'].find((id) => s.earnedCharges[id] > 0);
+      const usableFromEarnedAlone = grantedId
+        ? st.canUsePowerUp(s, { unlockScore: 0, id: grantedId })
+        : false;
+
+      st.endRun(s, 'test');
+      const afterEndRunEarned = ['remover', 'magnet', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
+
+      return {
+        earnedTotal,
+        usableFromEarnedAlone,
+        inventoryUnchanged: JSON.stringify(s.inventory) === beforeInventory,
+        afterEndRunEarned,
+      };
+    });
+
+    const ok = result.earnedTotal > 0 && result.usableFromEarnedAlone && result.inventoryUnchanged && result.afterEndRunEarned === 0;
+    record('Merge meter earns a usable charge, clears at endRun', ok, ok,
+      `through real page/canvas code (not just pure functions): earned ${result.earnedTotal} charge(s), usable from the earned pool alone: ${result.usableFromEarnedAlone}, inventory untouched: ${result.inventoryUnchanged}, cleared at endRun: ${result.afterEndRunEarned === 0}`);
+    await context.close();
+  }
+
+  // -------------------------------------------- power-ups on REAL touch (7.3 bug)
+  //
+  // Every check above drives physics functions directly or (elsewhere in this
+  // file) clicks with a mouse. Neither caught this: 7.3 moved bomb/remover to
+  // commit on release, gated by an `aiming` flag set only when a gesture's OWN
+  // pointerdown already landed on the board while armed. A mouse click's down
+  // and up land on the same point by construction, so a chip click never
+  // continues onto the board within one gesture -- the bug was invisible to
+  // every test that existed. A real finger naturally arms and aims in one
+  // continuous press (touch chip, slide onto the board, lift), which silently
+  // did nothing. Fixed in js/input.js by dropping `aiming` in favour of
+  // armPreviewCell itself as the sole commit gate.
+  //
+  // This uses a real touch-capable context (hasTouch) and real touch/pointer
+  // dispatch, not mouse clicks, for exactly that reason.
+  {
+    const { context, page } = await freshPage(browser, 'touch-powerups', { hasTouch: true });
+    await page.goto(`${BASE}/index.html?dev=1`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(150);
+
+    const geom = await page.evaluate(() => {
+      const rect = document.getElementById('game-canvas').getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    });
+    const canvasHeight = await page.evaluate(async () => (await import('./js/render.js')).canvasHeightFor(window.__poofDebugState));
+    const toPage = (lx, ly) => ({
+      x: geom.left + lx * (geom.width / 384),
+      y: geom.top + ly * (geom.height / canvasHeight),
+    });
+    // Logical HUD chip centres: powerSlotRect(i) = { x: 10 + i*34, y: 80, size: 26 }.
+    // hudPowerUps() order is [remover, magnet, bomb].
+    const chip = (i) => toPage(10 + i * 34 + 13, 80 + 13);
+    const boardCell = (col, row) => toPage(col * 64 + 32, 118 + row * 64 + 32);
+
+    async function resetRun() {
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.bombInPlay = false;
+        s.bombFuseDrops = null;
+        s.removerArmed = false;
+        s.magnetActive = false;
+        s.armPreviewCell = null;
+        for (const row of s.grid) row.fill(null);
+        s.stackHeight.fill(0);
+      });
+    }
+
+    // Magnet: a single real touch tap on the chip must activate it. No board
+    // step needed -- magnet was never affected by the commit-on-release
+    // change, included for full power-up coverage per the same recipe.
+    await resetRun();
+    await page.evaluate(() => {
+      const s = window.__poofDebugState;
+      s.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
+    });
+    const magnetChip = chip(1);
+    await page.touchscreen.tap(magnetChip.x, magnetChip.y);
+    await page.waitForTimeout(80);
+    const magnetOk = await page.evaluate(() => window.__poofDebugState.magnetActive);
+    record('Magnet fires on real touch tap', magnetOk, magnetOk,
+      `magnetActive after a real touchscreen tap on its chip: ${magnetOk}`);
+
+    // 8.3: the companion's rail, dragged with ONE continuous real touch --
+    // press somewhere on the rail, slide to a different column, release --
+    // not a tap. HUD_HEIGHT=118, MAGNET_RAIL_HEIGHT=22 (js/constants.js).
+    {
+      const railPoint = (col) => toPage(col * 64 + 32, 118 + 11);
+      const from = railPoint(1);
+      const to = railPoint(4);
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from.x, y: from.y }] });
+      await page.waitForTimeout(40);
+      const afterPress = await page.evaluate(() => window.__poofDebugState.magnetCol);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: to.x, y: to.y }] });
+      await page.waitForTimeout(40);
+      const afterDrag = await page.evaluate(() => window.__poofDebugState.magnetCol);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(40);
+      const stillActive = await page.evaluate(() => window.__poofDebugState.magnetActive);
+
+      const ok = afterPress === 1 && afterDrag === 4 && stillActive;
+      record('Magnet rail drags with a real continuous touch', ok, ok,
+        `press column 1 (real touch): magnetCol=${afterPress}; drag to column 4, no lift: magnetCol=${afterDrag}; still out after release: ${stillActive}`);
+    }
+
+    // Remover, checked two ways: (a) two separate taps -- press the chip,
+    // lift, press a board cell, lift; (b) the actual regression -- ONE
+    // continuous touch: press the chip, drag onto the board, lift once.
+    {
+      const slot = chip(0);
+      const cell = boardCell(2, 3);
+      const tier = 5;
+
+      // (a) two separate taps
+      await resetRun();
+      await page.evaluate((t) => { window.__poofDebugState.grid[3][2] = t; }, tier);
+      await page.touchscreen.tap(slot.x, slot.y);
+      await page.waitForTimeout(80);
+      await page.touchscreen.tap(cell.x, cell.y);
+      await page.waitForTimeout(80);
+      const twoTapResult = await page.evaluate(() => ({
+        armed: window.__poofDebugState.removerArmed,
+        cleared: window.__poofDebugState.grid[3][2] === null,
+      }));
+      record('Remover fires on real touch: separate taps',
+        twoTapResult.cleared, twoTapResult.cleared,
+        `tap chip (real touch), lift, tap board cell (real touch), lift -> armed after=${twoTapResult.armed}, cell cleared=${twoTapResult.cleared}`);
+
+      // (b) one continuous press: chip -> board -> release, no lift in between.
+      // page.touchscreen has no drag primitive, so this goes through CDP's
+      // Input.dispatchTouchEvent directly to control a single, uninterrupted
+      // touch sequence -- the exact gesture the bug needed.
+      await resetRun();
+      await page.evaluate((t) => { window.__poofDebugState.grid[3][2] = t; }, tier);
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: slot.x, y: slot.y }] });
+      await page.waitForTimeout(40);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cell.x, y: cell.y }] });
+      await page.waitForTimeout(40);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(100);
+      const dragResult = await page.evaluate(() => ({
+        armed: window.__poofDebugState.removerArmed,
+        cleared: window.__poofDebugState.grid[3][2] === null,
+      }));
+      record('Remover fires on real touch: continuous chip-to-board drag',
+        dragResult.cleared, dragResult.cleared,
+        `ONE touch: press chip, drag onto board, release (no lift in between) -> armed after=${dragResult.armed}, cell cleared=${dragResult.cleared}`);
+    }
+
+    // 8.4: the bomb plants as the falling fruit instead of arming a
+    // tap-target -- a single real touch tap on the chip is the whole
+    // interaction. Then confirm the fuse actually burns down and detonates
+    // on its own, driven entirely through real gameplay (stepPhysics/
+    // spawnFruit via the debug hook, not a direct detonateBomb call).
+    {
+      await resetRun();
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
+      });
+      const bombSlot = chip(2);
+      await page.touchscreen.tap(bombSlot.x, bombSlot.y);
+      await page.waitForTimeout(80);
+
+      const result = await page.evaluate(async () => {
+        const C = await import('./js/constants.js');
+        const ph = await import('./js/physics.js');
+        const s = window.__poofDebugState;
+        const plantedAsBomb = s.active.tier === C.BOMB_TIER;
+        const inPlayAfterPlant = s.bombInPlay;
+
+        // Land it, then run exactly enough further drops to burn the fuse out.
+        ph.hardDrop(s);
+        const fuseAtLanding = s.bombFuseDrops;
+        for (let i = 0; i < C.BOMB_FUSE_DROPS; i++) {
+          s.active = null;
+          ph.spawnFruit(s);
+        }
+        return {
+          plantedAsBomb,
+          inPlayAfterPlant,
+          fuseAtLanding,
+          fuseAfter: s.bombFuseDrops,
+          inPlayAfter: s.bombInPlay,
+          detonated: s.events.some((e) => e.type === 'bombCleared'),
+        };
+      });
+
+      const ok = result.plantedAsBomb && result.inPlayAfterPlant
+        && result.fuseAtLanding > 0 && result.fuseAfter === null && !result.inPlayAfter && result.detonated;
+      record('Bomb plants on a real touch tap and detonates on its own when the fuse ends',
+        ok, ok,
+        `tap the chip (real touch) -> planted as the falling fruit: ${result.plantedAsBomb}, in play: ${result.inPlayAfterPlant}; `
+        + `landed with fuse=${result.fuseAtLanding}; after BOMB_FUSE_DROPS more drops: fuse=${result.fuseAfter}, `
+        + `inPlay=${result.inPlayAfter}, detonated=${result.detonated}`);
+    }
+
     await context.close();
   }
 

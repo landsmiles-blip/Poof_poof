@@ -3,12 +3,11 @@
 // in-game master mute button; see js/shop.js for the granular Sound/Music
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
-import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH } from './constants.js';
-import { removeFruitAt, detonateBomb, setDragTarget, hardDrop } from './physics.js';
+import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT } from './constants.js';
+import { removeFruitAt, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
-  hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
-  consumeBomb, consumeRemover,
+  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb,
 } from './state.js';
 import { unlockAudio, playUiTick } from './audio.js';
 
@@ -19,6 +18,7 @@ function inRect(point, rect) {
 
 export function attachInput(canvas, state) {
   let dragging = false;
+  let draggingMagnet = false;
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
   //
@@ -48,6 +48,18 @@ export function attachInput(canvas, state) {
     return inBounds ? { row, col } : null;
   }
 
+  // 8.3: the magnet companion's rail sits in a thin strip at the very top of
+  // the board, only reachable while it is actually out. Narrower and more
+  // specific than the bomb/remover aiming area below it, so it takes
+  // priority over those if both happen to be armed/active at once.
+  function inRailZone(point) {
+    return state.magnetActive && point.y > HUD_HEIGHT && point.y <= HUD_HEIGHT + MAGNET_RAIL_HEIGHT;
+  }
+
+  function columnAt(point) {
+    return Math.floor(point.x / CELL);
+  }
+
   // Returns true if the tap was consumed by a power-up slot.
   //
   // Slots are drawn for every tappable power-up including locked and empty
@@ -68,10 +80,13 @@ export function attachInput(canvas, state) {
       if (item.id === 'magnet') {
         if (activateMagnet(state)) playUiTick(); // activateMagnet marks state.dirty
       } else if (item.id === 'bomb') {
-        armBomb(state, !state.bombArmed);
-        playUiTick();
+        // 8.4: plants as the next drop instead of arming a tap-target -- see
+        // js/state.js's plantBomb. No-ops (silently, same as activateMagnet
+        // while already active) if one is already in play.
+        if (plantBomb(state)) playUiTick();
       } else if (item.id === 'remover') {
         armRemover(state, !state.removerArmed);
+        state.armPreviewCell = null;
         playUiTick();
       }
       return true;
@@ -79,13 +94,30 @@ export function attachInput(canvas, state) {
     return false;
   }
 
-  // 7.3: bomb/remover now commit on release, not on the initial touch, so the
-  // footprint/crosshair (js/render.js, reading state.armPreviewCell) can
-  // genuinely follow the finger before committing rather than flashing into
-  // existence and firing in the same instant. A plain tap still works exactly
-  // as before -- press and release at the same spot commits at that cell.
-  let aiming = false;
-
+  // 7.3: the remover commits on release, not on the initial touch, so the
+  // crosshair (js/render.js, reading state.armPreviewCell) can genuinely
+  // follow the finger before committing rather than flashing into existence
+  // and firing in the same instant. The bomb used this same path until 8.4,
+  // which replaced arm-then-tap with planting it as a falling fruit instead
+  // -- see plantBomb in js/state.js.
+  //
+  // Bug found on real touch (not caught by mouse-click testing, since a mouse
+  // click's down and up land on the same point by construction): arming the
+  // chip and then, in ONE continuous press -- finger never lifting --
+  // dragging onto the board never committed. The chip's own pointerdown
+  // returns early (the `point.y <= HUD_HEIGHT` branch above) without ever
+  // reaching the code that used to set an `aiming` flag, so the later
+  // pointerup on the board had nothing telling it this gesture was allowed to
+  // commit, even though armPreviewCell had been updated correctly by the
+  // pointermove in between. A real finger naturally does exactly this --
+  // press the chip, slide straight down onto a target, release -- since nothing
+  // requires lifting between arming and aiming.
+  //
+  // Fixed by dropping the `aiming` flag entirely: armPreviewCell itself is
+  // now the only thing that decides whether a release commits. It starts (or
+  // resets to) null the moment arming changes (above, and in onPointerUp
+  // below), so a plain tap that never touches the board still commits
+  // nothing -- there's no gap where a stale cell from a previous aim could.
   function onPointerDown(evt) {
     // Browsers only allow audio to start from a user gesture.
     unlockAudio();
@@ -97,9 +129,13 @@ export function attachInput(canvas, state) {
       return;
     }
 
-    // Armed targeting modes are mutually exclusive, so at most one applies.
-    if (state.bombArmed || state.removerArmed) {
-      aiming = true;
+    if (inRailZone(point)) {
+      draggingMagnet = true;
+      setMagnetColumn(state, columnAt(point));
+      return;
+    }
+
+    if (state.removerArmed) {
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -115,11 +151,14 @@ export function attachInput(canvas, state) {
 
   function onPointerMove(evt) {
     const point = toCanvasPoint(evt);
-    if (state.bombArmed || state.removerArmed) {
-      // Updated on every move regardless of `aiming`, so a mouse hovering
-      // before it ever clicks also sees the footprint -- touch has no
-      // equivalent of hover, so there `aiming` (set on pointerdown) is what
-      // makes this fire at all.
+    if (draggingMagnet) {
+      setMagnetColumn(state, columnAt(point));
+      return;
+    }
+    if (state.removerArmed) {
+      // Updated on every move so a mouse hovering before it ever clicks also
+      // sees the crosshair, and so a touch that presses the chip and slides
+      // straight onto the board without lifting tracks correctly too.
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -128,20 +167,20 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerUp() {
-    if (aiming) {
-      aiming = false;
+    draggingMagnet = false;
+
+    // armPreviewCell alone decides whether this release commits -- see the
+    // long comment above onPointerDown for why an `aiming` flag keyed to
+    // where THIS gesture's own pointerdown landed was wrong. It is null
+    // whenever there is nothing valid to act on (arming or cancelling always
+    // resets it, and a plain chip tap that never touches the board never
+    // sets it), so this is safe to check unconditionally.
+    if (state.removerArmed) {
       const cell = state.armPreviewCell;
-      if (state.bombArmed && cell) {
-        const cleared = detonateBomb(state, cell.row, cell.col);
-        if (cleared) {
-          consumeBomb(state); // marks state.dirty
-          playUiTick();
-        }
-      } else if (state.removerArmed && cell) {
-        if (removeFruitAt(state, cell.row, cell.col)) {
-          consumeRemover(state); // marks state.dirty
-          playUiTick();
-        }
+      state.armPreviewCell = null;
+      if (cell && removeFruitAt(state, cell.row, cell.col)) {
+        consumeRemover(state); // marks state.dirty
+        playUiTick();
       }
     }
     dragging = false;
@@ -163,8 +202,8 @@ export function attachInput(canvas, state) {
   // progress, the other requires the overlay that only shows when no run is.
   function onKeyDown(evt) {
     if (evt.key === 'Escape') {
-      if (state.bombArmed) armBomb(state, false);
       if (state.removerArmed) armRemover(state, false);
+      state.armPreviewCell = null;
       return;
     }
 

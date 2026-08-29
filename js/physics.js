@@ -4,18 +4,41 @@
 import {
   COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
-  RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, MAGNET_STEP_SEC,
+  RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
+  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_REGEN_PER_SEC,
 } from './constants.js';
-import { effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec } from './state.js';
+import {
+  effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter,
+} from './state.js';
 
-// Tier lookup that also answers for the rainbow sentinel, so callers that only
-// need geometry (radius) never have to special-case it.
+// Tier lookup that also answers for the rainbow and bomb sentinels, so
+// callers that only need geometry (radius) never have to special-case them.
 export function tierDef(tier) {
-  return tier === RAINBOW_TIER ? RAINBOW_DEF : TIERS[tier];
+  if (tier === RAINBOW_TIER) return RAINBOW_DEF;
+  if (tier === BOMB_TIER) return BOMB_DEF;
+  return TIERS[tier];
 }
 
 export function isRainbow(tier) {
   return tier === RAINBOW_TIER;
+}
+
+export function isBomb(tier) {
+  return tier === BOMB_TIER;
+}
+
+// Scans for the currently-planted bomb (8.4) rather than trusting a cached
+// position: settleColumns (from an unrelated merge or the remover elsewhere
+// on the board) can shift it after it lands, and re-scanning is cheap
+// against a board this small.
+function findBombCell(state) {
+  const rows = state.grid.length;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (state.grid[r][c] === BOMB_TIER) return { row: r, col: c };
+    }
+  }
+  return null;
 }
 
 export function spawnFruit(state) {
@@ -27,6 +50,23 @@ export function spawnFruit(state) {
   // destroy a charge the player paid for.
   if (state.stackHeight[startCol] >= rows) {
     return { blocked: true };
+  }
+
+  // 8.4: the fuse burns down by DROPS, not wall-clock time -- a new spawn is
+  // exactly what "a drop" means, so this only ticks while the game is
+  // actually being played. Checked here, before this spawn does anything
+  // else, so a fuse reaching zero detonates before the next fruit exists.
+  // findBombCell can legitimately come back empty (the Fruit Remover deleted
+  // the bomb tile before the fuse ran out) -- that just means the charge is
+  // spent with nothing to show for it, not a bug to guard against further.
+  if (state.bombFuseDrops !== null) {
+    state.bombFuseDrops -= 1;
+    if (state.bombFuseDrops <= 0) {
+      const cell = findBombCell(state);
+      if (cell) detonateBomb(state, cell.row, cell.col);
+      state.bombFuseDrops = null;
+      state.bombInPlay = false;
+    }
   }
 
   // state.nextTier was decided one spawn ahead of time (in nextTierFor, called
@@ -109,6 +149,11 @@ function columnForX(state, x) {
 function lockFruit(state, row, col, tier) {
   state.grid[row][col] = tier;
   state.stackHeight[col] += 1;
+  // 8.4: the fuse starts counting only once the bomb is actually resting
+  // somewhere -- not from the moment it was planted, which could be several
+  // frames of falling earlier. resolveMerges below is a no-op for it either
+  // way (pairTier rejects the bomb outright), so this is safe to set first.
+  if (tier === BOMB_TIER) state.bombFuseDrops = BOMB_FUSE_DROPS;
   resolveMerges(state);
 }
 
@@ -127,6 +172,12 @@ export function resolveMerges(state) {
 // or null when they do not merge at all.
 function pairTier(a, b) {
   if (a === null || b === null) return null;
+  // 8.4 LANDMINE: checked BEFORE the rainbow branch below, on purpose. The
+  // rainbow branch treats a wild as matching ANYTHING, so if this check came
+  // after it, pairTier(BOMB_TIER, RAINBOW_TIER) would return BOMB_TIER --
+  // merging the wildcard INTO the bomb, or worse, producing a real tier from
+  // a sentinel value. A bomb never merges with anything, wildcard included.
+  if (a === BOMB_TIER || b === BOMB_TIER) return null;
   const aWild = a === RAINBOW_TIER;
   const bWild = b === RAINBOW_TIER;
   if (aWild && bWild) return 0; // two wilds settle to the lowest tier
@@ -173,6 +224,9 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   // detonating the cheapest way to run the multiplier up. Those merges still
   // score (they are real merges) but at 1x, and they do not extend the streak.
   const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
+  // Same gate as the combo streak above, same reason (8.1): a bomb's cascade
+  // must not also be a way to farm free charges.
+  if (!state.suppressCombo) fillMergeMeter(state, tier >= MAX_TIER ? MAX_TIER : tier + 1);
 
   // Pixel position of the merge, frozen right now. A later merge elsewhere in
   // the same cascade can call settleColumns again and drop THIS cell's
@@ -270,8 +324,10 @@ export function detonateBomb(state, row, col) {
 }
 
 // Magnet: one gentle step of attraction. The exposed (top-of-column) fruit
-// matching the held fruit's tier slides ONE column toward the column being
-// dragged over, and only if the destination has room.
+// matching the held fruit's tier slides ONE column toward the column the
+// companion is currently parked over (8.3: state.magnetCol, set by dragging
+// it along its rail -- not automatically wherever the falling fruit is), and
+// only if the destination has room.
 //
 // Deliberately narrow: it never moves a fruit more than one column per step,
 // and it never resolves the merge itself. It nudges the board, it does not
@@ -290,8 +346,15 @@ export function detonateBomb(state, row, col) {
 // merge, worth the streak. The Bomb clears the board wholesale with no drop at
 // all; letting its cascade build a multiplier would make detonating the
 // cheapest way to run the streak up. Deliberate asymmetry -- do not "fix" it.
+
+// Moves the companion's target column (8.3) -- called continuously while the
+// player drags it along the rail, the same shape as setDragTarget above.
+export function setMagnetColumn(state, col) {
+  state.magnetCol = Math.min(COLS - 1, Math.max(0, Math.round(col)));
+}
+
 // Read-only: which exposed (top-of-column) fruits currently qualify to be
-// pulled toward the held column, without moving anything. Shared by
+// pulled toward the companion's column, without moving anything. Shared by
 // stepMagnet's own planning phase below and by render.js, which calls this
 // every frame (not just on the ~magnetStepTimer cadence an actual move
 // fires on) to draw the field arcs and target rings (7.3) -- those need to
@@ -300,7 +363,7 @@ export function detonateBomb(state, row, col) {
 export function magnetTargets(state) {
   if (!state.magnetActive || !state.active) return [];
   const heldTier = state.active.tier;
-  const targetCol = state.active.col;
+  const targetCol = state.magnetCol;
   const rows = state.grid.length;
   const targets = [];
   for (let c = 0; c < COLS; c++) {
@@ -316,20 +379,39 @@ export function magnetTargets(state) {
 }
 
 export function stepMagnet(state, dt) {
-  if (!state.magnetActive || !state.active) return [];
+  if (!state.magnetActive) return [];
 
-  state.magnetTimer -= dt;
-  if (state.magnetTimer <= 0) {
+  // The puck's DRAWN position eases toward wherever it was last dragged,
+  // exactly the same lerp setDragTarget already uses for the falling fruit --
+  // magnetCol (the logical, authoritative column) never itself moves except
+  // by an explicit setMagnetColumn call.
+  const targetX = state.magnetCol * CELL + CELL / 2;
+  state.magnetX += (targetX - state.magnetX) * Math.min(1, DRAG_LERP * (dt * 60));
+
+  // 8.3: energy, not a fixed timer. "Pulling" means there is currently a
+  // falling fruit AND at least one exposed match for it -- both conditions
+  // are required, same as the actual move logic below, so energy only drains
+  // when a real attraction is happening, not just because the companion is
+  // parked somewhere.
+  const targets = state.active ? magnetTargets(state) : [];
+  const pulling = targets.length > 0;
+  if (pulling) {
+    state.magnetEnergy = Math.max(0, state.magnetEnergy - MAGNET_DRAIN_PER_SEC * dt);
+  } else {
+    state.magnetEnergy = Math.min(MAGNET_ENERGY_MAX, state.magnetEnergy + MAGNET_REGEN_PER_SEC * dt);
+  }
+  if (state.magnetEnergy <= 0) {
     state.magnetActive = false;
-    state.magnetTimer = 0;
     return [];
   }
+
+  if (!pulling) return [];
 
   state.magnetStepTimer -= dt;
   if (state.magnetStepTimer > 0) return [];
   state.magnetStepTimer = MAGNET_STEP_SEC;
 
-  const targetCol = state.active.col;
+  const targetCol = state.magnetCol;
   const rows = state.grid.length;
 
   // Two phases on purpose. Scanning and moving in one pass lets a fruit that
@@ -339,7 +421,7 @@ export function stepMagnet(state, dt) {
   // power-up must not have. Planning against an unmutated snapshot caps every
   // fruit at one column per step.
   const planned = [];
-  for (const { col: c, row: topRow, tier } of magnetTargets(state)) {
+  for (const { col: c, row: topRow, tier } of targets) {
     const dest = c + (targetCol > c ? 1 : -1);
     if (dest < 0 || dest >= COLS) continue;
     planned.push({ from: c, to: dest, tier, fromRow: topRow });

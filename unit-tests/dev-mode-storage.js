@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import * as platform from '../js/platform.js';
 import {
   devModeEnabled, createInitialState, toSaveBlob, startRun, endRun, buyPowerUp,
-  activateMagnet, consumeBomb, consumeRemover, selectSkin,
+  activateMagnet, plantBomb, consumeRemover, selectSkin,
 } from '../js/state.js';
 
 function makeFakeLocalStorage(seed) {
@@ -60,7 +60,7 @@ try {
   startRun(state, {});
   buyPowerUp(state, 'bomb', 0);
   activateMagnet(state);
-  consumeBomb(state);
+  plantBomb(state);
   consumeRemover(state);
   selectSkin(state, 'classic');
   endRun(state, 'test');

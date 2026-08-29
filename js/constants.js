@@ -56,16 +56,28 @@ export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the poin
 // with every run for free.
 //
 // A starting point, tuned by feel, not derived from simulation like the
-// combo/milestone constants: begin noticeably gentler than today, reach
-// today's speed by drop 20, and cap at 1.4x by drop 60. The cap is load-
-// bearing, not just restraint -- see stepPhysics's dt clamp, which is what
-// keeps even the capped speed free of any tunnelling risk. Do not remove it
-// on the grounds that it "seems fine"; the clamp is what makes it fine.
-export const GRAVITY_RAMP_START_MULTIPLIER = 0.7;
+// combo/milestone constants. The cap is load-bearing, not just restraint --
+// see stepPhysics's dt clamp, which is what keeps even the capped speed free
+// of any tunnelling risk. Do not remove it on the grounds that it "seems
+// fine"; the clamp is what makes it fine.
+//
+// 8.2: the first version of this ramp reached today's baseline speed by drop
+// 20 -- roughly ninety seconds in. That is not a ramp, it is a short runway,
+// and it read as one immediately. Stretched hard: the opening is now eased
+// in (see gravityRampMultiplier's `t ** GRAVITY_RAMP_EASE_POWER`, not a
+// straight line) so the first ~15 drops are nearly flat before it starts
+// climbing, baseline speed does not arrive until drop 40, and the cap -- now
+// slightly lower, since a much longer runway needs a gentler ceiling to
+// still feel like ONE curve -- is not reached until drop 120.
+export const GRAVITY_RAMP_START_MULTIPLIER = 0.6;
 export const GRAVITY_RAMP_BASE_MULTIPLIER = 1.0;
-export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.4;
-export const GRAVITY_RAMP_DROPS_TO_BASE = 20;
-export const GRAVITY_RAMP_DROPS_TO_CAP = 60;
+export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.3;
+export const GRAVITY_RAMP_DROPS_TO_BASE = 40;
+export const GRAVITY_RAMP_DROPS_TO_CAP = 120;
+// Power for the ease-in curve over [0, DROPS_TO_BASE]: quadratic. At 15/40 of
+// the way through that stretch, an eased quadratic has covered only ~14% of
+// the distance from START to BASE -- genuinely flat, not merely slower.
+export const GRAVITY_RAMP_EASE_POWER = 2;
 
 // The run ends when the spawn column's stack reaches the top; this is how
 // many rows of headroom remain when the danger warning (render.js) starts
@@ -206,8 +218,8 @@ export const POWERUPS = [
   },
   {
     id: 'bomb', name: 'Bomb', cost: 60, unlockScore: MILESTONE_SCORES[2], icon: 'bomb',
-    desc: 'Tap a cell to clear the fruit around it. No points awarded.',
-    usage: 'tap',
+    desc: 'Plants as your next drop. Clears a 3x3 blast when its fuse ends.',
+    usage: 'activate',
   },
   {
     id: 'rainbow', name: 'Rainbow Fruit', cost: 80, unlockScore: MILESTONE_SCORES[3], icon: 'rainbow',
@@ -223,8 +235,25 @@ export const POWERUP_COSTS = Object.fromEntries(POWERUPS.map((p) => [p.id, p.cos
 // Grid-coherent pull: while active, the exposed (top-of-column) fruit matching
 // the held fruit's tier slides ONE column closer, one step at a time. It never
 // teleports fruit into a merge and never touches buried fruit.
-export const MAGNET_DURATION_SEC = 6;
 export const MAGNET_STEP_SEC = 0.45;
+
+// 8.3: stop treating it as a consumable that ticks down invisibly -- it
+// becomes a thing on the board, ridden along a rail across the top of the
+// play area and dragged to whichever column it should pull toward, with its
+// own energy instead of a fixed timer. "Always present, never simply spent":
+// energy drains only while it is actually pulling a matching fruit, and
+// regenerates whenever it is idle (no match in reach, or nothing currently
+// falling to match against) -- a patient player who is not constantly
+// finding a match can keep it out far longer than one spamming it into
+// every column, rather than a hard countdown that ends regardless of use.
+export const MAGNET_ENERGY_MAX = 100;
+export const MAGNET_DRAIN_PER_SEC = 12.5; // empties in 8s of continuous pulling
+export const MAGNET_REGEN_PER_SEC = 25; // refills in 4s of continuous idling
+// Height of the draggable rail strip at the top of the board, and how
+// quickly the drawn puck glides toward wherever it was last dragged --
+// reuses DRAG_LERP's own smoothing feel (see js/physics.js's setDragTarget)
+// so the two draggable things in the game move consistently.
+export const MAGNET_RAIL_HEIGHT = 22;
 // 7.3: a magnet-moved fruit used to snap a full 64px cell between two frames,
 // which read as a rendering glitch rather than attraction -- the grid stays
 // authoritative (this never changes stepMagnet's actual mechanics), only the
@@ -243,6 +272,20 @@ export const RAINBOW_SPIN_RADIANS_PER_SEC = 0.8;
 
 // --- Bomb ----------------------------------------------------------------
 export const BOMB_RADIUS = 1; // Chebyshev radius: 1 => up to a 3x3 clear
+
+// 8.4: instead of arm-then-tap, the bomb drops into the board like a fruit,
+// with a lit fuse that burns down over a few DROPS (not wall-clock time --
+// js/physics.js's spawnFruit decrements it, so it only burns while the game
+// is actually being played, and a run does not lose a bomb to idling). It
+// detonates automatically, wherever it currently sits, when the fuse ends.
+//
+// A second sentinel alongside RAINBOW_TIER, and just as dangerous: pairTier
+// must reject it BEFORE the rainbow wildcard check, or a held/board rainbow
+// would treat the bomb as mergeable. See physics.js's pairTier and the tests
+// named after this comment.
+export const BOMB_TIER = 98;
+export const BOMB_DEF = { name: 'bomb', color: '#2b2118', radius: 27, points: 0, shape: 'bomb' };
+export const BOMB_FUSE_DROPS = 4;
 
 // --- Rainbow -------------------------------------------------------------
 // Sentinel stored in the grid alongside normal tier indices. Chosen well past
@@ -290,12 +333,34 @@ export const SHAKE_MAX_PX = 5; // deliberately small -- readable, not disorienti
 // How long a locked/out-of-stock power-up chip's tap flash stays lit.
 export const LOCKED_FLASH_DURATION_SEC = 0.35;
 
+// How long a chip's "you just earned this" pulse lasts (8.1). Longer than the
+// locked-flash above and a distinct visual (see render.js) -- this is a
+// reward, not a denial, and should read as one.
+export const CHIP_PULSE_DURATION_SEC = 0.6;
+
 // Haptics, in ms. Only fires where navigator.vibrate exists.
 export const HAPTIC_MERGE_MS = 12;
 export const HAPTIC_TOP_TIER_MS = 45;
 // One deliberate pulse for a whole bomb detonation. Longer than a top-tier
 // merge because clearing nine fruit is the biggest single thing a player can do.
 export const HAPTIC_BOMB_MS = 70;
+// A charge earned mid-run (8.1) is a reward moment, not a hazard -- a single
+// crisp tick, shorter than the bomb's but distinct from a plain merge's.
+export const HAPTIC_CHARGE_EARNED_MS = 30;
+
+// --- Merge meter (8.1) -----------------------------------------------------
+// Power-ups used to be inventory, not play: coins arrive only at endRun and
+// get spent only before the NEXT run, so during the run where a player is
+// actually in trouble, nothing can arrive to help. This meter fills as you
+// merge and grants a free, run-scoped charge on every fill -- the reward loop
+// moves inside the run it rewards.
+//
+// Fill is weighted by tier using TIERS[].points directly (already a tuned
+// per-tier scale, 1..45) rather than a second parallel weight table. At those
+// weights, MERGE_METER_MAX is a starting point tuned by feel: roughly ten to
+// fifteen mixed merges per fill, so a run sees a handful of grants rather than
+// zero or ten.
+export const MERGE_METER_MAX = 75;
 
 // --- Theme ---------------------------------------------------------------
 // One palette per milestone; the live palette is interpolated continuously

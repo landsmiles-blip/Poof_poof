@@ -5,10 +5,11 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_TIER, RAINBOW_SCHEDULE,
-  LOCKED_FLASH_DURATION_SEC, SAVE_VERSION,
+  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
+  LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
+  GRAVITY_RAMP_EASE_POWER,
 } from './constants.js';
 
 // --- Difficulty ramp -------------------------------------------------------
@@ -16,8 +17,10 @@ import {
 // truth for anything comboWindowSecFor also needs -- physics.js already
 // imports from state.js, and the reverse would be a cycle.
 //
-// Piecewise-linear in spawnIndex: START -> BASE over [0, DROPS_TO_BASE], then
-// BASE -> CAP over [DROPS_TO_BASE, DROPS_TO_CAP], flat at CAP after that.
+// START -> BASE over [0, DROPS_TO_BASE] (8.2: eased in, not linear -- nearly
+// flat for the first ~15 drops of that stretch, then climbing), then BASE ->
+// CAP over [DROPS_TO_BASE, DROPS_TO_CAP] (still linear -- only the opening
+// needed to feel generous), flat at CAP after that.
 export function gravityRampMultiplier(spawnIndex) {
   const drops = Math.max(0, spawnIndex);
   if (drops >= GRAVITY_RAMP_DROPS_TO_CAP) return GRAVITY_RAMP_CAP_MULTIPLIER;
@@ -26,7 +29,8 @@ export function gravityRampMultiplier(spawnIndex) {
     return GRAVITY_RAMP_BASE_MULTIPLIER + (GRAVITY_RAMP_CAP_MULTIPLIER - GRAVITY_RAMP_BASE_MULTIPLIER) * t;
   }
   const t = drops / GRAVITY_RAMP_DROPS_TO_BASE;
-  return GRAVITY_RAMP_START_MULTIPLIER + (GRAVITY_RAMP_BASE_MULTIPLIER - GRAVITY_RAMP_START_MULTIPLIER) * t;
+  const eased = t ** GRAVITY_RAMP_EASE_POWER;
+  return GRAVITY_RAMP_START_MULTIPLIER + (GRAVITY_RAMP_BASE_MULTIPLIER - GRAVITY_RAMP_START_MULTIPLIER) * eased;
 }
 
 export function currentGravityPxPerSec(state) {
@@ -113,21 +117,43 @@ export function createInitialState(save) {
     slowDropActive: false,
     removerArmed: false,
 
-    bombArmed: false,
-    // Cell the pointer is currently over while bomb/remover is armed (7.3) --
-    // purely a render hint for the footprint/crosshair; never persisted.
-    // Written directly by js/input.js, not through a state.js mutator: it
-    // carries no game-state meaning of its own, the same way `dragging` in
-    // input.js's own closure never needed one either.
+    // Cell the pointer is currently over while the remover is armed (7.3) --
+    // purely a render hint for the crosshair; never persisted. Written
+    // directly by js/input.js, not through a state.js mutator: it carries no
+    // game-state meaning of its own, the same way `dragging` in input.js's
+    // own closure never needed one either. The bomb stopped using this in
+    // 8.4 -- it plants as a falling fruit instead of an armed tap-target.
     armPreviewCell: null,
+    // 8.4: true from the moment a bomb is planted until it actually
+    // detonates (or is defused early -- see spawnFruit's fuse check),
+    // covering falling, resting, and counting down as ONE state so only one
+    // can ever be in play. bombFuseDrops is null until it lands (see
+    // lockFruit) and counts DOWN, not time, toward zero.
+    bombInPlay: false,
+    bombFuseDrops: null,
     magnetActive: false,
-    magnetTimer: 0,
+    // 8.3: energy replaces a fixed timer -- drains while pulling, regenerates
+    // while idle (see physics.js's stepMagnet). magnetCol is where the
+    // player has dragged the companion to along its rail; magnetX is the
+    // continuous, lerped DRAW position of the puck riding there (the grid/
+    // logic only ever care about magnetCol, an integer column).
+    magnetEnergy: 0,
+    magnetCol: Math.floor(COLS / 2),
+    magnetX: Math.floor(COLS / 2) * CELL + CELL / 2,
     magnetStepTimer: 0,
     rainbowSchedule: [],
     rainbowChargeSpent: false,
     rainbowDelivered: 0,
     spawnIndex: 0,
     lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
+
+    // 8.1: fills as you merge (see fillMergeMeter) and grants a free,
+    // run-scoped charge on every fill. Deliberately separate from
+    // `inventory`: these never persist and are discarded at endRun -- see
+    // the long comment on grantEarnedCharge for why that separation matters.
+    mergeMeter: 0,
+    earnedCharges: { remover: 0, magnet: 0, bomb: 0 },
+    chipPulse: null, // { id, t } while a chip is announcing an earned charge
 
     comboCount: 0,
     comboTimer: 0,
@@ -245,7 +271,9 @@ export function hudPowerUps() {
 // lets a locked chip be visible but inert.
 export function canUsePowerUp(state, item) {
   if (!isUnlockedByScore(item, state.highScore)) return false;
-  return (state.inventory[item.id] || 0) > 0;
+  // 8.1: purchased stock and this run's earned charges are both spendable --
+  // see consumeCharge for which one actually gets decremented first.
+  return ((state.inventory[item.id] || 0) + (state.earnedCharges[item.id] || 0)) > 0;
 }
 
 function reconcileUnlocks(stored, highScore) {
@@ -311,6 +339,58 @@ export function resetCombo(state) {
   state.comboTimer = 0;
 }
 
+// --- Merge meter / earned charges (8.1) -----------------------------------
+// The problem this solves: power-ups were inventory, not play. Coins arrive
+// only at endRun and get spent only before the NEXT run, so during the run
+// where a player is actually in trouble, nothing could arrive to help. This
+// meter fills as you merge and grants a free charge on every fill, moving the
+// reward loop inside the run it rewards.
+
+// Which power-ups a merge can possibly earn: unlocked, and usable mid-run
+// (the same tap/activate set hudPowerUps() draws a chip for -- earning a
+// charge for a 'run' power-up like Slow Drop would be unusable until the
+// NEXT run anyway, defeating the entire point of this mechanic).
+function earnableCandidates(state) {
+  return hudPowerUps().filter((p) => isUnlockedByScore(p, state.highScore));
+}
+
+// Deliberately separate from buyPowerUp: earned charges are NOT inventory.
+// They live in state.earnedCharges, never touch state.dirty (nothing
+// persisted changed), and startRun/endRun both discard them unconditionally.
+// If earned charges entered `inventory` instead, the shop would stop meaning
+// anything -- coins would no longer be the only way to build permanent stock.
+function grantEarnedCharge(state) {
+  const candidates = earnableCandidates(state);
+  // Never actually empty in practice -- Fruit Remover unlocks at score 0 --
+  // but a meter with nothing eligible to grant must not throw.
+  if (candidates.length === 0) return;
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  state.earnedCharges[pick.id] = (state.earnedCharges[pick.id] || 0) + 1;
+  state.chipPulse = { id: pick.id, t: 0 };
+  // main.js turns this into a rising sound + haptic tick -- physics/state
+  // stay free of audio imports, as everywhere else events are used for this.
+  state.events.push({ type: 'chargeEarned', id: pick.id });
+}
+
+// Called from physics.js's mergeCells on every merge that is not part of a
+// suppressed (bomb-cascade) cascade -- same gate registerComboHit's caller
+// already applies to the combo streak, for the same anti-farming reason: a
+// bomb clears the board with no further player input, so letting its
+// cascade also fill this meter would make detonating free charges.
+export function fillMergeMeter(state, tier) {
+  state.mergeMeter += TIERS[tier].points;
+  while (state.mergeMeter >= MERGE_METER_MAX) {
+    state.mergeMeter -= MERGE_METER_MAX;
+    grantEarnedCharge(state);
+  }
+}
+
+export function tickChipPulse(state, dt) {
+  if (!state.chipPulse) return;
+  state.chipPulse.t += dt;
+  if (state.chipPulse.t >= CHIP_PULSE_DURATION_SEC) state.chipPulse = null;
+}
+
 // --- Locked power-up tap feedback ----------------------------------------
 // A tap on a locked/out-of-stock chip changes no board state, so unlike the
 // remover or bomb this has no physics event to ride -- input.js pushes the
@@ -358,11 +438,22 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.spawnIndex = 0;
 
   state.removerArmed = false;
-  state.bombArmed = false;
+  state.bombInPlay = false;
+  state.bombFuseDrops = null;
   state.magnetActive = false;
-  state.magnetTimer = 0;
+  state.magnetEnergy = 0;
+  state.magnetCol = Math.floor(COLS / 2);
+  state.magnetX = state.magnetCol * CELL + CELL / 2;
   state.magnetStepTimer = 0;
   state.lockedFlash = null;
+
+  // 8.1: a fresh run starts with an empty meter and no earned charges,
+  // regardless of what the previous run left behind -- see endRun, which
+  // also clears these the instant a run ends, and the acceptance test that
+  // checks inventory is byte-identical across a run with charges earned.
+  state.mergeMeter = 0;
+  state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
+  state.chipPulse = null;
 
   state.grid = makeEmptyGrid(effectiveRows(state));
   state.stackHeight = new Array(COLS).fill(0);
@@ -384,8 +475,16 @@ export function endRun(state, reason) {
   state.gameOverReason = reason;
   state.active = null;
   state.magnetActive = false;
-  state.magnetTimer = 0;
-  state.bombArmed = false;
+  state.magnetEnergy = 0;
+  // 8.1: earned charges are run-scoped and must never survive to the next
+  // run or leak into anything persisted -- explicit here (not left to the
+  // next startRun) so "gone the instant the run ends" is true even before
+  // another run begins.
+  state.mergeMeter = 0;
+  state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
+  state.chipPulse = null;
+  state.bombInPlay = false;
+  state.bombFuseDrops = null;
   state.removerArmed = false;
   resetCombo(state);
 
@@ -444,45 +543,72 @@ export function addScore(state, points) {
 
 // --- In-run power-up activation -----------------------------------------
 
+// Summons the companion (8.3): starts at full energy, parked over wherever
+// the currently-falling fruit is (a sensible default the player can then
+// drag elsewhere) or the centre column if nothing is falling yet.
 export function activateMagnet(state) {
-  if ((state.inventory.magnet || 0) <= 0) return false;
   if (state.magnetActive) return false;
-  state.inventory.magnet -= 1;
+  if (!consumeCharge(state, 'magnet')) return false;
   state.magnetActive = true;
-  state.magnetTimer = MAGNET_DURATION_SEC;
+  state.magnetEnergy = MAGNET_ENERGY_MAX;
+  state.magnetCol = state.active ? state.active.col : Math.floor(COLS / 2);
+  state.magnetX = state.magnetCol * CELL + CELL / 2;
   state.magnetStepTimer = MAGNET_STEP_SEC;
-  state.dirty = true;
   return true;
 }
 
-// Arming is exclusive: two armed targeting modes at once would make the next
-// tap ambiguous.
-export function armBomb(state, armed) {
-  if (armed && (state.inventory.bomb || 0) <= 0) return false;
-  state.bombArmed = armed;
-  if (armed) state.removerArmed = false;
-  return true;
+// 8.1: total spendable stock for one power-up id -- purchased inventory plus
+// whatever this run has earned. Arming and canUsePowerUp both need this same
+// combined figure, so it lives in one place.
+function totalCharges(state, id) {
+  return (state.inventory[id] || 0) + (state.earnedCharges[id] || 0);
+}
+
+// Spends one charge for `id`, preferring the run-scoped earned pool first: it
+// evaporates at endRun regardless of whether it gets used, so spending it
+// ahead of permanent stock never costs the player anything, and it means a
+// rescue charge is never wasted while paid-for stock sits untouched.
+// state.dirty is set only when inventory (persisted) actually changes --
+// spending an earned charge changes nothing that needs saving.
+function consumeCharge(state, id) {
+  if ((state.earnedCharges[id] || 0) > 0) {
+    state.earnedCharges[id] -= 1;
+    return true;
+  }
+  if ((state.inventory[id] || 0) > 0) {
+    state.inventory[id] -= 1;
+    state.dirty = true;
+    return true;
+  }
+  return false;
 }
 
 export function armRemover(state, armed) {
-  if (armed && (state.inventory.remover || 0) <= 0) return false;
+  if (armed && totalCharges(state, 'remover') <= 0) return false;
   state.removerArmed = armed;
-  if (armed) state.bombArmed = false;
-  return true;
-}
-
-export function consumeBomb(state) {
-  if ((state.inventory.bomb || 0) <= 0) return false;
-  state.inventory.bomb -= 1;
-  state.bombArmed = false;
-  state.dirty = true;
   return true;
 }
 
 export function consumeRemover(state) {
-  if ((state.inventory.remover || 0) <= 0) return false;
-  state.inventory.remover -= 1;
+  if (!consumeCharge(state, 'remover')) return false;
   state.removerArmed = false;
-  state.dirty = true;
+  return true;
+}
+
+// 8.4: plants a bomb as the next thing to drop -- instead of arm-then-tap, it
+// falls and is steered like any other fruit, then detonates on its own where
+// it sits once the fuse (physics.js's spawnFruit/lockFruit) ends. Only one
+// may ever be in play (bombInPlay covers the whole lifecycle: falling,
+// resting, and counting down), so a second tap while one is already out is a
+// no-op, same shape as activateMagnet refusing a second summons.
+export function plantBomb(state) {
+  if (state.bombInPlay) return false;
+  if (!consumeCharge(state, 'bomb')) return false;
+  state.bombInPlay = true;
+  if (state.active) {
+    state.active.tier = BOMB_TIER;
+  } else {
+    state.nextTier = BOMB_TIER;
+  }
   return true;
 }

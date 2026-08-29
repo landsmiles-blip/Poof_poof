@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import {
   createInitialState, startRun, endRun, buyPowerUp, activateMagnet,
-  consumeBomb, consumeRemover, selectSkin, armBomb,
+  consumeRemover, selectSkin, plantBomb,
 } from '../js/state.js';
 
 // A genuinely fresh save grants the starter Remover -- that IS a change.
@@ -69,17 +69,11 @@ function freshRunningState() {
 }
 
 {
+  // 8.4: planting spends the charge immediately (no separate arm/consume
+  // step any more), so this alone covers what used to be two checks.
   const state = freshRunningState();
-  armBomb(state, true);
-  state.dirty = false; // arming is transient, not persisted -- confirm separately below
-  assert.equal(consumeBomb(state), true);
-  assert.equal(state.dirty, true, 'consumeBomb should mark dirty');
-}
-
-{
-  const state = freshRunningState();
-  assert.equal(armBomb(state, true), true);
-  assert.equal(state.dirty, false, 'arming (transient, unpersisted) must not mark dirty');
+  assert.equal(plantBomb(state), true);
+  assert.equal(state.dirty, true, 'plantBomb should mark dirty when it draws from purchased inventory');
 }
 
 {
@@ -99,6 +93,18 @@ function freshRunningState() {
   const state = freshRunningState();
   endRun(state, 'test');
   assert.equal(state.dirty, true, 'endRun should mark dirty (main.js flushes it immediately)');
+}
+
+// 8.1: spending an EARNED (run-scoped, never persisted) charge must not mark
+// dirty -- nothing that needs saving changed. Spending purchased inventory
+// still must, exactly as above.
+{
+  const state = freshRunningState();
+  state.inventory.bomb = 0; // force the spend to come from earnedCharges only
+  state.earnedCharges.bomb = 1;
+  assert.equal(plantBomb(state), true);
+  assert.equal(state.dirty, false, 'planting from an earned (unpersisted) charge must not mark dirty');
+  assert.equal(state.inventory.bomb, 0, 'purchased inventory must be untouched when an earned charge covers the spend');
 }
 
 console.log('dirty-flag: every mutating export marks dirty on success, transient/no-op actions leave it alone');

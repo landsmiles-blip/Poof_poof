@@ -2,9 +2,10 @@
 
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
-  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
-  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, DANGER_ROWS_REMAINING,
-  REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC, BOMB_RADIUS,
+  RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
+  powerSlotRect, POWER_SLOT, MAGNET_ENERGY_MAX, MAGNET_RAIL_HEIGHT, BUILD_VERSION,
+  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
+  REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
 import { magnetTargets } from './physics.js';
@@ -34,12 +35,29 @@ export function roundRectPath(ctx, x, y, w, h, r) {
   }
 }
 
+// 8.4 LANDMINE point 3: the bomb needs a tierDef entry too, same as the
+// rainbow sentinel already did, so anything asking for a radius (spawn
+// position, drag clamping, the HUD "Next" preview) works without special-
+// casing the caller.
 function tierDefFor(tierIndex) {
-  return tierIndex === RAINBOW_TIER ? RAINBOW_DEF : TIERS[tierIndex];
+  if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF;
+  if (tierIndex === BOMB_TIER) return BOMB_DEF;
+  return TIERS[tierIndex];
 }
 
 function colorFor(state, tierIndex) {
-  return tierIndex === RAINBOW_TIER ? RAINBOW_DEF.color : skinColor(state, tierIndex);
+  if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF.color;
+  if (tierIndex === BOMB_TIER) return BOMB_DEF.color;
+  return skinColor(state, tierIndex);
+}
+
+// How much fuse is left, 1 (fresh/still falling) down to 0 (about to
+// detonate) -- drives drawBombShape's shrinking fuse. Only meaningful for a
+// bomb; every other tier ignores the value entirely.
+function bombFuseFractionFor(state, tierIndex) {
+  if (tierIndex !== BOMB_TIER) return 1;
+  if (state.bombFuseDrops === null || state.bombFuseDrops === undefined) return 1;
+  return Math.max(0, Math.min(1, state.bombFuseDrops / BOMB_FUSE_DROPS));
 }
 
 export function drawFrame(ctx, state, fx) {
@@ -104,9 +122,11 @@ function drawHUD(ctx, state, width, theme) {
   ctx.fillStyle = theme.text;
   ctx.fillText('Next', width - 10, 6);
   const nextDef = tierDefFor(state.nextTier);
-  drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier), state.nextTier);
+  drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier), state.nextTier,
+    bombFuseFractionFor(state, state.nextTier));
 
   drawPowerBar(ctx, state, theme);
+  drawMergeMeter(ctx, state, theme);
 
   // Build stamp: low-contrast, but the fastest way to confirm which code a
   // browser is actually running when a deploy appears not to have landed.
@@ -163,9 +183,16 @@ function drawPowerBar(ctx, state, theme) {
     const cy = rect.y + rect.h / 2;
 
     const locked = state.highScore < (item.unlockScore || 0);
-    const count = state.inventory[item.id] || 0;
+    // 8.1: purchased stock and this run's earned charges both count toward
+    // what the chip shows and whether it reads as usable -- see
+    // canUsePowerUp/consumeCharge in state.js for the same combined figure.
+    const earned = state.earnedCharges[item.id] || 0;
+    const count = (state.inventory[item.id] || 0) + earned;
     const usable = !locked && count > 0;
-    const armed = (item.id === 'bomb' && state.bombArmed)
+    // "armed" here really means "currently doing something" -- the remover's
+    // actual aiming state, the magnet's companion being out, or (8.4) a
+    // planted bomb still live somewhere on the board.
+    const armed = (item.id === 'bomb' && state.bombInPlay)
       || (item.id === 'remover' && state.removerArmed)
       || (item.id === 'magnet' && state.magnetActive);
 
@@ -202,6 +229,23 @@ function drawPowerBar(ctx, state, theme) {
       ctx.restore();
     }
 
+    // A brief expanding, fading ring when this chip just earned a charge
+    // (8.1) -- a reward, so it gets a growing pop rather than the flat flash
+    // above, which means "denied".
+    if (state.chipPulse && state.chipPulse.id === item.id) {
+      const p = Math.min(1, state.chipPulse.t / CHIP_PULSE_DURATION_SEC);
+      const wave = Math.sin(p * Math.PI); // one hump: 0 -> 1 -> 0
+      ctx.save();
+      ctx.globalAlpha = wave * 0.85;
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 2 + wave * 2;
+      const grow = wave * 5;
+      ctx.beginPath();
+      roundRectPath(ctx, rect.x - 3 - grow, rect.y - 3 - grow, rect.w + 6 + grow * 2, rect.h + 6 + grow * 2, 8);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Padlock corner marker, so "locked" is not conveyed by dimming alone.
     if (locked) {
       ctx.save();
@@ -217,20 +261,38 @@ function drawPowerBar(ctx, state, theme) {
       ctx.stroke();
       ctx.restore();
     }
+
+    // Small marker (opposite corner from the padlock) distinguishing "earned
+    // this run only" stock from owned stock -- 8.1 requires the two read as
+    // different, since one evaporates at endRun and the other does not.
+    if (earned > 0) {
+      ctx.save();
+      ctx.fillStyle = theme.accent;
+      ctx.beginPath();
+      ctx.arc(rect.x + 4, rect.y + 4, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   });
 
-  // Remaining magnet duration, along the top edge of its slot. The chip now
-  // stays on the bar while active even at zero stock, so this always has an
-  // anchor to draw against.
-  if (state.magnetActive) {
-    const idx = items.findIndex((p) => p.id === 'magnet');
-    if (idx >= 0) {
-      const rect = powerSlotRect(idx);
-      const pct = Math.max(0, Math.min(1, state.magnetTimer / MAGNET_DURATION_SEC));
-      ctx.fillStyle = theme.accent;
-      ctx.fillRect(rect.x, rect.y - 4, rect.w * pct, 2.5);
-    }
-  }
+  // 8.3: remaining energy now shows as a ring around the companion itself
+  // (drawMagnetOverlay), which is a far more prominent, always-visible
+  // anchor than a thin bar over a HUD chip -- no duplicate bar here anymore.
+}
+
+// 8.1: the meter that fills as you merge, spanning exactly the width of the
+// three chips above it so the two visually read as one system.
+function drawMergeMeter(ctx, state, theme) {
+  const barX = POWER_SLOT.x0;
+  const barY = POWER_SLOT.y + POWER_SLOT.size + 4;
+  const barW = 3 * POWER_SLOT.size + 2 * POWER_SLOT.gap;
+  const pct = Math.max(0, Math.min(1, state.mergeMeter / MERGE_METER_MAX));
+  ctx.save();
+  ctx.fillStyle = theme.grid;
+  ctx.fillRect(barX, barY, barW, 3);
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(barX, barY, barW * pct, 3);
+  ctx.restore();
 }
 
 // The run ends when the spawn column (always the centre one) reaches the
@@ -289,34 +351,58 @@ function drawContactShadow(ctx, cx, cy, radius) {
 // magnetTargets() (physics.js) is read-only and re-evaluated every frame, so
 // this tracks what the magnet is CURRENTLY interested in even between the
 // actual stepMagnet ticks.
+// 8.3: a companion riding a rail across the top of the board, dragged to a
+// column rather than automatically following the falling fruit. The rail,
+// puck and energy ring show whenever it is out, whether or not anything
+// happens to be falling right now ("always present"); the field arcs and
+// target rings only make sense once there is a held fruit to match against.
 function drawMagnetOverlay(ctx, state, theme) {
-  if (!state.magnetActive || !state.active) return;
+  if (!state.magnetActive) return;
 
-  const targets = magnetTargets(state);
-  const heldX = state.active.col * CELL + CELL / 2;
-  const heldY = state.active.y;
-  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+  const railY = MAGNET_RAIL_HEIGHT / 2;
 
   ctx.save();
-  drawIcon(ctx, 'magnet', heldX, heldY - CELL * 0.85, CELL * 0.6, theme.accent);
+  ctx.strokeStyle = theme.grid;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, railY);
+  ctx.lineTo(COLS * CELL, railY);
+  ctx.stroke();
 
-  for (const target of targets) {
-    const tx = target.col * CELL + CELL / 2;
-    const ty = target.row * CELL + CELL / 2;
+  // Energy ring around the puck itself is the only place the companion's
+  // remaining energy shows -- "always present, never simply spent" means
+  // there is no separate countdown to watch elsewhere.
+  const energyPct = Math.max(0, Math.min(1, state.magnetEnergy / MAGNET_ENERGY_MAX));
+  ctx.beginPath();
+  ctx.arc(state.magnetX, railY, CELL * 0.3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * energyPct);
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = 3;
+  ctx.stroke();
 
-    ctx.globalAlpha = 0.35 + 0.35 * pulse;
-    ctx.strokeStyle = theme.accent;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(tx, ty);
-    ctx.lineTo(heldX, heldY);
-    ctx.stroke();
+  drawIcon(ctx, 'magnet', state.magnetX, railY, CELL * 0.52, theme.text);
 
-    ctx.globalAlpha = 0.55 + 0.35 * pulse;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(tx, ty, CELL * 0.34 + CELL * 0.06 * pulse, 0, Math.PI * 2);
-    ctx.stroke();
+  if (state.active) {
+    const targets = magnetTargets(state);
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+
+    for (const target of targets) {
+      const tx = target.col * CELL + CELL / 2;
+      const ty = target.row * CELL + CELL / 2;
+
+      ctx.globalAlpha = 0.35 + 0.35 * pulse;
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(state.magnetX, railY);
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.55 + 0.35 * pulse;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(tx, ty, CELL * 0.34 + CELL * 0.06 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
   ctx.restore();
 }
@@ -324,25 +410,6 @@ function drawMagnetOverlay(ctx, state, theme) {
 // While armed, a translucent footprint at the currently aimed cell -- filled
 // in js/input.js's armPreviewCell, which now updates continuously and tracks
 // a drag before it commits on release, not just the moment of a tap.
-function drawBombFootprint(ctx, state, theme) {
-  if (!state.bombArmed || !state.armPreviewCell) return;
-  const { row, col } = state.armPreviewCell;
-  const rows = state.grid.length;
-  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
-
-  ctx.save();
-  ctx.globalAlpha = 0.28 + 0.1 * pulse;
-  ctx.fillStyle = theme.danger;
-  for (let r = row - BOMB_RADIUS; r <= row + BOMB_RADIUS; r++) {
-    if (r < 0 || r >= rows) continue;
-    for (let c = col - BOMB_RADIUS; c <= col + BOMB_RADIUS; c++) {
-      if (c < 0 || c >= COLS) continue;
-      ctx.fillRect(c * CELL + 1, r * CELL + 1, CELL - 2, CELL - 2);
-    }
-  }
-  ctx.restore();
-}
-
 function drawRemoverCrosshair(ctx, state, theme) {
   if (!state.removerArmed || !state.armPreviewCell) return;
   const { row, col } = state.armPreviewCell;
@@ -382,7 +449,6 @@ function drawBoard(ctx, state, fx, theme) {
   }
 
   drawDangerState(ctx, state, rows, theme);
-  drawBombFootprint(ctx, state, theme);
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -400,16 +466,17 @@ function drawBoard(ctx, state, fx, theme) {
 
       drawContactShadow(ctx, cx, cy, def.radius);
 
+      const fuseFraction = bombFuseFractionFor(state, tierIndex);
       const squash = fx ? squashScaleAt(fx, r, c, tierIndex) : null;
       if (squash) {
         // Scale about the fruit's own centre so it pops in place.
         ctx.save();
         ctx.translate(cx, cy);
         ctx.scale(squash.sx, squash.sy);
-        drawFruit(ctx, 0, 0, def, color, tierIndex);
+        drawFruit(ctx, 0, 0, def, color, tierIndex, fuseFraction);
         ctx.restore();
       } else {
-        drawFruit(ctx, cx, cy, def, color, tierIndex);
+        drawFruit(ctx, cx, cy, def, color, tierIndex, fuseFraction);
       }
     }
   }
@@ -419,7 +486,8 @@ function drawBoard(ctx, state, fx, theme) {
 
   if (state.active) {
     const def = tierDefFor(state.active.tier);
-    drawFruit(ctx, state.active.x, state.active.y, def, colorFor(state, state.active.tier), state.active.tier);
+    drawFruit(ctx, state.active.x, state.active.y, def, colorFor(state, state.active.tier), state.active.tier,
+      bombFuseFractionFor(state, state.active.tier));
   }
 
   const { index, t } = themePosition(state.score);
@@ -433,14 +501,21 @@ function drawBoard(ctx, state, fx, theme) {
 //
 // `tierIndex` is optional (callers that only have the tier DEFINITION, not
 // its index, simply omit it) and is what 7.4's per-tier detail keys off --
-// see drawTierDetail. It is never the rainbow sentinel here: the rainbow
-// branch below draws its own thing and never calls it.
-export function drawFruit(ctx, x, y, tier, color, tierIndex) {
+// see drawTierDetail. It is never the rainbow or bomb sentinel here: those
+// branches below draw their own thing and never call it.
+//
+// `fuseFraction` (8.4) only means anything for a bomb -- see
+// bombFuseFractionFor, which every call site computes from state so this
+// function itself never needs to know about state.bombFuseDrops directly.
+export function drawFruit(ctx, x, y, tier, color, tierIndex, fuseFraction) {
   const fill = color || tier.color;
   if (tier.shape === 'flower') {
     drawFlower(ctx, x, y, tier.radius, fill, tierIndex);
   } else if (tier.shape === 'rainbow') {
     drawRainbow(ctx, x, y, tier.radius);
+    return;
+  } else if (tier.shape === 'bomb') {
+    drawBombShape(ctx, x, y, tier.radius, fuseFraction ?? 1);
     return;
   } else {
     drawCircle(ctx, x, y, tier.radius, fill, tierIndex);
@@ -654,4 +729,50 @@ function drawRainbow(ctx, x, y, radius) {
   ctx.arc(x, y, radius * 0.34, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.fill();
+}
+
+// 8.4: "the most visible object in the game while it is live" -- a round
+// body plus a fuse whose LENGTH shrinks with fuseFraction (1 = just planted
+// or still falling, 0 = about to go off), tipped with a spark that reddens
+// as it nears detonation.
+function drawBombShape(ctx, x, y, radius, fuseFraction) {
+  ctx.save();
+
+  ctx.beginPath();
+  ctx.arc(x, y + radius * 0.12, radius * 0.82, 0, Math.PI * 2);
+  ctx.fillStyle = BOMB_DEF.color;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.28, y - radius * 0.06, radius * 0.22, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fill();
+
+  // Fuse: shrinks toward the bomb as the drops run out, not a fixed length
+  // with a colour change -- the shrinking is what reads as "burning down".
+  const clamped = Math.max(0.08, fuseFraction);
+  const fuseBaseX = x + radius * 0.32;
+  const fuseBaseY = y - radius * 0.62;
+  const fuseLen = radius * 1.05 * clamped;
+  const fuseEndX = fuseBaseX + fuseLen * 0.55;
+  const fuseEndY = fuseBaseY - fuseLen * 0.85;
+  ctx.lineWidth = Math.max(1.5, radius * 0.12);
+  ctx.strokeStyle = '#8a5a2a';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(fuseBaseX, fuseBaseY);
+  ctx.quadraticCurveTo(fuseBaseX + fuseLen * 0.3, fuseBaseY - fuseLen * 0.3, fuseEndX, fuseEndY);
+  ctx.stroke();
+
+  // Spark at the burning tip, pulsing, reddening as detonation nears.
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 90);
+  ctx.beginPath();
+  ctx.arc(fuseEndX, fuseEndY, radius * 0.17 * pulse, 0, Math.PI * 2);
+  ctx.fillStyle = fuseFraction < 0.3 ? '#ff5a3c' : '#ffb020';
+  ctx.fill();
+
+  ctx.restore();
 }
