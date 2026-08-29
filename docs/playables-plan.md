@@ -779,8 +779,81 @@ was not attempted this pass; noted as a possible follow-up, not required.
 
 ---
 
+## Phase 7 — the facelift
+
+Certification does not require any of this; done per `docs/phase7brief.md`.
+All four sections landed (the brief allowed shipping fewer). All 19
+`unit-tests/` pass, all 33 `tests/verify-features.js` checks pass (including
+a re-run of the phase 5 CSP check), and `tools/check-prohibited-apis.js` is
+clean against the rebuilt bundle. Bundle grew from 183138 to 217094 bytes
+across the whole phase (17 files throughout, well inside every Playables
+limit) — see each subsection below for the per-commit figure.
+
+### [x] 7.1 The menu — done — commit `ad797e2`
+
+The menu put everything on one page (title, stats, eleven cards, three
+toggles, Play, three audio buttons, a build stamp) with Play buried at the
+bottom. Reduced the first screen to exactly four things (title, best
+score/result, Play, an icon row); the row opens Cart (six power-ups + the
+next-run toggles + a coin balance on the button itself, dimmed when nothing
+is affordable), Palette (skins), or Gear (sound/music/haptics/build stamp) as
+a panel within the same overlay. New icons: `cart`, `palette`, `gear`,
+`back`. `Esc` closes an open panel back to the hub. Bundle: 191570 bytes.
+
+One deviation: CLAUDE.md requires `BUILD_VERSION` visible "on the menu", not
+just the canvas HUD, so a quiet copy stayed on the home screen alongside the
+one in Gear the brief specifies — a hard project rule outranks the brief's
+stricter four-things-only reading.
+
+### [x] 7.2 The palette — done — commit `6b324e7`
+
+Four new milestone palettes (a day turning to night), each board now two
+gradient stops instead of a flat fill, plus a soft vignette, contact shadows,
+and rim highlights (render.js). `theme.danger`, fixed and non-interpolated,
+replaces milestone 0's accent (which used to double as the game's only alarm
+red) for the danger state (6.2). Bundle: 202873 bytes.
+
+The landmine the brief called out was real and worse than described: stop
+2's dark ink and stop 3's light ink are nowhere near extreme enough to
+guarantee 4.5:1 against every board luminance the crossing passes through —
+verified numerically, not assumed, and caught by the required
+`unit-tests/theme-contrast.js` before it shipped. The crossing now uses a
+dedicated near-black/near-white ink pair (the closest to the physical
+extremes that still leaves any safe overlap at all at the 4.5 floor) instead
+of either stop's own tuned colour; segments that don't cross still blend
+their own tuned ink normally. Worst measured contrast across the full
+0-10,000 range: 4.51:1 at a 0.25-score sampling resolution.
+
+### [x] 7.3 Power-ups that live on the board — done — commit `5db07af`
+
+Magnet (glyph, field arcs, target rings, and a genuine movement tween via
+`MAGNET_SLIDE_DURATION_SEC` — the grid stays authoritative, only the draw
+position lags), bomb (translucent 3x3 footprint, expanding ring on
+detonation), remover (crosshair), rainbow (slow wedge spin). Bundle: 213166
+bytes.
+
+The bomb/remover footprint required a real interaction change, not just a
+new draw call: they used to commit on the initial press, which left no
+moment for a footprint to visibly follow anything. They now commit on
+release, using wherever the pointer last was — a plain tap still works
+exactly as before. `unit-tests/input-callbacks.js` gained a regression test
+for the press/drag/release path; `unit-tests/magnet-slide.js` (new) covers
+the tween's easing, cleanup, and staleness guard.
+
+### [x] 7.4 Give the fruit faces — done — commit `c333593`
+
+Stem and leaf from apple (tier 4) upward, a crown on the pineapple, seeds on
+the watermelon, and a per-tier highlight-angle shift. Bundle: 217094 bytes.
+Verified visually (all nine tiers plus rainbow placed on the board via the
+debug hook and screenshotted) rather than by a new unit test — this is
+presentation-only canvas drawing with no pure-logic surface worth testing in
+isolation.
+
+---
+
 ## Out of scope for certification
 
 Do not start these until the phases above are green: the desktop canvas scale-up,
-a display typeface, per-tier fruit detail, the upcoming-fruit queue, score
-animation, objectives, an undo item, a stats screen.
+a display typeface, the upcoming-fruit queue, score animation, objectives, an
+undo item, a stats screen. (Per-tier fruit detail was on this list before
+phase 7.4 did it.)
