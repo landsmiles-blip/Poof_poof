@@ -225,6 +225,21 @@ export const POWERUP_COSTS = Object.fromEntries(POWERUPS.map((p) => [p.id, p.cos
 // teleports fruit into a merge and never touches buried fruit.
 export const MAGNET_DURATION_SEC = 6;
 export const MAGNET_STEP_SEC = 0.45;
+// 7.3: a magnet-moved fruit used to snap a full 64px cell between two frames,
+// which read as a rendering glitch rather than attraction -- the grid stays
+// authoritative (this never changes stepMagnet's actual mechanics), only the
+// DRAW position eases from the old column to the new one, the same way
+// squash already lags the grid for a merge pop. Comfortably shorter than
+// MAGNET_STEP_SEC so one slide always finishes before the same fruit could
+// plausibly be picked up again.
+export const MAGNET_SLIDE_DURATION_SEC = 0.22;
+
+// 7.3: bomb footprint + detonation ring, remover crosshair, rainbow spin --
+// all drawn in js/render.js, on top of the board so arming or activating a
+// power-up changes what the board itself looks like, not just a HUD chip.
+export const BOMB_RING_DURATION_SEC = 0.35;
+export const REMOVER_CROSSHAIR_SIZE = 0.7; // fraction of CELL
+export const RAINBOW_SPIN_RADIANS_PER_SEC = 0.8;
 
 // --- Bomb ----------------------------------------------------------------
 export const BOMB_RADIUS = 1; // Chebyshev radius: 1 => up to a 3x3 clear

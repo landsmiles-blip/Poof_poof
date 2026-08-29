@@ -79,6 +79,13 @@ export function attachInput(canvas, state) {
     return false;
   }
 
+  // 7.3: bomb/remover now commit on release, not on the initial touch, so the
+  // footprint/crosshair (js/render.js, reading state.armPreviewCell) can
+  // genuinely follow the finger before committing rather than flashing into
+  // existence and firing in the same instant. A plain tap still works exactly
+  // as before -- press and release at the same spot commits at that cell.
+  let aiming = false;
+
   function onPointerDown(evt) {
     // Browsers only allow audio to start from a user gesture.
     unlockAudio();
@@ -91,24 +98,9 @@ export function attachInput(canvas, state) {
     }
 
     // Armed targeting modes are mutually exclusive, so at most one applies.
-    if (state.bombArmed) {
-      const cell = cellAt(point);
-      if (cell) {
-        const cleared = detonateBomb(state, cell.row, cell.col);
-        if (cleared) {
-          consumeBomb(state); // marks state.dirty
-          playUiTick();
-        }
-      }
-      return;
-    }
-
-    if (state.removerArmed) {
-      const cell = cellAt(point);
-      if (cell && removeFruitAt(state, cell.row, cell.col)) {
-        consumeRemover(state); // marks state.dirty
-        playUiTick();
-      }
+    if (state.bombArmed || state.removerArmed) {
+      aiming = true;
+      state.armPreviewCell = cellAt(point);
       return;
     }
 
@@ -122,12 +114,36 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerMove(evt) {
-    if (!dragging || !state.active) return;
     const point = toCanvasPoint(evt);
+    if (state.bombArmed || state.removerArmed) {
+      // Updated on every move regardless of `aiming`, so a mouse hovering
+      // before it ever clicks also sees the footprint -- touch has no
+      // equivalent of hover, so there `aiming` (set on pointerdown) is what
+      // makes this fire at all.
+      state.armPreviewCell = cellAt(point);
+      return;
+    }
+    if (!dragging || !state.active) return;
     setDragTarget(state, point.x);
   }
 
   function onPointerUp() {
+    if (aiming) {
+      aiming = false;
+      const cell = state.armPreviewCell;
+      if (state.bombArmed && cell) {
+        const cleared = detonateBomb(state, cell.row, cell.col);
+        if (cleared) {
+          consumeBomb(state); // marks state.dirty
+          playUiTick();
+        }
+      } else if (state.removerArmed && cell) {
+        if (removeFruitAt(state, cell.row, cell.col)) {
+          consumeRemover(state); // marks state.dirty
+          playUiTick();
+        }
+      }
+    }
     dragging = false;
   }
 

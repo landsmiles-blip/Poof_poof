@@ -255,8 +255,9 @@ export function detonateBomb(state, row, col) {
 
   // Emitted before settling, so the coordinates still point at where each fruit
   // actually was when it was destroyed. main.js turns this into one burst per
-  // cell; physics stays free of audio/DOM imports, as everywhere else here.
-  state.events.push({ type: 'bombCleared', cells: cleared.slice() });
+  // cell (plus one expanding ring centred on row/col, 7.3); physics stays
+  // free of audio/DOM imports, as everywhere else here.
+  state.events.push({ type: 'bombCleared', row, col, cells: cleared.slice() });
 
   settleColumns(state);
   state.suppressCombo = true;
@@ -289,6 +290,31 @@ export function detonateBomb(state, row, col) {
 // merge, worth the streak. The Bomb clears the board wholesale with no drop at
 // all; letting its cascade build a multiplier would make detonating the
 // cheapest way to run the streak up. Deliberate asymmetry -- do not "fix" it.
+// Read-only: which exposed (top-of-column) fruits currently qualify to be
+// pulled toward the held column, without moving anything. Shared by
+// stepMagnet's own planning phase below and by render.js, which calls this
+// every frame (not just on the ~magnetStepTimer cadence an actual move
+// fires on) to draw the field arcs and target rings (7.3) -- those need to
+// track what the magnet is CURRENTLY interested in, not just the instant a
+// step happens to land.
+export function magnetTargets(state) {
+  if (!state.magnetActive || !state.active) return [];
+  const heldTier = state.active.tier;
+  const targetCol = state.active.col;
+  const rows = state.grid.length;
+  const targets = [];
+  for (let c = 0; c < COLS; c++) {
+    if (c === targetCol) continue;
+    if (state.stackHeight[c] === 0) continue;
+    const topRow = rows - state.stackHeight[c];
+    const tier = state.grid[topRow][c];
+    // A held rainbow attracts everything; a rainbow on the board answers to any hold.
+    if (pairTier(tier, heldTier) === null) continue;
+    targets.push({ col: c, row: topRow, tier });
+  }
+  return targets;
+}
+
 export function stepMagnet(state, dt) {
   if (!state.magnetActive || !state.active) return [];
 
@@ -303,7 +329,6 @@ export function stepMagnet(state, dt) {
   if (state.magnetStepTimer > 0) return [];
   state.magnetStepTimer = MAGNET_STEP_SEC;
 
-  const heldTier = state.active.tier;
   const targetCol = state.active.col;
   const rows = state.grid.length;
 
@@ -314,15 +339,7 @@ export function stepMagnet(state, dt) {
   // power-up must not have. Planning against an unmutated snapshot caps every
   // fruit at one column per step.
   const planned = [];
-  for (let c = 0; c < COLS; c++) {
-    if (c === targetCol) continue;
-    if (state.stackHeight[c] === 0) continue;
-
-    const topRow = rows - state.stackHeight[c];
-    const tier = state.grid[topRow][c];
-    // A held rainbow attracts everything; a rainbow on the board answers to any hold.
-    if (pairTier(tier, heldTier) === null) continue;
-
+  for (const { col: c, row: topRow, tier } of magnetTargets(state)) {
     const dest = c + (targetCol > c ? 1 : -1);
     if (dest < 0 || dest >= COLS) continue;
     planned.push({ from: c, to: dest, tier, fromRow: topRow });

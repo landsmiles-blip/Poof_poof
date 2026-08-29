@@ -4,9 +4,13 @@ import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
   RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
   FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, DANGER_ROWS_REMAINING,
+  REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC, BOMB_RADIUS,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
-import { squashScaleAt, shakeOffset, drawParticles } from './effects.js';
+import { magnetTargets } from './physics.js';
+import {
+  squashScaleAt, shakeOffset, drawParticles, magnetSlideOffsetAt, drawBombRings,
+} from './effects.js';
 import { themeForScore, themePosition } from './theme.js';
 import { drawIcon } from './icons.js';
 
@@ -75,7 +79,10 @@ export function drawFrame(ctx, state, fx) {
   ctx.save();
   ctx.translate(offset.x, offset.y);
   drawBoard(ctx, state, fx, theme);
-  if (fx) drawParticles(ctx, fx);
+  if (fx) {
+    drawParticles(ctx, fx);
+    drawBombRings(ctx, fx);
+  }
   ctx.restore();
 }
 
@@ -273,6 +280,93 @@ function drawContactShadow(ctx, cx, cy, radius) {
   ctx.fill();
 }
 
+// 7.3: "arming or activating a power-up must change the board, not a chip."
+// Magnet, bomb and remover each got a HUD chip in earlier phases and nothing
+// else -- these three draw the actual effect where it happens.
+
+// Magnet glyph above the held column, field arcs pulsing toward each fruit
+// currently qualifying to be pulled, and a ring on each of those fruits.
+// magnetTargets() (physics.js) is read-only and re-evaluated every frame, so
+// this tracks what the magnet is CURRENTLY interested in even between the
+// actual stepMagnet ticks.
+function drawMagnetOverlay(ctx, state, theme) {
+  if (!state.magnetActive || !state.active) return;
+
+  const targets = magnetTargets(state);
+  const heldX = state.active.col * CELL + CELL / 2;
+  const heldY = state.active.y;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+
+  ctx.save();
+  drawIcon(ctx, 'magnet', heldX, heldY - CELL * 0.85, CELL * 0.6, theme.accent);
+
+  for (const target of targets) {
+    const tx = target.col * CELL + CELL / 2;
+    const ty = target.row * CELL + CELL / 2;
+
+    ctx.globalAlpha = 0.35 + 0.35 * pulse;
+    ctx.strokeStyle = theme.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(heldX, heldY);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.55 + 0.35 * pulse;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(tx, ty, CELL * 0.34 + CELL * 0.06 * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// While armed, a translucent footprint at the currently aimed cell -- filled
+// in js/input.js's armPreviewCell, which now updates continuously and tracks
+// a drag before it commits on release, not just the moment of a tap.
+function drawBombFootprint(ctx, state, theme) {
+  if (!state.bombArmed || !state.armPreviewCell) return;
+  const { row, col } = state.armPreviewCell;
+  const rows = state.grid.length;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
+
+  ctx.save();
+  ctx.globalAlpha = 0.28 + 0.1 * pulse;
+  ctx.fillStyle = theme.danger;
+  for (let r = row - BOMB_RADIUS; r <= row + BOMB_RADIUS; r++) {
+    if (r < 0 || r >= rows) continue;
+    for (let c = col - BOMB_RADIUS; c <= col + BOMB_RADIUS; c++) {
+      if (c < 0 || c >= COLS) continue;
+      ctx.fillRect(c * CELL + 1, r * CELL + 1, CELL - 2, CELL - 2);
+    }
+  }
+  ctx.restore();
+}
+
+function drawRemoverCrosshair(ctx, state, theme) {
+  if (!state.removerArmed || !state.armPreviewCell) return;
+  const { row, col } = state.armPreviewCell;
+  const cx = col * CELL + CELL / 2;
+  const cy = row * CELL + CELL / 2;
+  const r = CELL * REMOVER_CROSSHAIR_SIZE * 0.5;
+
+  ctx.save();
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.moveTo(cx - r * 1.3, cy);
+  ctx.lineTo(cx - r * 0.4, cy);
+  ctx.moveTo(cx + r * 0.4, cy);
+  ctx.lineTo(cx + r * 1.3, cy);
+  ctx.moveTo(cx, cy - r * 1.3);
+  ctx.lineTo(cx, cy - r * 0.4);
+  ctx.moveTo(cx, cy + r * 0.4);
+  ctx.lineTo(cx, cy + r * 1.3);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawBoard(ctx, state, fx, theme) {
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
@@ -288,15 +382,21 @@ function drawBoard(ctx, state, fx, theme) {
   }
 
   drawDangerState(ctx, state, rows, theme);
+  drawBombFootprint(ctx, state, theme);
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < COLS; c++) {
       const tierIndex = state.grid[r][c];
       if (tierIndex === null) continue;
-      const cx = c * CELL + CELL / 2;
       const cy = r * CELL + CELL / 2;
       const def = tierDefFor(tierIndex);
       const color = colorFor(state, tierIndex);
+
+      // Grid stays authoritative -- this only nudges where the fruit is
+      // DRAWN, easing back to its true column over MAGNET_SLIDE_DURATION_SEC
+      // (7.3) rather than jumping a full cell between two frames.
+      const slideDx = fx ? magnetSlideOffsetAt(fx, r, c, tierIndex) : null;
+      const cx = c * CELL + CELL / 2 + (slideDx || 0);
 
       drawContactShadow(ctx, cx, cy, def.radius);
 
@@ -313,6 +413,9 @@ function drawBoard(ctx, state, fx, theme) {
       }
     }
   }
+
+  drawMagnetOverlay(ctx, state, theme);
+  drawRemoverCrosshair(ctx, state, theme);
 
   if (state.active) {
     const def = tierDefFor(state.active.tier);
@@ -420,14 +523,18 @@ function drawFlower(ctx, x, y, radius, fill) {
 const RAINBOW_WEDGES = ['#e0435a', '#f2960b', '#f2d43d', '#3fae5c', '#4c6ef5', '#8e44ad'];
 
 function drawRainbow(ctx, x, y, radius) {
+  // 7.3: the rarest object in the game used to sit perfectly still. Spins
+  // from the wall clock, same as drawDangerState's pulse -- purely cosmetic,
+  // so it needs no dt threaded through render.js's call chain.
+  const spin = (Date.now() / 1000) * RAINBOW_SPIN_RADIANS_PER_SEC;
   ctx.save();
   RAINBOW_WEDGES.forEach((c, i) => {
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.arc(
       x, y, radius,
-      (i / RAINBOW_WEDGES.length) * Math.PI * 2 - Math.PI / 2,
-      ((i + 1) / RAINBOW_WEDGES.length) * Math.PI * 2 - Math.PI / 2
+      spin + (i / RAINBOW_WEDGES.length) * Math.PI * 2 - Math.PI / 2,
+      spin + ((i + 1) / RAINBOW_WEDGES.length) * Math.PI * 2 - Math.PI / 2
     );
     ctx.closePath();
     ctx.fillStyle = c;

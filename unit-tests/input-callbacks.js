@@ -42,8 +42,9 @@ function makeFakeCanvas(state) {
 
 assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, state) -- no callbacks, no persist function');
 
-// Bomb: place a fruit, arm the bomb, tap its cell -- event rides state.events,
-// and consumeBomb() (js/state.js) marks state.dirty on its own.
+// Bomb: place a fruit, arm the bomb, tap its cell (press then release, since
+// 7.3 moved the commit to pointerup -- see the aiming test below) -- event
+// rides state.events, and consumeBomb() (js/state.js) marks state.dirty.
 {
   const state = freshState();
   state.grid[0][0] = 0;
@@ -52,6 +53,7 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   const canvas = makeFakeCanvas(state);
   attachInput(canvas, state);
   canvas.fire('pointerdown', { clientX: 0 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  canvas.fire('pointerup', {});
   const events = state.events.filter((e) => e.type === 'bombCleared');
   assert.equal(events.length, 1, 'a bombCleared event should be pushed when a bomb clears fruit');
   assert.ok(events[0].cells.length >= 1, 'the event should carry the cleared cells');
@@ -67,6 +69,7 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   const canvas = makeFakeCanvas(state);
   attachInput(canvas, state);
   canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  canvas.fire('pointerup', {});
   const events = state.events.filter((e) => e.type === 'removerUsed');
   assert.equal(events.length, 1, 'a removerUsed event should be pushed when the remover removes a fruit');
   assert.deepEqual(
@@ -75,6 +78,35 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
     'the event should carry where and what was removed',
   );
   assert.equal(state.dirty, true, 'consuming the remover should mark state.dirty');
+}
+
+// Regression test for 7.3: bomb/remover commit on RELEASE, using wherever the
+// finger last was, not on the initial press -- the footprint/crosshair can
+// then genuinely follow a drag before it commits.
+{
+  const state = freshState();
+  state.grid[0][0] = 5;
+  state.grid[0][2] = 5;
+  state.removerArmed = true;
+  state.inventory.remover = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  canvas.fire('pointerdown', { clientX: 0 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  assert.equal(state.events.filter((e) => e.type === 'removerUsed').length, 0,
+    'pressing down must not commit by itself');
+  assert.deepEqual(state.armPreviewCell, { row: 0, col: 0 }, 'the preview cell should track the press position');
+
+  canvas.fire('pointermove', { clientX: 2 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  assert.equal(state.events.filter((e) => e.type === 'removerUsed').length, 0,
+    'dragging while armed must not commit either');
+  assert.deepEqual(state.armPreviewCell, { row: 0, col: 2 }, 'the preview cell should follow the drag');
+
+  canvas.fire('pointerup', {});
+  const events = state.events.filter((e) => e.type === 'removerUsed');
+  assert.equal(events.length, 1, 'releasing should commit exactly once');
+  assert.deepEqual({ row: events[0].row, col: events[0].col }, { row: 0, col: 2 },
+    'the commit should land wherever the finger was released, not where it was first pressed');
 }
 
 // Locked power-up: magnet unlocks at a score this fresh state has not reached.

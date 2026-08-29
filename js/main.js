@@ -2,7 +2,7 @@
 // render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
-  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS,
+  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
 } from './constants.js';
 import {
@@ -26,7 +26,7 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn,
+  hydrate as hydrateHaptics, isHapticsOn, spawnMagnetSlides, spawnBombRing,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 
@@ -266,9 +266,10 @@ function drainEvents() {
         bright,
       });
     } else if (event.type === 'bombCleared') {
-      // One max-intensity burst per destroyed fruit. Detonation previously
-      // produced no visual or tactile response at all, despite clearing up to
-      // nine cells -- the loudest action in the game happened in silence.
+      // One max-intensity burst per destroyed fruit, plus one expanding ring
+      // centred on the target. Detonation previously produced no visual or
+      // tactile response at all, despite clearing up to nine cells -- the
+      // loudest action in the game happened in silence.
       const topTier = TIERS.length - 1;
       for (const cell of event.cells) {
         spawnMergeEffects(fx, {
@@ -280,6 +281,7 @@ function drainEvents() {
           bright,
         });
       }
+      spawnBombRing(fx, event.col * CELL + CELL / 2, event.row * CELL + CELL / 2);
       vibrate(HAPTIC_BOMB_MS);
     } else if (event.type === 'removerUsed') {
       spawnMergeEffects(fx, {
@@ -331,7 +333,8 @@ function update(dt) {
   updateEffects(fx, dt);
 
   if (state.active) {
-    stepMagnet(state, dt);
+    const moves = stepMagnet(state, dt);
+    if (moves.length > 0) spawnMagnetSlides(fx, state, moves);
     stepPhysics(state, dt);
   } else {
     const result = spawnFruit(state);

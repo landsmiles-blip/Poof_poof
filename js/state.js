@@ -114,6 +114,12 @@ export function createInitialState(save) {
     removerArmed: false,
 
     bombArmed: false,
+    // Cell the pointer is currently over while bomb/remover is armed (7.3) --
+    // purely a render hint for the footprint/crosshair; never persisted.
+    // Written directly by js/input.js, not through a state.js mutator: it
+    // carries no game-state meaning of its own, the same way `dragging` in
+    // input.js's own closure never needed one either.
+    armPreviewCell: null,
     magnetActive: false,
     magnetTimer: 0,
     magnetStepTimer: 0,
