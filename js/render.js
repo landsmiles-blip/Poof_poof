@@ -3,7 +3,7 @@
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, MUTE_RECT, COMBO_WINDOW_SEC,
   RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
-  FONT_FAMILY, RENDER_SCALE,
+  FONT_FAMILY, RENDER_SCALE, LOCKED_FLASH_DURATION_SEC,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps } from './state.js';
 import { isMuted } from './audio.js';
@@ -156,6 +156,21 @@ function drawPowerBar(ctx, state, theme) {
     ctx.fillStyle = theme.text;
     ctx.fillText(locked ? `${item.unlockScore}` : `${count}`, cx, rect.y + rect.h + 2);
     ctx.restore();
+
+    // A brief flash when this exact chip was just tapped while locked or out
+    // of stock. The unlock score is already drawn beneath the chip, so this is
+    // deliberately just a ring, not a second label.
+    if (state.lockedFlash && state.lockedFlash.id === item.id) {
+      const alpha = Math.max(0, 1 - state.lockedFlash.t / LOCKED_FLASH_DURATION_SEC);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.roundRect(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, 7);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Padlock corner marker, so "locked" is not conveyed by dimming alone.
     if (locked) {

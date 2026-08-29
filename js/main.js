@@ -6,6 +6,7 @@ import {
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
+  triggerLockedFlash, tickLockedFlash,
 } from './state.js';
 import { setStorageReadOnly } from './storage.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
@@ -13,7 +14,7 @@ import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver } from './shop.js';
 import {
-  playMerge, playCelebration, playGameOver,
+  playMerge, playCelebration, playGameOver, playUiTick,
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
 } from './audio.js';
 import { attachContext, startMusic, stopMusic } from './music.js';
@@ -153,6 +154,16 @@ function drainEvents() {
         });
       }
       vibrate(HAPTIC_BOMB_MS);
+    } else if (event.type === 'removerUsed') {
+      spawnMergeEffects(fx, {
+        row: event.row,
+        col: event.col,
+        tier: event.tier,
+        color: colorForTier(event.tier),
+      });
+    } else if (event.type === 'lockedPowerUp') {
+      playUiTick();
+      triggerLockedFlash(state, event.id);
     }
   }
   state.events.length = 0;
@@ -175,6 +186,7 @@ function loop(now) {
 
 function update(dt) {
   tickCombo(state, dt);
+  tickLockedFlash(state, dt);
   updateEffects(fx, dt);
 
   if (state.active) {

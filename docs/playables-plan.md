@@ -79,20 +79,20 @@ phase was written against was `-4`. The actual baseline is `-5`
 defects" commit message claimed 1.1, 1.3, 1.4, and the `setStorageReadOnly`
 half of 1.5. That claim was not taken on faith: each item's regression test
 was written from this plan's own spec and run against the real modules before
-any status below was marked. Two of the four claims did not hold up:
+any status was marked. Two of the four claims did not hold up, and were fixed
+properly in a follow-up pass (see `docs/phase1brief.md`, now folded in below):
 
-- **1.1 and the `setStorageReadOnly` half of 1.5** — genuinely fixed. Tests
-  passing.
-- **1.3** — not fixed. The delivery-guarantee schedule exists, but `endRun`
-  never refunds an undelivered charge, and `spawnFruit` still silently
-  overrides `nextTier` for a wild, so the "Also" half of the fix (preview
-  accuracy) was never done either.
-- **1.4** — not fixed as specified, though not fully dead either: bomb
-  feedback works, wired through `state.events` (a `bombCleared` event drained
-  by `main.js`) rather than through `attachInput`'s callbacks as the plan
-  prescribed. `main.js` still calls `attachInput(canvas, state)` with no third
-  argument, and there is no equivalent event path for the remover or for a
-  locked-power-up tap, so both remain completely silent.
+- **1.1 and the `setStorageReadOnly` half of 1.5** — genuinely fixed in `-5`.
+  Tests passing.
+- **1.3** — was not fixed in `-5` (the delivery schedule existed, but `endRun`
+  never refunded an undelivered charge, and `spawnFruit` still silently
+  overrode `nextTier` for a wild). Fixed properly below; `unit-tests/rainbow.js`
+  now passes.
+- **1.4** — was not fixed as specified in `-5`, though not fully dead either:
+  bomb feedback worked, wired through `state.events` rather than through
+  `attachInput`'s callbacks. That turned out to be the better design (see
+  below) — the callback mechanism was deleted rather than completed.
+  `unit-tests/input-callbacks.js` now passes against the new contract.
 
 ### [x] 1.1 Magnet must not complete merges by itself — fixed in `9ae427d`, `unit-tests/magnet.js` passing
 
@@ -111,7 +111,7 @@ resolves on the next landing, as it does for every other move.
 assert the two cherries are now adjacent and both still tier 0, and that
 `state.score` is unchanged and `state.events` is empty.
 
-### [ ] 1.2 Make the combo rule consistent across power-ups
+### [x] 1.2 Make the combo rule consistent across power-ups — decided, closed
 
 **Problem.** `detonateBomb()` wraps its cascade in `state.suppressCombo` so those
 merges score at 1x and do not extend the streak — a deliberate decision,
@@ -119,75 +119,95 @@ documented in the file. Magnet-caused merges get no such treatment. After 1.1
 the Magnet no longer merges directly, but any merge it *sets up* still lands on
 the next drop and feeds the combo normally.
 
-**Decide, then apply the same rule to both.** Default recommendation: leave it
-as is after 1.1 — a merge the player completes by dropping a fruit is a real
-merge. Note the decision in a comment so the asymmetry is not re-flagged later.
+**Decision: leave the asymmetry.** A merge the player completes by dropping a
+fruit is a real merge and earns the streak, magnet-assisted or not; the Bomb
+clears the board wholesale with no drop at all, so letting its cascade build a
+multiplier would make detonating the cheapest way to run the streak up.
+Recorded in a comment above `stepMagnet()` in `js/physics.js` so the asymmetry
+is not re-flagged later. No code behavior changed by this item.
 
-### [ ] 1.3 Rainbow charges must always be delivered — NOT fixed; `unit-tests/rainbow.js` failing
+### [x] 1.3 Rainbow charges must always be delivered — fixed, `unit-tests/rainbow.js` passing
 
-`840/1000` simulated 8-drop runs lost a purchased charge (fewer than
-`RAINBOW_PER_CHARGE` wilds delivered, `endRun` left `inventory.rainbow` at 0
-with nothing refunded), and `1160` spawns did not match their previewed tier.
-The schedule genuinely fixed the "12% roll can just fail" case the bug
-described, but the plan's own two follow-on requirements — refund on an
-early-ending run, and an honest preview — were never implemented.
+**Original bug.** `startRun()` in `js/state.js` spent the charge and set
+`rainbowRemaining = 2`, `rainbowChance = 0.12`; `spawnFruit()` then rolled 12%
+per spawn. Simulated over 20,000 runs: a 10-drop run received nothing 28.4% of
+the time and lost one of two wilds a further 38.0%. `-5` replaced the roll with
+a schedule but left two gaps: `endRun` never refunded an undelivered charge,
+and `spawnFruit` still silently overrode `nextTier` for a wild, so the HUD
+preview could still lie. `840/1000` simulated 8-drop runs lost a charge
+outright before this fix.
 
-**Bug.** `startRun()` in `js/state.js` spends the charge and sets
-`rainbowRemaining = 2`, `rainbowChance = 0.12`; `spawnFruit()` then rolls 12% per
-spawn. Simulated over 20,000 runs: a 10-drop run receives nothing 28.4% of the
-time and loses one of two wilds a further 38.0%. At 20 drops it is still 7.7%
-and 20.6%. An 80-coin consumable that silently does nothing is the fastest way
-to lose trust in the shop.
+**Fix.**
 
-**Fix.** Replace the roll with a schedule: pick two fixed spawn indices at
-`startRun` (e.g. the 3rd and the 10th spawn) and deliver the wild on exactly
-those. If the run ends before both are delivered, return the unspent portion to
-inventory in `endRun`.
+- `RAINBOW_SCHEDULE = [3, 8]` (`js/constants.js`) — two fixed spawn indices,
+  not randomised bands: a random offset made "was this run's charge ever
+  refunded" impossible to reason about from the schedule alone.
+- `nextTierFor(state)` (`js/state.js`) decides the tier for a spawn index one
+  spawn ahead of time — called from `startRun` for the very first spawn and
+  from the end of `spawnFruit` for every one after — so `state.nextTier` always
+  already holds the truth before it is ever shown as the preview. `spawnFruit`
+  no longer has a second, competing tier decision.
+- `state.rainbowChargeSpent` / `state.rainbowDelivered` (set in `startRun`,
+  incremented in `spawnFruit` at the moment a wild actually becomes the falling
+  fruit, not when it is merely scheduled) let `endRun` refund a charge that
+  delivered zero wilds, and only that case — refunding on partial delivery (one
+  of two) would be farmable: buy a charge, take the wild at spawn 3, end the
+  run on purpose, get the coins back, repeat.
 
-**Also.** Decide the wild one drop early, when `nextTier` is rolled, so the HUD
-"Next" preview shows it. Today `spawnFruit` overrides `nextTier` at spawn time,
-so the preview lies — in a game whose only skill expression is planning the next
-placement, that is not acceptable.
+**Test.** `unit-tests/rainbow.js` — 1,000 simulated 8-drop runs: every charge
+either delivers at least one wild or is refunded, never both and never
+neither; every preview matches what actually spawns; a run that survives to
+spawn 3 and then ends receives no refund.
 
-**Test.** `unit-tests/rainbow.js` — simulate 1,000 runs of 8 drops; assert every
-purchased charge is either delivered or refunded, never lost. Assert the
-previewed tier always equals the tier that actually spawns.
+### [x] 1.4 One feedback path, not two — fixed, `unit-tests/input-callbacks.js` passing
 
-### [ ] 1.4 Wire up the three dead input callbacks — partially fixed; `unit-tests/input-callbacks.js` failing
+**Original bug.** `js/input.js` called `callbacks.onBombUsed`,
+`callbacks.onRemoverUsed` and `callbacks.onLockedPowerUp`, but `js/main.js`
+called `attachInput(canvas, state)` with two arguments — all three were dead.
+`-5` gave the Bomb feedback anyway, wired through `state.events` rather than
+through the callback the plan originally specified.
 
-`main.js` still calls `attachInput(canvas, state)` with no third argument, so
-the callbacks themselves are exactly as dead as described below. Bomb
-detonation nonetheless has feedback in the live game: `detonateBomb` pushes a
-`bombCleared` event onto `state.events`, and `main.js`'s `drainEvents` turns it
-into effects — a valid alternative to the callback the plan specified, and
-arguably a better fit for this codebase's established physics-pushes-events
-pattern. No such path exists for the remover or for a locked-power-up tap;
-both are still completely silent.
+**Decision: the events path wins, not the callback.** It already existed, it
+already worked for the Bomb, and it matches `CLAUDE.md`'s architecture rule —
+physics pushes events, `main.js` turns them into sound and effects, `input.js`
+stays free of presentation concerns. The `callbacks` parameter was deleted
+rather than completed.
 
-**Bug.** `js/input.js` calls `callbacks.onBombUsed`, `callbacks.onRemoverUsed`
-and `callbacks.onLockedPowerUp`, but `js/main.js` calls
-`attachInput(canvas, state)` with two arguments. All three are dead. This is why
-detonating a bomb clears up to nine fruit in complete silence — the feedback
-system exists, nobody passed it in.
+**Fix.**
 
-**Fix.** Pass a third argument from `main.js`:
+- `removeFruitAt()` (`js/physics.js`) now pushes a `removerUsed` event (row,
+  col, tier) at the point the board actually changes.
+- A locked/out-of-stock power-up tap changes no board state, so it has no
+  physics event to ride — `js/input.js` pushes a `lockedPowerUp` event (id,
+  unlock score) straight onto `state.events` itself. Same queue, one
+  mechanism.
+- `main.js`'s `drainEvents` handles both: a small burst for the remover, and
+  for a locked tap a muted `playUiTick()` plus `triggerLockedFlash()` — a
+  short-lived `state.lockedFlash` field, ticked in `update()`, drawn as a ring
+  around the tapped chip in `js/render.js`. No second label; the unlock score
+  is already drawn beneath the chip.
+- `attachInput`'s `callbacks` parameter, its default, and all three
+  `callbacks.x?.()` call sites are gone. `main.js`'s two-argument call is now
+  correct rather than accidentally correct.
 
-- `onBombUsed(cleared)` — one `spawnMergeEffects` per cleared cell at top-tier
-  intensity, one shake, one haptic pulse.
-- `onRemoverUsed()` — a small burst at the removed cell.
-- `onLockedPowerUp(item)` — a muted tick, and ideally a brief label showing the
-  unlock score.
+**Test.** `unit-tests/input-callbacks.js` — asserts `attachInput` no longer
+declares a third parameter, and that using the remover, detonating a bomb, and
+tapping a locked chip each push exactly the right event onto `state.events`.
 
-### [ ] 1.5 Remove `?dev=1` from the shipped bundle
+### [~] 1.5 Remove `?dev=1` from the shipped bundle — deferred to 4.2
 
-`setStorageReadOnly` is already wired correctly (0.1.3, confirmed by
+`setStorageReadOnly` is wired correctly (0.1.3, confirmed by
 `unit-tests/dev-mode-storage.js`) — dev mode can no longer corrupt a real
-save. What's still open: the `?dev=1` cheat itself
-(unlimited inventory, max high score) still works and ships in the bundle.
-Cut it from the release build, or gate it out at build/deploy time for the
-Playables target — the Pages build can keep it as a testing affordance if
-desired, but a URL-parameter cheat that unlocks everything is not something to
-hand a certification reviewer.
+save. That half stays closed.
+
+**Do not remove `?dev=1` in this phase.** `tests/verify-features.js` contains
+a check that exercises it; removing dev mode now breaks a currently-green e2e
+suite, and the tempting repair — deleting that check — quietly costs coverage.
+Dev mode should be stripped by the same build-target mechanism that strips the
+manifest and the service worker, which phase 4.2 introduces. Moved the
+remaining half of this item there (see 4.2's amended scope below); a
+URL-parameter cheat that unlocks everything still is not something to hand a
+certification reviewer, just not a phase-1 problem.
 
 ---
 
@@ -335,6 +355,12 @@ each time, and confirm the board state survives.
 The manifest, icons and any update-and-reload path have no role in the
 container. Add a build flag that emits a Playables `index.html` without them,
 while the Pages build keeps them.
+
+**Amended scope (from 1.5, deferred here):** the Playables bundle must also
+exclude `?dev=1` (dev mode: cut the feature or gate it out for this target
+only — the Pages build may keep it), `package.json`, `node_modules/`,
+`tests/`, `unit-tests/`, `docs/`, `.github/`, the web app manifest, the icons,
+and the service worker. Nothing that is not the game itself ships.
 
 ### [ ] 4.3 Feature-check `ctx.roundRect`
 

@@ -170,18 +170,22 @@ export const RAINBOW_TIER = 99;
 export const RAINBOW_DEF = { name: 'rainbow', color: '#ffffff', radius: 22, points: 0, shape: 'rainbow' };
 export const RAINBOW_PER_CHARGE = 2; // wild fruits injected into a run per charge
 
-// Spawn indices at which a charge's wilds arrive, decided once at run start.
+// Fixed spawn indices at which a charge's wilds arrive, decided once at run
+// start. Both early enough that even a short run gets value from the charge --
+// the whole point of paying for it.
 //
 // This replaces a 12% per-spawn roll that could simply fail to deliver: a paid
 // 80-coin charge was consumed up front and then, in 7-28% of runs depending on
 // length, produced nothing. A purchased consumable must never silently not
-// arrive, so delivery is now scheduled rather than gambled.
+// arrive.
 //
-// Both bands sit far below the shortest run measured across 3,800 simulated
-// games (26 spawns; 1st percentile 27), so every realistic run reaches both.
-// The index is randomised WITHIN its band only, so successive runs do not feel
-// identical while delivery stays guaranteed.
-export const RAINBOW_SCHEDULE_BANDS = [[2, 5], [7, 12]];
+// Fixed rather than randomised within a band (an earlier version of this
+// comment described bands, still randomised): a random offset made "was this
+// run's charge ever refunded" impossible to reason about from the schedule
+// alone, and two constants this small don't need randomising to keep runs from
+// feeling identical. See endRun's refund: only a run that never reaches index
+// 3 -- vanishingly rare -- delivers nothing and gets its charge back.
+export const RAINBOW_SCHEDULE = [3, 8];
 
 // --- Merge feel ----------------------------------------------------------
 // All three scale with tier so the visuals escalate in step with merge pitch.
@@ -201,6 +205,9 @@ export const PARTICLE_GRAVITY = 420;
 export const SHAKE_MIN_TIER = 6; // top three tiers only (peach, pineapple, watermelon)
 export const SHAKE_DURATION_SEC = 0.22;
 export const SHAKE_MAX_PX = 5; // deliberately small -- readable, not disorienting
+
+// How long a locked/out-of-stock power-up chip's tap flash stays lit.
+export const LOCKED_FLASH_DURATION_SEC = 0.35;
 
 // Haptics, in ms. Only fires where navigator.vibrate exists.
 export const HAPTIC_MERGE_MS = 12;

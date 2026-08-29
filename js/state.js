@@ -5,7 +5,8 @@ import {
   COLS, ROWS, SPAWN_POOL, COINS_PER_SCORE,
   COMBO_WINDOW_SEC, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_PER_CHARGE, RAINBOW_SCHEDULE_BANDS,
+  MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_TIER, RAINBOW_SCHEDULE,
+  LOCKED_FLASH_DURATION_SEC,
 } from './constants.js';
 import {
   loadHighScore, saveHighScore, loadCoins, saveCoins,
@@ -64,7 +65,10 @@ export function createInitialState() {
     magnetTimer: 0,
     magnetStepTimer: 0,
     rainbowSchedule: [],
+    rainbowChargeSpent: false,
+    rainbowDelivered: 0,
     spawnIndex: 0,
+    lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
 
     comboCount: 0,
     comboTimer: 0,
@@ -112,25 +116,22 @@ export function effectiveRows(state) {
   return state.extraRowActive ? ROWS + 1 : ROWS;
 }
 
-// Spawn indices for a run's wild fruit, one per band, randomised inside the
-// band so runs vary while delivery stays guaranteed. Returns a strictly
-// increasing list, so spawnFruit can just compare against the head.
-export function buildRainbowSchedule(count) {
-  const bands = RAINBOW_SCHEDULE_BANDS;
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    const band = bands[Math.min(i, bands.length - 1)];
-    // Wilds beyond the defined bands (only reachable if PER_CHARGE grows) are
-    // pushed progressively later rather than colliding on the last band.
-    const offset = i < bands.length ? 0 : (i - bands.length + 1) * 6;
-    const span = band[1] - band[0] + 1;
-    out.push(offset + band[0] + Math.floor(Math.random() * span));
+// Decides the tier for the fruit that will spawn at state.spawnIndex --
+// called both for the very first spawn (startRun) and, one spawn ahead of
+// time, at the end of every spawnFruit() call. Deciding it here, before it is
+// ever shown as the "Next" preview, is what makes the preview honest: nothing
+// downstream is allowed to override state.nextTier once this has run.
+//
+// Mutates state.rainbowSchedule (shifting off the claimed index) so a slot is
+// never reconsidered, independent of whether that fruit ever actually spawns
+// -- see endRun's refund, which tracks *delivery* separately.
+export function nextTierFor(state) {
+  const schedule = state.rainbowSchedule;
+  if (schedule && schedule.length > 0 && schedule[0] === state.spawnIndex) {
+    schedule.shift();
+    return RAINBOW_TIER;
   }
-  out.sort((a, b) => a - b);
-  for (let i = 1; i < out.length; i++) {
-    if (out[i] <= out[i - 1]) out[i] = out[i - 1] + 1;
-  }
-  return out;
+  return randomSpawnTier();
 }
 
 // --- Skins ---------------------------------------------------------------
@@ -230,6 +231,22 @@ export function resetCombo(state) {
   state.comboTimer = 0;
 }
 
+// --- Locked power-up tap feedback ----------------------------------------
+// A tap on a locked/out-of-stock chip changes no board state, so unlike the
+// remover or bomb this has no physics event to ride -- input.js pushes the
+// 'lockedPowerUp' event straight onto state.events itself, and main.js's
+// drainEvents calls triggerLockedFlash in response.
+
+export function triggerLockedFlash(state, id) {
+  state.lockedFlash = { id, t: 0 };
+}
+
+export function tickLockedFlash(state, dt) {
+  if (!state.lockedFlash) return;
+  state.lockedFlash.t += dt;
+  if (state.lockedFlash.t >= LOCKED_FLASH_DURATION_SEC) state.lockedFlash = null;
+}
+
 // --- Run lifecycle -------------------------------------------------------
 
 export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
@@ -247,13 +264,17 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
     state.extraRowActive = false;
   }
 
-  // Rainbow charges are spent up front and delivered on a schedule fixed at run
-  // start, so a paid charge always arrives. Previously this set a 12% per-spawn
-  // roll that could deliver nothing at all.
+  // Rainbow charges are spent up front and delivered on a fixed schedule, so a
+  // paid charge always arrives. Previously this set a 12% per-spawn roll that
+  // could deliver nothing at all. rainbowChargeSpent/rainbowDelivered track,
+  // independent of the schedule array itself, whether this run owes a refund
+  // -- see endRun.
   state.rainbowSchedule = (useRainbow && state.inventory.rainbow > 0)
-    ? buildRainbowSchedule(RAINBOW_PER_CHARGE)
+    ? [...RAINBOW_SCHEDULE]
     : [];
-  if (state.rainbowSchedule.length > 0) state.inventory.rainbow -= 1;
+  state.rainbowChargeSpent = state.rainbowSchedule.length > 0;
+  state.rainbowDelivered = 0;
+  if (state.rainbowChargeSpent) state.inventory.rainbow -= 1;
   state.spawnIndex = 0;
 
   state.removerArmed = false;
@@ -261,6 +282,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.magnetActive = false;
   state.magnetTimer = 0;
   state.magnetStepTimer = 0;
+  state.lockedFlash = null;
 
   saveInventory(state.inventory);
 
@@ -268,7 +290,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.stackHeight = new Array(COLS).fill(0);
   state.score = 0;
   state.active = null;
-  state.nextTier = randomSpawnTier();
+  state.nextTier = nextTierFor(state);
   state.gameOverReason = null;
   state.newlyUnlockedSkins = [];
   state.newlyUnlockedPowerUps = [];
@@ -317,6 +339,16 @@ export function endRun(state, reason) {
   state.lastRunCoinsEarned = earned;
   state.coins += earned;
   saveCoins(state.coins);
+
+  // Refund a Rainbow charge only when the run ended having delivered NOTHING.
+  // Refunding on partial delivery (one of two wilds) would be farmable: buy a
+  // charge, take the first wild at spawn 3, end the run on purpose, get the
+  // coins back, repeat. Zero-delivery-only closes that; with wilds scheduled
+  // at spawn indices 3 and 8, a zero-delivery run should be rare.
+  if (state.rainbowChargeSpent && state.rainbowDelivered === 0) {
+    state.inventory.rainbow = (state.inventory.rainbow || 0) + 1;
+    saveInventory(state.inventory);
+  }
 }
 
 export function buyPowerUp(state, key, cost) {

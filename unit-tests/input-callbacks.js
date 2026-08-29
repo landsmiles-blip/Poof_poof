@@ -1,19 +1,12 @@
-// Regression test for the "three dead input callbacks" bug: js/input.js calls
-// callbacks.onBombUsed / onRemoverUsed / onLockedPowerUp, but as of this
-// writing js/main.js still calls attachInput(canvas, state) with no third
-// argument, so none of the three ever fire in the shipped game.
-//
-// Two things are checked separately, because they can be true independently:
-//   1. Does input.js correctly invoke a callback it IS given? (tests input.js)
-//   2. Does the shipped main.js actually give it one -- directly, or through
-//      an equivalent mechanism (physics.js's state.events queue)? (tests main.js)
+// Regression test for 1.4, updated for the phase-1 brief's revised contract:
+// the callbacks parameter is gone. attachInput now takes exactly (canvas,
+// state), and bomb/remover/locked-power-up feedback all ride state.events --
+// the same queue main.js already drains everything else from.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  CANVAS_WIDTH, HUD_HEIGHT, CELL, POWER_SLOT, powerSlotRect,
-} from '../js/constants.js';
+import { CANVAS_WIDTH, HUD_HEIGHT, CELL, POWER_SLOT, powerSlotRect } from '../js/constants.js';
 import { canvasHeightFor } from '../js/render.js';
 import { startRun } from '../js/state.js';
 import { attachInput } from '../js/input.js';
@@ -45,78 +38,69 @@ function makeFakeCanvas(state) {
   };
 }
 
-// --- 1. input.js's own dispatch, given callbacks directly -----------------
+assert.equal(attachInput.length, 2, 'attachInput should no longer declare a callbacks parameter');
 
-// Bomb: place a fruit, arm the bomb, tap its cell.
+// Bomb: place a fruit, arm the bomb, tap its cell -- event rides state.events.
 {
   const state = freshState();
   state.grid[0][0] = 0;
   state.bombArmed = true;
   state.inventory.bomb = 1;
-  const calls = { bomb: [] };
   const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state, { onBombUsed: (cleared) => calls.bomb.push(cleared) });
+  attachInput(canvas, state);
   canvas.fire('pointerdown', { clientX: 0 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
-  assert.equal(calls.bomb.length, 1, 'onBombUsed should fire once when a bomb clears fruit');
-  assert.ok(calls.bomb[0].length >= 1, 'onBombUsed should receive the cleared cells');
+  const events = state.events.filter((e) => e.type === 'bombCleared');
+  assert.equal(events.length, 1, 'a bombCleared event should be pushed when a bomb clears fruit');
+  assert.ok(events[0].cells.length >= 1, 'the event should carry the cleared cells');
 }
 
 // Remover: place a fruit, arm the remover, tap its cell.
 {
   const state = freshState();
-  state.grid[0][1] = 0;
+  state.grid[0][1] = 3;
   state.removerArmed = true;
   state.inventory.remover = 1;
-  const calls = { remover: 0 };
   const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state, { onRemoverUsed: () => { calls.remover += 1; } });
+  attachInput(canvas, state);
   canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
-  assert.equal(calls.remover, 1, 'onRemoverUsed should fire once when the remover removes a fruit');
+  const events = state.events.filter((e) => e.type === 'removerUsed');
+  assert.equal(events.length, 1, 'a removerUsed event should be pushed when the remover removes a fruit');
+  assert.deepEqual(
+    { row: events[0].row, col: events[0].col, tier: events[0].tier },
+    { row: 0, col: 1, tier: 3 },
+    'the event should carry where and what was removed',
+  );
 }
 
 // Locked power-up: magnet unlocks at a score this fresh state has not reached.
 {
   const state = freshState();
-  const calls = { locked: [] };
   const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state, { onLockedPowerUp: (item) => calls.locked.push(item.id) });
+  attachInput(canvas, state);
   const magnetSlotRect = powerSlotRect(1); // [remover, magnet, bomb] -- see constants.POWERUPS order
   canvas.fire('pointerdown', {
     clientX: magnetSlotRect.x + POWER_SLOT.size / 2,
     clientY: magnetSlotRect.y + POWER_SLOT.size / 2,
   });
-  assert.deepEqual(calls.locked, ['magnet'], 'onLockedPowerUp should fire for a locked/out-of-stock slot');
+  const events = state.events.filter((e) => e.type === 'lockedPowerUp');
+  assert.equal(events.length, 1, 'a lockedPowerUp event should be pushed for a locked/out-of-stock slot');
+  assert.equal(events[0].id, 'magnet');
+  assert.equal(events[0].unlockScore, 1000);
 }
 
-console.log('input.js dispatch: all three callbacks fire correctly when supplied');
+console.log('input.js: bomb, remover, and locked-power-up all push their event onto state.events');
 
-// --- 2. Does the shipped main.js actually supply them? --------------------
+// --- Is the shipped main.js actually wired to all three? -------------------
 
 const mainSrc = readFileSync(path.join(repoRoot, 'js/main.js'), 'utf8');
-const physicsSrc = readFileSync(path.join(repoRoot, 'js/physics.js'), 'utf8');
 
 const attachInputCall = mainSrc.match(/attachInput\(([^)]*)\)/);
 assert.ok(attachInputCall, 'main.js should call attachInput');
-const argCount = attachInputCall[1].split(',').length;
+const argCount = attachInputCall[1].split(',').filter((s) => s.trim()).length;
+assert.equal(argCount, 2, 'main.js should call attachInput with exactly (canvas, state) -- no callbacks object');
 
-const bombHasEventPath = physicsSrc.includes("type: 'bombCleared'") && mainSrc.includes("'bombCleared'");
-const removerHasEventPath = physicsSrc.includes("type: 'removerUsed'") || mainSrc.includes("'removerUsed'");
-const lockedHasEventPath = physicsSrc.includes("type: 'lockedPowerUp'") || mainSrc.includes("'lockedPowerUp'");
+for (const eventType of ['bombCleared', 'removerUsed', 'lockedPowerUp']) {
+  assert.ok(mainSrc.includes(`'${eventType}'`), `main.js's drainEvents should handle a '${eventType}' event`);
+}
 
-console.log(`main.js calls attachInput with ${argCount} argument(s) (3 needed to wire callbacks directly)`);
-console.log(`bomb feedback wired some other way (state.events)?    ${bombHasEventPath}`);
-console.log(`remover feedback wired some other way (state.events)? ${removerHasEventPath}`);
-console.log(`locked-power-up feedback wired some other way?        ${lockedHasEventPath}`);
-
-assert.ok(
-  argCount >= 3 || bombHasEventPath,
-  'bomb feedback is dead: main.js passes no callbacks AND physics.js has no bombCleared event path',
-);
-assert.ok(
-  argCount >= 3 || removerHasEventPath,
-  'onRemoverUsed is dead: main.js never passes callbacks to attachInput, and no equivalent state.events path exists for the remover',
-);
-assert.ok(
-  argCount >= 3 || lockedHasEventPath,
-  'onLockedPowerUp is dead: main.js never passes callbacks to attachInput, and no equivalent state.events path exists for locked power-ups',
-);
+console.log('main.js: attachInput called with (canvas, state); drainEvents handles all three event types');

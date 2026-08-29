@@ -6,7 +6,7 @@ import {
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, MAGNET_STEP_SEC,
 } from './constants.js';
-import { effectiveRows, randomSpawnTier, addScore, registerComboHit } from './state.js';
+import { effectiveRows, nextTierFor, addScore, registerComboHit } from './state.js';
 
 // Tier lookup that also answers for the rainbow sentinel, so callers that only
 // need geometry (radius) never have to special-case it.
@@ -29,17 +29,18 @@ export function spawnFruit(state) {
     return { blocked: true };
   }
 
-  // Rainbow charges ride the normal spawn path, arriving at indices fixed when
-  // the run started rather than being rolled for each spawn. The schedule is
-  // strictly increasing, so only the head can ever match.
-  let tier = state.nextTier;
-  const schedule = state.rainbowSchedule;
-  if (schedule && schedule.length > 0 && schedule[0] === state.spawnIndex) {
-    schedule.shift();
-    tier = RAINBOW_TIER;
+  // state.nextTier was decided one spawn ahead of time (in nextTierFor, called
+  // from here and from startRun) specifically so the HUD's "Next" preview is
+  // never a lie -- nothing here is allowed to override it.
+  const tier = state.nextTier;
+  if (tier === RAINBOW_TIER) {
+    // Counted at actual spawn, not at the earlier scheduling decision: a run
+    // that ends before this fruit ever drops must still read as undelivered,
+    // so endRun's refund check is correct.
+    state.rainbowDelivered = (state.rainbowDelivered || 0) + 1;
   }
   state.spawnIndex += 1;
-  state.nextTier = randomSpawnTier();
+  state.nextTier = nextTierFor(state);
 
   state.active = {
     tier,
@@ -191,9 +192,12 @@ export function settleColumns(state) {
 
 // Removes a single fruit from the board (Fruit Remover power-up), then settles.
 export function removeFruitAt(state, row, col) {
-  if (state.grid[row][col] === null) return false;
+  const tier = state.grid[row][col];
+  if (tier === null) return false;
   state.grid[row][col] = null;
   settleColumns(state);
+  // main.js turns this into a small burst at the removed cell -- see 1.4.
+  state.events.push({ type: 'removerUsed', row, col, tier });
   return true;
 }
 
@@ -249,6 +253,14 @@ export function detonateBomb(state, row, col) {
 // (An earlier version called resolveMerges() here, which cashed in the merge --
 // and any chain cascade behind it -- with no further player input, contradicting
 // this very comment. A compliance review caught it.)
+//
+// Decision (1.2): a magnet-assisted merge still feeds the combo multiplier,
+// unlike a Bomb's collapse (see suppressCombo in detonateBomb/mergeCells). The
+// two are not the same kind of merge: the Magnet only repositions, so the
+// merge still requires the player to drop a fruit to actually happen -- a real
+// merge, worth the streak. The Bomb clears the board wholesale with no drop at
+// all; letting its cascade build a multiplier would make detonating the
+// cheapest way to run the streak up. Deliberate asymmetry -- do not "fix" it.
 export function stepMagnet(state, dt) {
   if (!state.magnetActive || !state.active) return [];
 

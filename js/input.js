@@ -15,7 +15,7 @@ function inRect(point, rect) {
     && point.y >= rect.y && point.y <= rect.y + rect.h;
 }
 
-export function attachInput(canvas, state, callbacks = {}) {
+export function attachInput(canvas, state) {
   let dragging = false;
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
@@ -55,7 +55,10 @@ export function attachInput(canvas, state, callbacks = {}) {
       if (!inRect(point, powerSlotRect(i))) continue;
       const item = items[i];
       if (!canUsePowerUp(state, item)) {
-        callbacks.onLockedPowerUp?.(item);
+        // No board state changes here, so there is no physics event to ride --
+        // push straight onto the same presentation queue main.js already
+        // drains everything else from.
+        state.events.push({ type: 'lockedPowerUp', id: item.id, unlockScore: item.unlockScore || 0 });
         return true;
       }
       if (item.id === 'magnet') {
@@ -97,7 +100,6 @@ export function attachInput(canvas, state, callbacks = {}) {
         if (cleared) {
           consumeBomb(state);
           playUiTick();
-          callbacks.onBombUsed?.(cleared);
         }
       }
       return;
@@ -108,7 +110,6 @@ export function attachInput(canvas, state, callbacks = {}) {
       if (cell && removeFruitAt(state, cell.row, cell.col)) {
         consumeRemover(state);
         playUiTick();
-        callbacks.onRemoverUsed?.();
       }
       return;
     }
