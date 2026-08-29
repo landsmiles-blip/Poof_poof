@@ -491,7 +491,12 @@ async function shot(page, name, full = false) {
       s.grid[rows - 1][5] = 2; s.stackHeight[5] = 1;
       s.grid[rows - 1][1] = 7; s.stackHeight[1] = 1;
       s.active = { tier: 2, col: 3, x: 0, targetX: 0, y: 0 };
-      s.magnetActive = true; s.magnetTimer = 9; s.magnetStepTimer = 0;
+      // 8.3: targeting comes from magnetCol (dragged along the rail), not
+      // automatically from active.col -- startRun's default (board centre)
+      // already happens to be column 3, matching this fixture's intent, but
+      // set it explicitly so the test does not depend on that coincidence.
+      ph.setMagnetColumn(s, 3);
+      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX; s.magnetStepTimer = 0;
       const moves = ph.stepMagnet(s, 0.016);
       out.magnet = {
         moves,
@@ -662,6 +667,29 @@ async function shot(page, name, full = false) {
     const magnetOk = await page.evaluate(() => window.__poofDebugState.magnetActive);
     record('Magnet fires on real touch tap', magnetOk, magnetOk,
       `magnetActive after a real touchscreen tap on its chip: ${magnetOk}`);
+
+    // 8.3: the companion's rail, dragged with ONE continuous real touch --
+    // press somewhere on the rail, slide to a different column, release --
+    // not a tap. HUD_HEIGHT=118, MAGNET_RAIL_HEIGHT=22 (js/constants.js).
+    {
+      const railPoint = (col) => toPage(col * 64 + 32, 118 + 11);
+      const from = railPoint(1);
+      const to = railPoint(4);
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from.x, y: from.y }] });
+      await page.waitForTimeout(40);
+      const afterPress = await page.evaluate(() => window.__poofDebugState.magnetCol);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: to.x, y: to.y }] });
+      await page.waitForTimeout(40);
+      const afterDrag = await page.evaluate(() => window.__poofDebugState.magnetCol);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(40);
+      const stillActive = await page.evaluate(() => window.__poofDebugState.magnetActive);
+
+      const ok = afterPress === 1 && afterDrag === 4 && stillActive;
+      record('Magnet rail drags with a real continuous touch', ok, ok,
+        `press column 1 (real touch): magnetCol=${afterPress}; drag to column 4, no lift: magnetCol=${afterDrag}; still out after release: ${stillActive}`);
+    }
 
     // Bomb and Remover, each checked two ways: (a) two separate taps -- press
     // the chip, lift, press a board cell, lift; (b) the actual regression --

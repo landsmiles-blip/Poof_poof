@@ -3,8 +3,8 @@
 // in-game master mute button; see js/shop.js for the granular Sound/Music
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
-import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH } from './constants.js';
-import { removeFruitAt, detonateBomb, setDragTarget, hardDrop } from './physics.js';
+import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT } from './constants.js';
+import { removeFruitAt, detonateBomb, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
   hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
@@ -19,6 +19,7 @@ function inRect(point, rect) {
 
 export function attachInput(canvas, state) {
   let dragging = false;
+  let draggingMagnet = false;
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
   //
@@ -46,6 +47,18 @@ export function attachInput(canvas, state) {
     const row = Math.floor((point.y - HUD_HEIGHT) / CELL);
     const inBounds = col >= 0 && col < COLS && row >= 0 && row < state.grid.length;
     return inBounds ? { row, col } : null;
+  }
+
+  // 8.3: the magnet companion's rail sits in a thin strip at the very top of
+  // the board, only reachable while it is actually out. Narrower and more
+  // specific than the bomb/remover aiming area below it, so it takes
+  // priority over those if both happen to be armed/active at once.
+  function inRailZone(point) {
+    return state.magnetActive && point.y > HUD_HEIGHT && point.y <= HUD_HEIGHT + MAGNET_RAIL_HEIGHT;
+  }
+
+  function columnAt(point) {
+    return Math.floor(point.x / CELL);
   }
 
   // Returns true if the tap was consumed by a power-up slot.
@@ -117,6 +130,12 @@ export function attachInput(canvas, state) {
       return;
     }
 
+    if (inRailZone(point)) {
+      draggingMagnet = true;
+      setMagnetColumn(state, columnAt(point));
+      return;
+    }
+
     // Armed targeting modes are mutually exclusive, so at most one applies.
     if (state.bombArmed || state.removerArmed) {
       state.armPreviewCell = cellAt(point);
@@ -134,6 +153,10 @@ export function attachInput(canvas, state) {
 
   function onPointerMove(evt) {
     const point = toCanvasPoint(evt);
+    if (draggingMagnet) {
+      setMagnetColumn(state, columnAt(point));
+      return;
+    }
     if (state.bombArmed || state.removerArmed) {
       // Updated on every move so a mouse hovering before it ever clicks also
       // sees the footprint, and so a touch that presses the chip and slides
@@ -146,6 +169,8 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerUp() {
+    draggingMagnet = false;
+
     // armPreviewCell alone decides whether this release commits -- see the
     // long comment above onPointerDown for why an `aiming` flag keyed to
     // where THIS gesture's own pointerdown landed was wrong. It is null

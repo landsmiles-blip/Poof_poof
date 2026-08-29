@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CANVAS_WIDTH, HUD_HEIGHT, CELL, POWER_SLOT, powerSlotRect } from '../js/constants.js';
+import { CANVAS_WIDTH, HUD_HEIGHT, CELL, POWER_SLOT, powerSlotRect, MAGNET_RAIL_HEIGHT } from '../js/constants.js';
 import { canvasHeightFor } from '../js/render.js';
 import { startRun } from '../js/state.js';
 import { attachInput } from '../js/input.js';
@@ -180,6 +180,46 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   assert.equal(state.events.filter((e) => e.type === 'bombCleared').length, 0,
     'arming alone, with no drag onto the board, must not commit');
   assert.equal(state.bombArmed, true, 'the bomb should still be armed, waiting for an actual target');
+}
+
+// 8.3: dragging within the magnet's rail zone (a thin strip at the very top
+// of the board) moves state.magnetCol continuously, the same
+// press/move/release shape bomb/remover's aiming already uses.
+{
+  const state = freshState();
+  state.magnetActive = true;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const railY = HUD_HEIGHT + MAGNET_RAIL_HEIGHT / 2;
+  canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: railY });
+  assert.equal(state.magnetCol, 1, 'pressing within the rail zone should move the companion to that column');
+
+  canvas.fire('pointermove', { clientX: 4 * CELL + CELL / 2, clientY: railY });
+  assert.equal(state.magnetCol, 4, 'dragging along the rail should keep updating the column');
+
+  canvas.fire('pointerup', {});
+  // A release after a rail drag must not fall through to bomb/remover
+  // commit logic -- neither is armed here, so nothing should have fired.
+  assert.equal(state.bombArmed, false, 'a rail drag must not have armed the bomb');
+  assert.equal(state.removerArmed, false, 'a rail drag must not have armed the remover');
+}
+
+// The rail only intercepts drags while the companion is actually out --
+// otherwise this zone behaves like ordinary board space (steering the
+// falling fruit).
+{
+  const state = freshState();
+  state.magnetActive = false;
+  state.magnetCol = 3;
+  state.active = { tier: 0, col: 0, x: CELL / 2, targetX: CELL / 2 };
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const railY = HUD_HEIGHT + MAGNET_RAIL_HEIGHT / 2;
+  canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: railY });
+  assert.equal(state.magnetCol, 3, 'with no companion out, a press in that same zone must not move a nonexistent rail');
+  assert.ok(state.active.targetX > CELL / 2, 'that same press should instead have steered the falling fruit, like any other board tap');
 }
 
 // Locked power-up: magnet unlocks at a score this fresh state has not reached.

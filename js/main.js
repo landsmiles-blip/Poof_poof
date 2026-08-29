@@ -338,9 +338,17 @@ function update(dt) {
   tickChipPulse(state, dt);
   updateEffects(fx, dt);
 
-  if (state.active) {
+  // 8.3: unconditional, not gated on state.active -- the companion's energy
+  // regenerates and its puck keeps gliding toward wherever it was dragged
+  // even in the brief gap between one fruit landing and the next spawning,
+  // matching "always present" rather than pausing whenever nothing happens
+  // to be falling.
+  if (state.magnetActive) {
     const moves = stepMagnet(state, dt);
     if (moves.length > 0) spawnMagnetSlides(fx, state, moves);
+  }
+
+  if (state.active) {
     stepPhysics(state, dt);
   } else {
     const result = spawnFruit(state);

@@ -235,8 +235,25 @@ export const POWERUP_COSTS = Object.fromEntries(POWERUPS.map((p) => [p.id, p.cos
 // Grid-coherent pull: while active, the exposed (top-of-column) fruit matching
 // the held fruit's tier slides ONE column closer, one step at a time. It never
 // teleports fruit into a merge and never touches buried fruit.
-export const MAGNET_DURATION_SEC = 6;
 export const MAGNET_STEP_SEC = 0.45;
+
+// 8.3: stop treating it as a consumable that ticks down invisibly -- it
+// becomes a thing on the board, ridden along a rail across the top of the
+// play area and dragged to whichever column it should pull toward, with its
+// own energy instead of a fixed timer. "Always present, never simply spent":
+// energy drains only while it is actually pulling a matching fruit, and
+// regenerates whenever it is idle (no match in reach, or nothing currently
+// falling to match against) -- a patient player who is not constantly
+// finding a match can keep it out far longer than one spamming it into
+// every column, rather than a hard countdown that ends regardless of use.
+export const MAGNET_ENERGY_MAX = 100;
+export const MAGNET_DRAIN_PER_SEC = 12.5; // empties in 8s of continuous pulling
+export const MAGNET_REGEN_PER_SEC = 25; // refills in 4s of continuous idling
+// Height of the draggable rail strip at the top of the board, and how
+// quickly the drawn puck glides toward wherever it was last dragged --
+// reuses DRAG_LERP's own smoothing feel (see js/physics.js's setDragTarget)
+// so the two draggable things in the game move consistently.
+export const MAGNET_RAIL_HEIGHT = 22;
 // 7.3: a magnet-moved fruit used to snap a full 64px cell between two frames,
 // which read as a rendering glitch rather than attraction -- the grid stays
 // authoritative (this never changes stepMagnet's actual mechanics), only the

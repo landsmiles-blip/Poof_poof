@@ -2,7 +2,7 @@
 
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
-  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, POWER_SLOT, MAGNET_DURATION_SEC, BUILD_VERSION,
+  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, POWER_SLOT, MAGNET_ENERGY_MAX, MAGNET_RAIL_HEIGHT, BUILD_VERSION,
   FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC, BOMB_RADIUS,
 } from './constants.js';
@@ -253,18 +253,9 @@ function drawPowerBar(ctx, state, theme) {
     }
   });
 
-  // Remaining magnet duration, along the top edge of its slot. The chip now
-  // stays on the bar while active even at zero stock, so this always has an
-  // anchor to draw against.
-  if (state.magnetActive) {
-    const idx = items.findIndex((p) => p.id === 'magnet');
-    if (idx >= 0) {
-      const rect = powerSlotRect(idx);
-      const pct = Math.max(0, Math.min(1, state.magnetTimer / MAGNET_DURATION_SEC));
-      ctx.fillStyle = theme.accent;
-      ctx.fillRect(rect.x, rect.y - 4, rect.w * pct, 2.5);
-    }
-  }
+  // 8.3: remaining energy now shows as a ring around the companion itself
+  // (drawMagnetOverlay), which is a far more prominent, always-visible
+  // anchor than a thin bar over a HUD chip -- no duplicate bar here anymore.
 }
 
 // 8.1: the meter that fills as you merge, spanning exactly the width of the
@@ -338,34 +329,58 @@ function drawContactShadow(ctx, cx, cy, radius) {
 // magnetTargets() (physics.js) is read-only and re-evaluated every frame, so
 // this tracks what the magnet is CURRENTLY interested in even between the
 // actual stepMagnet ticks.
+// 8.3: a companion riding a rail across the top of the board, dragged to a
+// column rather than automatically following the falling fruit. The rail,
+// puck and energy ring show whenever it is out, whether or not anything
+// happens to be falling right now ("always present"); the field arcs and
+// target rings only make sense once there is a held fruit to match against.
 function drawMagnetOverlay(ctx, state, theme) {
-  if (!state.magnetActive || !state.active) return;
+  if (!state.magnetActive) return;
 
-  const targets = magnetTargets(state);
-  const heldX = state.active.col * CELL + CELL / 2;
-  const heldY = state.active.y;
-  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+  const railY = MAGNET_RAIL_HEIGHT / 2;
 
   ctx.save();
-  drawIcon(ctx, 'magnet', heldX, heldY - CELL * 0.85, CELL * 0.6, theme.accent);
+  ctx.strokeStyle = theme.grid;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, railY);
+  ctx.lineTo(COLS * CELL, railY);
+  ctx.stroke();
 
-  for (const target of targets) {
-    const tx = target.col * CELL + CELL / 2;
-    const ty = target.row * CELL + CELL / 2;
+  // Energy ring around the puck itself is the only place the companion's
+  // remaining energy shows -- "always present, never simply spent" means
+  // there is no separate countdown to watch elsewhere.
+  const energyPct = Math.max(0, Math.min(1, state.magnetEnergy / MAGNET_ENERGY_MAX));
+  ctx.beginPath();
+  ctx.arc(state.magnetX, railY, CELL * 0.3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * energyPct);
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = 3;
+  ctx.stroke();
 
-    ctx.globalAlpha = 0.35 + 0.35 * pulse;
-    ctx.strokeStyle = theme.accent;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(tx, ty);
-    ctx.lineTo(heldX, heldY);
-    ctx.stroke();
+  drawIcon(ctx, 'magnet', state.magnetX, railY, CELL * 0.52, theme.text);
 
-    ctx.globalAlpha = 0.55 + 0.35 * pulse;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(tx, ty, CELL * 0.34 + CELL * 0.06 * pulse, 0, Math.PI * 2);
-    ctx.stroke();
+  if (state.active) {
+    const targets = magnetTargets(state);
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+
+    for (const target of targets) {
+      const tx = target.col * CELL + CELL / 2;
+      const ty = target.row * CELL + CELL / 2;
+
+      ctx.globalAlpha = 0.35 + 0.35 * pulse;
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(state.magnetX, railY);
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.55 + 0.35 * pulse;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(tx, ty, CELL * 0.34 + CELL * 0.06 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
   ctx.restore();
 }

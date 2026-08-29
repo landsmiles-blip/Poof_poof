@@ -5,7 +5,7 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_TIER, RAINBOW_SCHEDULE,
+  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
@@ -125,7 +125,14 @@ export function createInitialState(save) {
     // input.js's own closure never needed one either.
     armPreviewCell: null,
     magnetActive: false,
-    magnetTimer: 0,
+    // 8.3: energy replaces a fixed timer -- drains while pulling, regenerates
+    // while idle (see physics.js's stepMagnet). magnetCol is where the
+    // player has dragged the companion to along its rail; magnetX is the
+    // continuous, lerped DRAW position of the puck riding there (the grid/
+    // logic only ever care about magnetCol, an integer column).
+    magnetEnergy: 0,
+    magnetCol: Math.floor(COLS / 2),
+    magnetX: Math.floor(COLS / 2) * CELL + CELL / 2,
     magnetStepTimer: 0,
     rainbowSchedule: [],
     rainbowChargeSpent: false,
@@ -426,7 +433,9 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.removerArmed = false;
   state.bombArmed = false;
   state.magnetActive = false;
-  state.magnetTimer = 0;
+  state.magnetEnergy = 0;
+  state.magnetCol = Math.floor(COLS / 2);
+  state.magnetX = state.magnetCol * CELL + CELL / 2;
   state.magnetStepTimer = 0;
   state.lockedFlash = null;
 
@@ -458,7 +467,7 @@ export function endRun(state, reason) {
   state.gameOverReason = reason;
   state.active = null;
   state.magnetActive = false;
-  state.magnetTimer = 0;
+  state.magnetEnergy = 0;
   // 8.1: earned charges are run-scoped and must never survive to the next
   // run or leak into anything persisted -- explicit here (not left to the
   // next startRun) so "gone the instant the run ends" is true even before
@@ -525,11 +534,16 @@ export function addScore(state, points) {
 
 // --- In-run power-up activation -----------------------------------------
 
+// Summons the companion (8.3): starts at full energy, parked over wherever
+// the currently-falling fruit is (a sensible default the player can then
+// drag elsewhere) or the centre column if nothing is falling yet.
 export function activateMagnet(state) {
   if (state.magnetActive) return false;
   if (!consumeCharge(state, 'magnet')) return false;
   state.magnetActive = true;
-  state.magnetTimer = MAGNET_DURATION_SEC;
+  state.magnetEnergy = MAGNET_ENERGY_MAX;
+  state.magnetCol = state.active ? state.active.col : Math.floor(COLS / 2);
+  state.magnetX = state.magnetCol * CELL + CELL / 2;
   state.magnetStepTimer = MAGNET_STEP_SEC;
   return true;
 }
