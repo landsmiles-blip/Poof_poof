@@ -79,16 +79,20 @@ function currentSaveBlob() {
   return toSaveBlob(state, { musicOn: isMusicOn(), sfxOn: !isMuted() });
 }
 
-// Debounced -- call after anything that changes a persisted field (a
-// purchase, a skin pick, starting a run, a sound/music toggle, an in-run
-// power-up spend).
+// Debounced. Not called directly from anywhere else -- state.dirty is the
+// single trigger (checked once a frame in loop(), below), set by whichever
+// state.js export just changed a persisted field, or directly by input.js/
+// shop.js for the mute/music toggles, which live in audio.js/music.js rather
+// than state.js and so have no export to get the flag from for free.
 function persist() {
+  state.dirty = false;
   platform.save(currentSaveBlob());
 }
 
 // Immediate -- call at the specific moments platform.js's contract requires
 // it: endRun, and the pause handler.
 function persistNow() {
+  state.dirty = false;
   platform.save(currentSaveBlob());
   return platform.flush();
 }
@@ -105,7 +109,7 @@ function showScreen() {
     canvas.hidden = true;
     // startRun is called inside shop.js now, so the menu's run toggles (Slow
     // Drop / Extra Row / Rainbow) actually reach it.
-    renderMenu(overlay, state, persist, () => {
+    renderMenu(overlay, state, () => {
       clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
@@ -116,7 +120,7 @@ function showScreen() {
   } else if (state.screen === SCREEN.GAMEOVER) {
     overlay.hidden = false;
     canvas.hidden = true;
-    renderGameOver(overlay, state, persist, () => {
+    renderGameOver(overlay, state, () => {
       clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
@@ -194,6 +198,11 @@ function loop(now) {
     applyPageTheme(themeForScore(state.score));
   }
 
+  // Checked regardless of screen: most persisted-field changes (buying,
+  // picking a skin, toggling sound) happen on the menu/game-over overlays,
+  // not mid-run. Cheap when clean -- one boolean read most frames.
+  if (state.dirty) persist();
+
   requestAnimationFrame(loop);
 }
 
@@ -223,12 +232,13 @@ function update(dt) {
 // -> platform.load() -> build state and hydrate audio/music -> first paint ->
 // platform.firstFrameReady() -> menu rendered and interactive ->
 // platform.gameReady(). gameReady() must not fire while a loading or splash
-// screen is visible -- there is none here, so it fires right after the first
-// showScreen().
+// screen is visible -- there is none here, so it fires as soon as the first
+// showScreen() has actually reached the screen.
 async function boot() {
   // MUST run before createInitialState(): dev mode inflates inventory and
-  // highScore in memory, and the very first persist() would otherwise write
-  // that inflated stock over the player's real save.
+  // highScore in memory, and if a fresh save's starter-Remover grant sets
+  // state.dirty (see createInitialState), the loop's first persist() would
+  // otherwise write that inflated stock over the player's real save.
   platform.setReadOnly(devModeEnabled());
 
   await platform.init();
@@ -239,18 +249,24 @@ async function boot() {
   hydrateMusic(save);
 
   sizeCanvas();
-  attachInput(canvas, state, persist);
+  attachInput(canvas, state);
 
   showScreen();
-  platform.firstFrameReady();
-  // The menu showScreen() just rendered is already interactive -- nothing
-  // loads after this point, so gameReady() follows immediately.
-  platform.gameReady();
 
-  // A fresh save may have just granted the starter Remover (js/state.js's
-  // startingInventory) purely in memory; write it once now that a platform
-  // exists to write it to.
-  persist();
+  // showScreen() only queued a DOM/canvas update; it has not painted yet.
+  // firstFrameReady() waits for the rAF callback that fires right before that
+  // paint, and gameReady() waits for a second one, so it fires only once the
+  // browser has actually painted at least once -- not in the same tick as
+  // firstFrameReady(), and not before either.
+  requestAnimationFrame(() => {
+    platform.firstFrameReady();
+    requestAnimationFrame(() => {
+      // The menu showScreen() rendered is already interactive by construction
+      // (its button listeners are wired synchronously in shop.js) -- nothing
+      // further loads between the two ready calls.
+      platform.gameReady();
+    });
+  });
 
   platform.onPause(() => {
     suspendAudio();

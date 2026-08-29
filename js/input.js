@@ -15,11 +15,7 @@ function inRect(point, rect) {
     && point.y >= rect.y && point.y <= rect.y + rect.h;
 }
 
-// `persist` is one plain function, always given and always called -- not the
-// object of optional feedback hooks phase 1 deleted from here. It marks the
-// current save dirty (main.js's platform.save(), debounced) after anything
-// that changes a persisted field: a power-up spend, or the mute toggle.
-export function attachInput(canvas, state, persist) {
+export function attachInput(canvas, state) {
   let dragging = false;
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
@@ -66,10 +62,7 @@ export function attachInput(canvas, state, persist) {
         return true;
       }
       if (item.id === 'magnet') {
-        if (activateMagnet(state)) {
-          playUiTick();
-          persist();
-        }
+        if (activateMagnet(state)) playUiTick(); // activateMagnet marks state.dirty
       } else if (item.id === 'bomb') {
         armBomb(state, !state.bombArmed);
         playUiTick();
@@ -91,7 +84,10 @@ export function attachInput(canvas, state, persist) {
     if (inRect(point, MUTE_RECT)) {
       toggleMuted();
       playUiTick();
-      persist();
+      // Not a state.js mutation (mute lives in audio.js), so this is the one
+      // place in this file that sets the flag itself rather than getting it
+      // for free from a state.js export.
+      state.dirty = true;
       return;
     }
 
@@ -106,9 +102,8 @@ export function attachInput(canvas, state, persist) {
       if (cell) {
         const cleared = detonateBomb(state, cell.row, cell.col);
         if (cleared) {
-          consumeBomb(state);
+          consumeBomb(state); // marks state.dirty
           playUiTick();
-          persist();
         }
       }
       return;
@@ -117,9 +112,8 @@ export function attachInput(canvas, state, persist) {
     if (state.removerArmed) {
       const cell = cellAt(point);
       if (cell && removeFruitAt(state, cell.row, cell.col)) {
-        consumeRemover(state);
+        consumeRemover(state); // marks state.dirty
         playUiTick();
-        persist();
       }
       return;
     }

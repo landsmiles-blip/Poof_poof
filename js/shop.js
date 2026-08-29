@@ -17,8 +17,8 @@ import { iconCanvas } from './icons.js';
 // Tiers sampled for the little skin swatch previews.
 const SWATCH_TIERS = [0, 3, 6, 8];
 
-export function renderMenu(root, state, persist, onStart) {
-  renderShopScreen(root, state, persist, {
+export function renderMenu(root, state, onStart) {
+  renderShopScreen(root, state, {
     title: 'Poof Poof',
     lead: `
       <p class="subtitle">Drag falling fruit, merge matching pairs, chase the watermelon.</p>
@@ -30,8 +30,8 @@ export function renderMenu(root, state, persist, onStart) {
   });
 }
 
-export function renderGameOver(root, state, persist, onPlayAgain) {
-  renderShopScreen(root, state, persist, {
+export function renderGameOver(root, state, onPlayAgain) {
+  renderShopScreen(root, state, {
     title: 'Game Over',
     lead: `
       <p class="stat">Score: <strong>${state.score}</strong></p>
@@ -46,7 +46,7 @@ export function renderGameOver(root, state, persist, onPlayAgain) {
   });
 }
 
-function renderShopScreen(root, state, persist, { title, lead, playLabel, onStart }) {
+function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
   // Held across redraws so buying something does not clear the toggles.
   const opts = { useSlowDrop: false, useExtraRow: false, useRainbow: false };
 
@@ -87,10 +87,7 @@ function renderShopScreen(root, state, persist, { title, lead, playLabel, onStar
       btn.addEventListener('click', () => {
         unlockAudio();
         const item = POWERUPS.find((p) => p.id === btn.dataset.key);
-        if (item && buyPowerUp(state, item.id, item.cost)) {
-          playUiTick();
-          persist();
-        }
+        if (item && buyPowerUp(state, item.id, item.cost)) playUiTick(); // marks state.dirty
         draw();
       });
     });
@@ -98,10 +95,7 @@ function renderShopScreen(root, state, persist, { title, lead, playLabel, onStar
     root.querySelectorAll('.skin-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         unlockAudio();
-        if (selectSkin(state, btn.dataset.skin)) {
-          playUiTick();
-          persist();
-        }
+        if (selectSkin(state, btn.dataset.skin)) playUiTick(); // marks state.dirty
         draw();
       });
     });
@@ -112,13 +106,12 @@ function renderShopScreen(root, state, persist, { title, lead, playLabel, onStar
 
     root.querySelector('#play-btn').addEventListener('click', () => {
       unlockAudio();
-      startRun(state, opts);
-      persist();
+      startRun(state, opts); // marks state.dirty
       onStart();
     });
 
-    wireSoundButton(root, draw, persist);
-    wireMusicButton(root, draw, persist);
+    wireSoundButton(root, draw, state);
+    wireMusicButton(root, draw, state);
   }
 
   draw();
@@ -227,26 +220,28 @@ function musicButtonHTML() {
   return `<button class="sound-btn" id="music-btn">${isMusicOn() ? 'Music: on' : 'Music: off'}</button>`;
 }
 
-function wireSoundButton(root, redraw, persist) {
+// Mute/music live in audio.js/music.js, not state.js, so unlike the buttons
+// above these have no state.js export to get state.dirty from for free.
+function wireSoundButton(root, redraw, state) {
   const btn = root.querySelector('#sound-btn');
   if (!btn) return;
   btn.addEventListener('click', () => {
     unlockAudio();
     toggleMuted();
     playUiTick();
-    persist();
+    state.dirty = true;
     if (redraw) redraw();
   });
 }
 
-function wireMusicButton(root, redraw, persist) {
+function wireMusicButton(root, redraw, state) {
   const btn = root.querySelector('#music-btn');
   if (!btn) return;
   btn.addEventListener('click', () => {
     unlockAudio();
     toggleMusic();
     playUiTick();
-    persist();
+    state.dirty = true;
     if (redraw) redraw();
   });
 }

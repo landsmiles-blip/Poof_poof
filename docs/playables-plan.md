@@ -257,20 +257,39 @@ passes.
 
 - Blob: `{ v: 1, highScore, coins, inventory, unlockedSkins, selectedSkin,
   musicOn, sfxOn }`. (`hapticsOn` deferred to phase 3, as planned.)
-- **Write discipline, adjusted from the brief:** `js/state.js` cannot call
-  `platform.save()` itself -- see "What must not change" below -- so it no
-  longer persists anything at all. Every mutating export (`startRun`,
-  `buyPowerUp`, `activateMagnet`, `consumeBomb`, `consumeRemover`,
-  `selectSkin`, the audio/music toggles) is now pure, and the *caller*
-  (`js/main.js`, `js/shop.js`, `js/input.js`) calls a `persist` function
-  afterward -- `platform.save()`, debounced ~1s. `js/state.js`'s new
-  `toSaveBlob(state, { musicOn, sfxOn })` shapes the blob; `js/main.js`'s
-  `currentSaveBlob()` is the only place that composes it with the audio/music
-  flags, which live in `js/audio.js`/`js/music.js`, not in `state`.
+- **Write discipline, revised twice:** `js/state.js` cannot call
+  `platform.save()` itself -- see "What must not change" below. The first cut
+  threaded a `persist` function into `attachInput`/`renderMenu`/`renderGameOver`
+  as a third argument, called explicitly at every mutating call site --
+  correct, but it broke phase 1's `attachInput.length === 2` regression test
+  and scattered the responsibility for remembering to call it across
+  `js/input.js` and `js/shop.js`. Moved the *marking* into `js/state.js`
+  instead: every mutating export (`startRun`, `buyPowerUp`, `activateMagnet`,
+  `consumeBomb`, `consumeRemover`, `selectSkin`, `endRun`) sets a plain
+  `state.dirty = true` on success (a data flag, not an I/O call, so this does
+  not reintroduce a platform import) and leaves it alone on a no-op failure.
+  `js/input.js`/`js/shop.js` set it directly for the one case outside
+  `state.js`'s reach -- the mute/music toggle, which lives in
+  `js/audio.js`/`js/music.js`. `attachInput`/`renderMenu`/`renderGameOver` are
+  back to their original phase-1 signatures; `unit-tests/input-callbacks.js`
+  asserts the arity again, plus that `state.dirty` ends up set only where
+  warranted. `js/main.js`'s `loop()` is the single place that reads and clears
+  it, once a frame, regardless of screen (most of these actions happen on the
+  menu/game-over overlays, not mid-run) -- `unit-tests/dirty-flag.js` covers
+  the flag itself.
 - `persistNow()` (`save()` then `flush()`) is called at `endRun` and inside
   the pause handler, both in `js/main.js`, per the brief -- not inside
   `state.js`'s `endRun` itself, which the brief's own wording implied but
   "what must not change" ruled out.
+- **`persist()` is conditional, not unconditional:** the first cut called
+  `persist()` once, unconditionally, right after boot -- covering the
+  fresh-save starter-Remover grant, but also firing (harmlessly, but
+  needlessly) on every single boot of an existing save where nothing changed.
+  `createInitialState()` now only sets `state.dirty = true` when the grant
+  actually happens; loading an existing save, or booting under `?dev=1`,
+  leaves it `false`. The loop's dirty-check above picks up a genuine grant on
+  its own; migration doesn't need this at all, since `localImpl.load()`
+  already persists a migrated blob synchronously, inside `load()` itself.
 - **Migrated:** `localImpl.load()` reads the seven legacy keys when the
   versioned key is absent, builds the blob, and writes it back once.
   `unit-tests/migration.js` seeds all seven, asserts nothing is lost, and
@@ -293,16 +312,33 @@ takes the loaded blob as an argument; `audio.js`/`music.js` each export
 `hydrate(save)` instead of self-loading; `js/main.js` is now `async function
 boot()`. Handshake order as specified: `platform.init()` -> `load()` ->
 `createInitialState(save)` + `hydrateAudio(save)` + `hydrateMusic(save)` ->
-`sizeCanvas()`/`attachInput()` -> `showScreen()` (first paint) ->
-`firstFrameReady()` -> `gameReady()` (menu is already interactive, nothing
-loads after) -> one `persist()` in case boot just granted the starter Remover
--> `onPause`/`onResume` wired -> font-ready gate -> `requestAnimationFrame(loop)`.
+`sizeCanvas()`/`attachInput()` -> `showScreen()` (queues the first paint) ->
+`onPause`/`onResume` wired -> font-ready gate -> `requestAnimationFrame(loop)`.
+
+**`firstFrameReady()`/`gameReady()` timing, corrected:** the first cut called
+both synchronously, in the same tick as `showScreen()`, before the browser had
+painted anything at all. Now both wait on `requestAnimationFrame`:
+`firstFrameReady()` fires inside the first rAF callback after `showScreen()`
+(the callback that runs right before the browser's next paint), and
+`gameReady()` fires inside a second, nested rAF callback one tick later --
+guaranteeing at least one real paint has happened, and that the two calls
+never land in the same tick. The menu is interactive by construction the
+moment `showScreen()` returns (`shop.js` wires its button listeners
+synchronously), so nothing needs to load between the two calls.
 
 **One gap, not resolved:** the brief calls for an SDK script tag in
 `index.html` before `js/main.js`. Left as a documented, uninserted comment
 rather than a guessed `src` -- an invented Playables SDK URL would be
 indistinguishable from a verified one to whoever reads this next. Needs the
 real tag from Google's onboarding docs before certification.
+
+**Checked, not a violation:** `boot()`'s font-loading step is
+`document.fonts.ready` -- a browser API that resolves once the `@font-face`
+already declared in `css/style.css` finishes loading, not a fetch the game
+issues. That `@font-face` points at `url('../assets/fonts/fredoka-latin.woff2')`,
+a relative, same-origin path to a file already shipped in the bundle (per
+`js/constants.js`'s `FONT_FAMILY` comment, self-hosted specifically so nothing
+needs fetching). No external request is made; nothing to remove.
 
 **Found and fixed along the way (not in the brief):** `service-worker.js`'s
 precache list still named the deleted `js/storage.js` and was missing the new

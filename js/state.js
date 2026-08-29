@@ -43,12 +43,18 @@ export function createInitialState(save) {
   const storedInventory = (blob.inventory && typeof blob.inventory === 'object')
     ? { ...DEFAULT_INVENTORY, ...blob.inventory }
     : { ...DEFAULT_INVENTORY };
+  const { inventory, freshGrant } = startingInventory(dev, storedInventory, storedHigh);
 
   return {
     screen: SCREEN.MENU,
     highScore,
     coins: Number.isFinite(blob.coins) ? blob.coins : 0,
-    inventory: startingInventory(dev, storedInventory, storedHigh),
+    inventory,
+    // Only true when this boot just granted the starter Remover -- nothing
+    // else about loading a save is a change that needs writing back out.
+    // Every later mutator below sets this the same way; main.js's loop is the
+    // only place that ever reads and clears it.
+    dirty: freshGrant,
 
     unlockedSkins,
     selectedSkin,
@@ -98,17 +104,18 @@ export function createInitialState(save) {
 // charge means the bar is populated and tappable from the very first drop.
 //
 // Pure: this used to persist the grant itself (saveInventory), but state.js no
-// longer touches storage at all -- the caller (main.js's boot) persists once
-// after createInitialState, which covers this the same way.
+// longer touches storage at all. Returns freshGrant so createInitialState can
+// mark state.dirty -- persisting is conditional on an actual change, not
+// unconditional on every boot.
 function startingInventory(dev, storedInventory, storedHigh) {
   const inv = { ...storedInventory };
   if (dev) {
     for (const p of POWERUPS) inv[p.id] = Math.max(inv[p.id] || 0, 5);
-    return inv;
+    return { inventory: inv, freshGrant: false };
   }
   const isFreshSave = Object.values(inv).every((n) => !n) && storedHigh === 0;
   if (isFreshSave) inv.remover = 1;
-  return inv;
+  return { inventory: inv, freshGrant: isFreshSave };
 }
 
 // The inverse of reading `save` in createInitialState: shapes the current
@@ -220,6 +227,7 @@ export function skinColor(state, tierIndex) {
 export function selectSkin(state, id) {
   if (!state.unlockedSkins.includes(id)) return false;
   state.selectedSkin = id;
+  state.dirty = true;
   return true;
 }
 
@@ -320,6 +328,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.bestComboThisRun = 0;
   resetCombo(state);
   state.screen = SCREEN.PLAYING;
+  state.dirty = true; // inventory (slowDrop/extraRow/rainbow) may have changed
 }
 
 export function endRun(state, reason) {
@@ -367,12 +376,17 @@ export function endRun(state, reason) {
   if (state.rainbowChargeSpent && state.rainbowDelivered === 0) {
     state.inventory.rainbow = (state.inventory.rainbow || 0) + 1;
   }
+
+  // main.js calls persistNow() (immediate, not debounced) right after this --
+  // set unconditionally anyway so nothing else has to know that.
+  state.dirty = true;
 }
 
 export function buyPowerUp(state, key, cost) {
   if (state.coins < cost) return false;
   state.coins -= cost;
   state.inventory[key] = (state.inventory[key] || 0) + 1;
+  state.dirty = true;
   return true;
 }
 
@@ -389,6 +403,7 @@ export function activateMagnet(state) {
   state.magnetActive = true;
   state.magnetTimer = MAGNET_DURATION_SEC;
   state.magnetStepTimer = MAGNET_STEP_SEC;
+  state.dirty = true;
   return true;
 }
 
@@ -412,6 +427,7 @@ export function consumeBomb(state) {
   if ((state.inventory.bomb || 0) <= 0) return false;
   state.inventory.bomb -= 1;
   state.bombArmed = false;
+  state.dirty = true;
   return true;
 }
 
@@ -419,5 +435,6 @@ export function consumeRemover(state) {
   if ((state.inventory.remover || 0) <= 0) return false;
   state.inventory.remover -= 1;
   state.removerArmed = false;
+  state.dirty = true;
   return true;
 }
