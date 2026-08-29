@@ -2,12 +2,53 @@
 // No rendering, input, or audio logic here, just plain data and state transitions.
 
 import {
-  COLS, ROWS, SPAWN_POOL, COINS_PER_SCORE,
-  COMBO_WINDOW_SEC, COMBO_STEP, COMBO_MAX_MULTIPLIER,
+  COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
+  COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_TIER, RAINBOW_SCHEDULE,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION,
+  GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
+  GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
 } from './constants.js';
+
+// --- Difficulty ramp -------------------------------------------------------
+// Lives here rather than physics.js so state.js can stay the single source of
+// truth for anything comboWindowSecFor also needs -- physics.js already
+// imports from state.js, and the reverse would be a cycle.
+//
+// Piecewise-linear in spawnIndex: START -> BASE over [0, DROPS_TO_BASE], then
+// BASE -> CAP over [DROPS_TO_BASE, DROPS_TO_CAP], flat at CAP after that.
+export function gravityRampMultiplier(spawnIndex) {
+  const drops = Math.max(0, spawnIndex);
+  if (drops >= GRAVITY_RAMP_DROPS_TO_CAP) return GRAVITY_RAMP_CAP_MULTIPLIER;
+  if (drops >= GRAVITY_RAMP_DROPS_TO_BASE) {
+    const t = (drops - GRAVITY_RAMP_DROPS_TO_BASE) / (GRAVITY_RAMP_DROPS_TO_CAP - GRAVITY_RAMP_DROPS_TO_BASE);
+    return GRAVITY_RAMP_BASE_MULTIPLIER + (GRAVITY_RAMP_CAP_MULTIPLIER - GRAVITY_RAMP_BASE_MULTIPLIER) * t;
+  }
+  const t = drops / GRAVITY_RAMP_DROPS_TO_BASE;
+  return GRAVITY_RAMP_START_MULTIPLIER + (GRAVITY_RAMP_BASE_MULTIPLIER - GRAVITY_RAMP_START_MULTIPLIER) * t;
+}
+
+export function currentGravityPxPerSec(state) {
+  return GRAVITY_PX_PER_SEC * gravityRampMultiplier(state.spawnIndex);
+}
+
+// Time for a fruit to fall the full board height at a given gravity -- the
+// "empty-board fall" the combo-window comment in constants.js refers to.
+// The +TIERS[0].radius term is the same one the pre-existing "Combo
+// multiplier" e2e test used: a fruit's centre travels to ROWS-1 cells plus
+// half a cell plus its own radius before its bottom edge reaches the floor.
+function emptyBoardFallSec(gravityPxPerSec) {
+  const distance = (ROWS - 1) * CELL + CELL / 2 + TIERS[0].radius;
+  return distance / gravityPxPerSec;
+}
+
+// See the extended COMBO_WINDOW_FALL_MULTIPLIER comment in constants.js: the
+// window must track the CURRENT (ramped) gravity, not a fixed one, or the
+// early, slower part of the ramp falls outside it again.
+export function comboWindowSecFor(state) {
+  return emptyBoardFallSec(currentGravityPxPerSec(state)) * COMBO_WINDOW_FALL_MULTIPLIER;
+}
 
 const DEFAULT_INVENTORY = {
   slowDrop: 0, remover: 0, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0,
@@ -243,7 +284,7 @@ export function comboMultiplier(comboCount) {
 // should apply to this merge's points.
 export function registerComboHit(state) {
   state.comboCount += 1;
-  state.comboTimer = COMBO_WINDOW_SEC;
+  state.comboTimer = comboWindowSecFor(state);
   if (state.comboCount > state.bestComboThisRun) {
     state.bestComboThisRun = state.comboCount;
   }

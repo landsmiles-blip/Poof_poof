@@ -2,11 +2,11 @@
 // Pure functions over the state object -- no canvas or DOM access here.
 
 import {
-  COLS, CELL, GRAVITY_PX_PER_SEC, SLOW_DROP_MULTIPLIER, DRAG_LERP,
+  COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, MAGNET_STEP_SEC,
 } from './constants.js';
-import { effectiveRows, nextTierFor, addScore, registerComboHit } from './state.js';
+import { effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec } from './state.js';
 
 // Tier lookup that also answers for the rainbow sentinel, so callers that only
 // need geometry (radius) never have to special-case it.
@@ -69,7 +69,9 @@ export function stepPhysics(state, dt) {
   const col = columnForX(state, active.x);
   active.col = col;
 
-  const gravity = GRAVITY_PX_PER_SEC * (state.slowDropActive ? SLOW_DROP_MULTIPLIER : 1);
+  // Slow Drop multiplies the RAMPED value, so it stays proportionally useful
+  // late in a run rather than becoming irrelevant as the ramp climbs past it.
+  const gravity = currentGravityPxPerSec(state) * (state.slowDropActive ? SLOW_DROP_MULTIPLIER : 1);
   active.y += gravity * dt;
 
   const rows = effectiveRows(state);
@@ -82,6 +84,21 @@ export function stepPhysics(state, dt) {
     return true;
   }
   return false;
+}
+
+// Keyboard's "drop it" (6.4): skips straight to landing at the fruit's
+// current column, using the exact same landing math stepPhysics ticks toward
+// every frame -- so a hard drop resolves identically to letting gravity carry
+// it there, just without the wait a keyboard-only player has no way to skip.
+export function hardDrop(state) {
+  const active = state.active;
+  if (!active) return false;
+  const col = columnForX(state, active.x);
+  const rows = effectiveRows(state);
+  const landingRow = rows - 1 - state.stackHeight[col];
+  lockFruit(state, landingRow, col, active.tier);
+  state.active = null;
+  return true;
 }
 
 function columnForX(state, x) {
@@ -157,19 +174,30 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   // score (they are real merges) but at 1x, and they do not extend the streak.
   const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
 
+  // Pixel position of the merge, frozen right now. A later merge elsewhere in
+  // the same cascade can call settleColumns again and drop THIS cell's
+  // contents further down the column to close a gap below it -- row/col
+  // above stay correct for the squash effect, which re-checks them against
+  // the live grid (plus a tier guard) at render time, but a particle burst
+  // computed from row/col at drain time would then land wherever the fruit
+  // ended UP, not where it actually merged. x/y sidestep that: they are a
+  // point in space, not a cell reference, so no later shift can move them.
+  const x = keepC * CELL + CELL / 2;
+  const y = keepR * CELL + CELL / 2;
+
   if (tier >= MAX_TIER) {
     state.grid[keepR][keepC] = null;
     addScore(state, Math.round(WATERMELON_CLEAR_BONUS * multiplier));
-    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, multiplier });
+    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, x, y, multiplier });
   } else {
     const newTier = tier + 1;
     state.grid[keepR][keepC] = newTier;
     addScore(state, Math.round(TIERS[newTier].points * multiplier));
-    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, multiplier });
+    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, x, y, multiplier });
     if (newTier >= MAX_TIER) {
       // Reaching the highest tier for the first time is its own moment,
       // distinct from clearing a pair of them.
-      state.events.push({ type: 'reachedTop', tier: newTier, row: keepR, col: keepC });
+      state.events.push({ type: 'reachedTop', tier: newTier, row: keepR, col: keepC, x, y });
     }
   }
 }

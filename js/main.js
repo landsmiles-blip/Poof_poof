@@ -241,6 +241,8 @@ function drainEvents() {
       spawnMergeEffects(fx, {
         row: event.row,
         col: event.col,
+        x: event.x,
+        y: event.y,
         tier: event.tier,
         color: colorForTier(event.tier),
       });
@@ -249,6 +251,8 @@ function drainEvents() {
       spawnMergeEffects(fx, {
         row: event.row,
         col: event.col,
+        x: event.x,
+        y: event.y,
         tier: TIERS.length - 1,
         color: colorForTier(TIERS.length - 1),
       });
@@ -323,6 +327,10 @@ function update(dt) {
     if (result.blocked || isGameOver(state)) {
       endRun(state, 'grid-full');
       persistNow();
+      // The save's highScore, not this run's score -- that is the value the
+      // requirement asks to match, and it is already what endRun just wrote.
+      // localImpl no-ops; ytgameImpl reports it to the host leaderboard.
+      platform.submitScore(state.highScore);
       playGameOver();
       stopMusic();
       showScreen();

@@ -112,4 +112,10 @@ for (const eventType of ['bombCleared', 'removerUsed', 'lockedPowerUp']) {
 
 assert.ok(mainSrc.includes('state.dirty'), 'main.js should check state.dirty somewhere (the loop) to trigger persist()');
 
+// Regression test for 6.5: platform.submitScore() must be called from
+// endRun's call site with the save's highScore, not the just-finished run's
+// (possibly lower) score.
+assert.ok(/endRun\([^)]*\)[\s\S]{0,400}?platform\.submitScore\(state\.highScore\)/.test(mainSrc),
+  'main.js should call platform.submitScore(state.highScore) shortly after endRun');
+
 console.log('main.js: attachInput called with (canvas, state); drainEvents handles all three event types; state.dirty drives persistence');

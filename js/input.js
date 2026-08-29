@@ -4,7 +4,7 @@
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
 import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH } from './constants.js';
-import { removeFruitAt, detonateBomb, setDragTarget } from './physics.js';
+import { removeFruitAt, detonateBomb, setDragTarget, hardDrop } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
   hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
@@ -131,16 +131,55 @@ export function attachInput(canvas, state) {
     dragging = false;
   }
 
+  // Keyboard (6.4): left/right steer via the same setDragTarget the pointer
+  // path uses (one CELL per press, rather than a per-frame held-key tracker --
+  // the browser's own key repeat gives held-key movement for free), space or
+  // down hard-drops, Escape cancels an armed power-up.
+  //
+  // The design brief for this asked for Escape to "close the shop overlay",
+  // but the overlay (js/shop.js) is never shown DURING a run to begin with --
+  // it fills the screen only on the menu/game-over transition, mutually
+  // exclusive with the canvas -- so there is no in-run overlay for Escape to
+  // dismiss. Cancelling an armed power-up is the closest real analog: it is
+  // the one piece of "modal, dismissible" UI state a run actually has.
+  function onKeyDown(evt) {
+    if (evt.key === 'Escape') {
+      if (state.bombArmed) armBomb(state, false);
+      if (state.removerArmed) armRemover(state, false);
+      return;
+    }
+
+    if (!state.active) return;
+
+    if (evt.key === 'ArrowLeft') {
+      evt.preventDefault();
+      setDragTarget(state, state.active.targetX - CELL);
+    } else if (evt.key === 'ArrowRight') {
+      evt.preventDefault();
+      setDragTarget(state, state.active.targetX + CELL);
+    } else if (evt.key === ' ' || evt.key === 'Spacebar' || evt.key === 'ArrowDown') {
+      evt.preventDefault();
+      hardDrop(state);
+    }
+  }
+
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerUp);
   canvas.style.touchAction = 'none';
 
+  // Keyboard events don't target the canvas (a <canvas> isn't focusable
+  // without a tabindex), so this listens on window like main.js's own
+  // resize/DPR watchers do -- window is not the storage/lifecycle surface
+  // js/platform.js guards, just an input source.
+  if (typeof window !== 'undefined') window.addEventListener('keydown', onKeyDown);
+
   return () => {
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);
     canvas.removeEventListener('pointercancel', onPointerUp);
+    if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeyDown);
   };
 }

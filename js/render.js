@@ -1,11 +1,11 @@
 // All canvas drawing lives here. Nothing in this file mutates game state.
 
 import {
-  COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, COMBO_WINDOW_SEC,
+  COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
   RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
-  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC,
+  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, DANGER_ROWS_REMAINING,
 } from './constants.js';
-import { skinColor, comboMultiplier, hudPowerUps } from './state.js';
+import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
 import { squashScaleAt, shakeOffset, drawParticles } from './effects.js';
 import { themeForScore } from './theme.js';
 import { drawIcon } from './icons.js';
@@ -112,7 +112,7 @@ function drawComboMeter(ctx, state, width, theme) {
   if (state.comboCount < 2) return;
 
   const multiplier = comboMultiplier(state.comboCount);
-  const remaining = Math.max(0, Math.min(1, state.comboTimer / COMBO_WINDOW_SEC));
+  const remaining = Math.max(0, Math.min(1, state.comboTimer / comboWindowSecFor(state)));
 
   ctx.save();
   ctx.textAlign = 'center';
@@ -219,6 +219,23 @@ function drawPowerBar(ctx, state, theme) {
   }
 }
 
+// The run ends when the spawn column (always the centre one) reaches the
+// top, with previously no warning of any kind. Pulses that column's outline
+// once it is within DANGER_ROWS_REMAINING of full, in the theme's own accent
+// colour so it moves with the milestone palette instead of fighting it.
+function drawDangerState(ctx, state, rows, theme) {
+  const startCol = Math.floor(COLS / 2);
+  if (state.stackHeight[startCol] < rows - DANGER_ROWS_REMAINING) return;
+
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
+  ctx.save();
+  ctx.globalAlpha = 0.3 + 0.4 * pulse;
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(startCol * CELL + 2, 2, CELL - 4, rows * CELL - 4);
+  ctx.restore();
+}
+
 function drawBoard(ctx, state, fx, theme) {
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
@@ -232,6 +249,8 @@ function drawBoard(ctx, state, fx, theme) {
     ctx.lineTo(c * CELL, rows * CELL);
     ctx.stroke();
   }
+
+  drawDangerState(ctx, state, rows, theme);
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < COLS; c++) {

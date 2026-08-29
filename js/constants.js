@@ -41,9 +41,41 @@ export const MAX_TIER = TIERS.length - 1;
 // Which tiers can spawn as a new falling fruit, and their relative odds.
 export const SPAWN_POOL = [0, 0, 0, 1, 1, 2];
 
-export const GRAVITY_PX_PER_SEC = 260;
+export const GRAVITY_PX_PER_SEC = 260; // the baseline the ramp below reaches at drop GRAVITY_RAMP_DROPS_TO_BASE
 export const SLOW_DROP_MULTIPLIER = 0.5;
 export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the pointer horizontally
+
+// --- Difficulty ramp -------------------------------------------------------
+// Found by playing rather than reading: gravity was a flat 260 px/s from the
+// first drop of a run to the last -- a new player's first drop fell exactly
+// as fast as an expert's hundredth. Keyed off state.spawnIndex (drops so
+// far), not score: score already drives the milestones and the theme
+// interpolation, and coupling a third system to it makes all three harder to
+// reason about, whereas "the more you play" is exactly what a drop count
+// measures. state.spawnIndex is reset to 0 in startRun, so the ramp resets
+// with every run for free.
+//
+// A starting point, tuned by feel, not derived from simulation like the
+// combo/milestone constants: begin noticeably gentler than today, reach
+// today's speed by drop 20, and cap at 1.4x by drop 60. The cap is load-
+// bearing, not just restraint -- see stepPhysics's dt clamp, which is what
+// keeps even the capped speed free of any tunnelling risk. Do not remove it
+// on the grounds that it "seems fine"; the clamp is what makes it fine.
+export const GRAVITY_RAMP_START_MULTIPLIER = 0.7;
+export const GRAVITY_RAMP_BASE_MULTIPLIER = 1.0;
+export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.4;
+export const GRAVITY_RAMP_DROPS_TO_BASE = 20;
+export const GRAVITY_RAMP_DROPS_TO_CAP = 60;
+
+// The run ends when the spawn column's stack reaches the top; this is how
+// many rows of headroom remain when the danger warning (render.js) starts
+// pulsing that column's outline.
+export const DANGER_ROWS_REMAINING = 2;
+
+// prefers-reduced-motion (js/effects.js): shake and particles are cut
+// entirely, but a merge should still read as a merge, so squash is scaled
+// down rather than removed -- a much smaller pop, not a dead board.
+export const REDUCED_MOTION_SQUASH_SCALE = 0.35;
 
 export const WATERMELON_CLEAR_BONUS = 200;
 
@@ -66,7 +98,17 @@ export const COINS_PER_SCORE = 1 / 25; // score-to-coin conversion at run end
 // -- it still measures merge consistency rather than mere patience, so it
 // cannot degenerate into the permanent flat 3x an earlier 2.0s value produced
 // -- while letting a first-run player actually see a combo.
-export const COMBO_WINDOW_SEC = 1.8;
+//
+// Phase 6's gravity ramp broke this the moment gravity stopped being a
+// constant: at the ramp's 0.7x starting speed, an empty-board fall takes
+// ~2.5s, well past a flat 1.8s window -- the exact bug this comment
+// describes, reintroduced for anyone playing their first thirty drops. So
+// the window is no longer a constant; it is FALL_MULTIPLIER times whatever
+// the CURRENT empty-board fall time is (see comboWindowSecFor in state.js),
+// which reproduces today's 1.8s at today's 260 px/s gravity and preserves
+// the same "just above one fall, below two" relationship at every point on
+// the ramp instead of only at the ramp's baseline.
+export const COMBO_WINDOW_FALL_MULTIPLIER = 1.08;
 export const COMBO_STEP = 0.25; // multiplier gained per extra merge in the streak
 export const COMBO_MAX_MULTIPLIER = 3;
 
@@ -107,6 +149,21 @@ export const SKINS = [
     name: 'Midnight',
     unlockScore: MILESTONE_SCORES[3],
     colors: ['#6c7ae0', '#8e6fd8', '#7fd1d9', '#5aa9e6', '#4c6ef5', '#63c7b2', '#a5b4fc', '#7dd3c0', '#2f9e8f'],
+  },
+  // 6.7: every other skin separates tiers by hue alone, which is exactly what
+  // collapses under deuteranopia/protanopia -- reds, greens and browns fold
+  // together. Built from the Okabe-Ito palette (the standard reference for
+  // colorblind-safe qualitative color), extended by two (grey, dark brown)
+  // to cover all nine tiers, and varied in lightness as well as hue so two
+  // adjacent tiers stay distinguishable even under red-green confusion.
+  // Unlocked from the start, matching Classic: an accessibility option gated
+  // behind score progress is not actually accessible to the player who needs
+  // it on their first run.
+  {
+    id: 'clarity',
+    name: 'Clarity',
+    unlockScore: MILESTONE_SCORES[0],
+    colors: ['#0072B2', '#E69F00', '#F0E442', '#D55E00', '#009E73', '#56B4E9', '#CC79A7', '#999999', '#5C4033'],
   },
 ];
 

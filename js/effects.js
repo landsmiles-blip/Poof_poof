@@ -11,7 +11,7 @@ import {
   SQUASH_DURATION_SEC, SQUASH_MIN, SQUASH_MAX,
   PARTICLE_MIN, PARTICLE_MAX, PARTICLE_LIFE_SEC, PARTICLE_SPEED, PARTICLE_GRAVITY,
   SHAKE_MIN_TIER, SHAKE_DURATION_SEC, SHAKE_MAX_PX,
-  HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS,
+  HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS, REDUCED_MOTION_SQUASH_SCALE,
 } from './constants.js';
 
 export function createEffects() {
@@ -39,6 +39,32 @@ export function toggleHaptics() {
   return hapticsOn;
 }
 
+// Read once at startup, the same as devicePixelRatio -- an OS-level
+// accessibility preference, not a player-facing toggle like sound, music or
+// haptics, so there is no in-game control for it. Feature-checked and
+// swallowed the same way vibrate() is below: an environment with no
+// matchMedia (or one that throws under a restrictive permissions policy)
+// simply gets full motion, matching how those environments behaved before
+// this existed.
+let reducedMotion = false;
+try {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+} catch {
+  reducedMotion = false;
+}
+
+export function isReducedMotion() {
+  return reducedMotion;
+}
+
+// Test-only: unit tests run under plain Node, with no window/matchMedia to
+// read a real preference from.
+export function _setReducedMotion(value) {
+  reducedMotion = value;
+}
+
 // 0 at tier 0, 1 at the top tier.
 function tierRatio(tier) {
   return Math.max(0, Math.min(1, tier / MAX_TIER));
@@ -50,8 +76,9 @@ function tierRatio(tier) {
 // into a single arbitrary-length tick decided by whichever cell the scan
 // visited last. The caller fires one deliberate pulse for the whole batch
 // instead. Mirrors the state.suppressCombo pattern used for the same reason.
-export function spawnMergeEffects(fx, { row, col, tier, color, silent = false }) {
+export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y }) {
   const ratio = tierRatio(tier);
+  const squashScale = reducedMotion ? REDUCED_MOTION_SQUASH_SCALE : 1;
 
   fx.squashes.push({
     row,
@@ -63,12 +90,23 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false })
     tier,
     t: 0,
     duration: SQUASH_DURATION_SEC,
-    amount: SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio,
+    amount: (SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio) * squashScale,
   });
 
+  // Reduced motion: no particles, no shake -- a merge should still register
+  // (the squash above still fires, just smaller), but the moving, flying
+  // pieces are exactly what the preference asks to remove.
+  if (reducedMotion) {
+    if (!silent) vibrate(tier >= SHAKE_MIN_TIER ? HAPTIC_TOP_TIER_MS : HAPTIC_MERGE_MS);
+    return;
+  }
+
   const count = Math.round(PARTICLE_MIN + (PARTICLE_MAX - PARTICLE_MIN) * ratio);
-  const cx = col * CELL + CELL / 2;
-  const cy = row * CELL + CELL / 2;
+  // Prefer the caller's own frozen (x, y) when it has one -- see the comment
+  // on mergeCells in physics.js for why row/col alone is not safe here during
+  // a cascade. Callers with no cascade risk (remover, bomb) just pass row/col.
+  const cx = x ?? (col * CELL + CELL / 2);
+  const cy = y ?? (row * CELL + CELL / 2);
   for (let i = 0; i < count; i++) {
     // Spread evenly around the circle with jitter so bursts don't look banded.
     const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;

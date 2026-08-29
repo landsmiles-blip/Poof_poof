@@ -412,19 +412,23 @@ async function shot(page, name, full = false) {
       const C = await import('./js/constants.js');
       const st = await import('./js/state.js');
       const ph = await import('./js/physics.js');
-      const emptyBoardFall = ((C.ROWS - 1) * C.CELL + C.CELL / 2 + 15) / C.GRAVITY_PX_PER_SEC;
 
       // A stacked column cascades, which is the common first sighting.
       const s = st.createInitialState();
       st.startRun(s, {});
+      // 6.1: the window is now derived from the CURRENT (ramped) gravity
+      // rather than a flat constant, so both sides of this comparison must
+      // be computed at the same spawnIndex the state is actually at.
+      const emptyBoardFall = ((C.ROWS - 1) * C.CELL + C.CELL / 2 + 15) / st.currentGravityPxPerSec(s);
+      const window = st.comboWindowSecFor(s);
       const R = s.grid.length - 1;
       for (let i = 0; i < 4; i++) s.grid[R - i][2] = 0;
       s.stackHeight[2] = 4;
       ph.resolveMerges(s);
       return {
-        window: C.COMBO_WINDOW_SEC,
+        window,
         emptyBoardFall: +emptyBoardFall.toFixed(2),
-        chainsAcrossDrops: C.COMBO_WINDOW_SEC > emptyBoardFall,
+        chainsAcrossDrops: window > emptyBoardFall,
         cascadeCombo: s.comboCount,
         cascadeScore: s.score,
       };
