@@ -694,21 +694,166 @@ written, still true by inspection of the same code.
 
 ## Phase 6 — SHOULD-level, once the above is green
 
-- [ ] Keyboard: arrows to steer, space to drop, `Esc` to close the shop.
-- [ ] `prefers-reduced-motion`: read at startup, feeding the same toggles as
-      haptics — shake, particles and squash shipped with no opt-out.
-- [ ] `platform.submitScore()` in `endRun`. If used, the score sent must match
-      the best score in the save.
-- [ ] Record effect positions at merge time, not at drain time — a cascade can
-      currently put a particle burst on the wrong cell.
-- [ ] A danger state as the spawn column fills. Not required; a reviewer forming
-      an impression of the game will notice its absence.
-- [ ] A colour-blind-safe skin.
+Certification does not require any of this; done per `docs/phase6brief.md`.
+All 17 `unit-tests/` pass, all 33 `tests/verify-features.js` checks pass
+(including a re-run of the phase 5 CSP check), and `tools/check-prohibited-apis.js`
+is clean against the rebuilt bundle.
+
+### [x] 6.1 A difficulty ramp — done — commit TBD
+
+Gravity now ramps with `state.spawnIndex` (0.7x at drop 0, 1.0x at drop 20,
+1.4x cap reached at drop 60) instead of a flat `GRAVITY_PX_PER_SEC`; see the
+constants for the exact curve. `COMBO_WINDOW_SEC` (a constant) was replaced by
+`comboWindowSecFor(state)` (derived from the current ramped gravity via
+`COMBO_WINDOW_FALL_MULTIPLIER`), preserving the "longer than one fall, shorter
+than two" invariant at every point on the ramp rather than only at the old
+flat baseline — the landmine the brief called out. `unit-tests/difficulty-ramp.js`
+covers the cap/monotonicity, the invariant sampled across the whole ramp (not
+just endpoints), and the reset on `startRun`. The pre-existing "Combo
+multiplier" e2e check was updated to compute both sides from the state's own
+ramped values instead of the old constant.
+
+### [x] 6.2 A danger state — done — commit TBD
+
+`js/render.js`'s `drawDangerState` pulses the spawn column's outline in
+`theme.accent` once it is within `DANGER_ROWS_REMAINING` (2) rows of ending
+the run. Presentational only, verified by reading, not a new automated check.
+
+### [x] 6.3 Honour `prefers-reduced-motion` — done — commit TBD
+
+`js/effects.js` reads the media query once at module load (an OS-level
+accessibility signal, not a player-facing toggle, so unlike haptics it has no
+shop UI). Reduced motion cuts particles and shake entirely and scales squash
+by `REDUCED_MOTION_SQUASH_SCALE` (0.35) rather than removing it, so a merge
+still visibly registers. `unit-tests/reduced-motion.js` passing.
+
+### [x] 6.4 Keyboard and `Esc` — done — commit TBD
+
+Left/right steer via the existing `setDragTarget` (one `CELL` per keydown,
+relying on the browser's own key repeat for held-key movement); space or down
+calls the new `hardDrop()` in `js/physics.js`, which reuses `stepPhysics`'s
+own landing math to resolve immediately. `unit-tests/hard-drop.js` passing.
+
+`Esc` does not close a "shop overlay" as the brief described — investigated
+and that overlay never coexists with the canvas in this architecture: it is
+mutually exclusive with gameplay (menu/game-over only), so there is nothing
+for `Esc` to dismiss back to. Implemented `Esc` to cancel an armed power-up
+(bomb/remover) instead, the closest real "modal, dismissible" state a run
+actually has. Flagged rather than silently reinterpreted.
+
+### [x] 6.5 `platform.submitScore()` — done — commit TBD
+
+Called from `endRun`'s call site in `js/main.js` with `state.highScore`
+(the save's value, per the requirement) — not the just-finished run's score.
+`localImpl` already no-ops; `ytgameImpl` already existed from phase 2.
+Source-checked in `unit-tests/input-callbacks.js`.
+
+### [x] 6.6 Record effect positions at merge time — done, brief's diagnosis partly revised — commit TBD
+
+Traced the actual cascade mechanics rather than assuming the brief's framing:
+`mergeCells` already pushed `row`/`col` before any `settleColumns` call, as
+primitive numbers immune to later mutation, so "recorded at drain time" was
+not literally what was happening. The real, verified failure mode is
+different: a *later* merge lower in the same column can call `settleColumns`
+again and shift an *earlier*, already-resolved merge's result down a row to
+close a gap below it — so the row recorded for the earlier event can describe
+a cell that no longer holds it by drain time. Fixed by freezing an explicit
+`(x, y)` pixel position on the event at the exact moment of that merge
+(`mergeCells` in `js/physics.js`), used for the particle burst's origin;
+`row`/`col` stay on the event for the squash effect, which already needed
+them to check against the live grid at render time. `unit-tests/merge-effect-position.js`
+builds the concrete cascade fixture (two pairs in one column, arranged so the
+second merge's settle shifts the first) and confirms the frozen position
+holds regardless.
+
+### [x] 6.7 A colour-blind-safe skin — done — commit TBD
+
+Added a fifth skin, `Clarity`, built from the Okabe-Ito colorblind-safe
+palette extended to nine tiers (plus grey and dark brown), varied in
+lightness as well as hue. Unlocked from the start (`MILESTONE_SCORES[0]`,
+same as Classic) rather than gated behind score progress, since an
+accessibility option a player can't reach on their first run is not actually
+accessible. Fully data-driven off the existing `SKINS` array — no shop.js
+change needed. Shape-vocabulary extension (the brief's "better" alternative)
+was not attempted this pass; noted as a possible follow-up, not required.
+
+---
+
+## Phase 7 — the facelift
+
+Certification does not require any of this; done per `docs/phase7brief.md`.
+All four sections landed (the brief allowed shipping fewer). All 19
+`unit-tests/` pass, all 33 `tests/verify-features.js` checks pass (including
+a re-run of the phase 5 CSP check), and `tools/check-prohibited-apis.js` is
+clean against the rebuilt bundle. Bundle grew from 183138 to 217094 bytes
+across the whole phase (17 files throughout, well inside every Playables
+limit) — see each subsection below for the per-commit figure.
+
+### [x] 7.1 The menu — done — commit `ad797e2`
+
+The menu put everything on one page (title, stats, eleven cards, three
+toggles, Play, three audio buttons, a build stamp) with Play buried at the
+bottom. Reduced the first screen to exactly four things (title, best
+score/result, Play, an icon row); the row opens Cart (six power-ups + the
+next-run toggles + a coin balance on the button itself, dimmed when nothing
+is affordable), Palette (skins), or Gear (sound/music/haptics/build stamp) as
+a panel within the same overlay. New icons: `cart`, `palette`, `gear`,
+`back`. `Esc` closes an open panel back to the hub. Bundle: 191570 bytes.
+
+One deviation: CLAUDE.md requires `BUILD_VERSION` visible "on the menu", not
+just the canvas HUD, so a quiet copy stayed on the home screen alongside the
+one in Gear the brief specifies — a hard project rule outranks the brief's
+stricter four-things-only reading.
+
+### [x] 7.2 The palette — done — commit `6b324e7`
+
+Four new milestone palettes (a day turning to night), each board now two
+gradient stops instead of a flat fill, plus a soft vignette, contact shadows,
+and rim highlights (render.js). `theme.danger`, fixed and non-interpolated,
+replaces milestone 0's accent (which used to double as the game's only alarm
+red) for the danger state (6.2). Bundle: 202873 bytes.
+
+The landmine the brief called out was real and worse than described: stop
+2's dark ink and stop 3's light ink are nowhere near extreme enough to
+guarantee 4.5:1 against every board luminance the crossing passes through —
+verified numerically, not assumed, and caught by the required
+`unit-tests/theme-contrast.js` before it shipped. The crossing now uses a
+dedicated near-black/near-white ink pair (the closest to the physical
+extremes that still leaves any safe overlap at all at the 4.5 floor) instead
+of either stop's own tuned colour; segments that don't cross still blend
+their own tuned ink normally. Worst measured contrast across the full
+0-10,000 range: 4.51:1 at a 0.25-score sampling resolution.
+
+### [x] 7.3 Power-ups that live on the board — done — commit `5db07af`
+
+Magnet (glyph, field arcs, target rings, and a genuine movement tween via
+`MAGNET_SLIDE_DURATION_SEC` — the grid stays authoritative, only the draw
+position lags), bomb (translucent 3x3 footprint, expanding ring on
+detonation), remover (crosshair), rainbow (slow wedge spin). Bundle: 213166
+bytes.
+
+The bomb/remover footprint required a real interaction change, not just a
+new draw call: they used to commit on the initial press, which left no
+moment for a footprint to visibly follow anything. They now commit on
+release, using wherever the pointer last was — a plain tap still works
+exactly as before. `unit-tests/input-callbacks.js` gained a regression test
+for the press/drag/release path; `unit-tests/magnet-slide.js` (new) covers
+the tween's easing, cleanup, and staleness guard.
+
+### [x] 7.4 Give the fruit faces — done — commit `c333593`
+
+Stem and leaf from apple (tier 4) upward, a crown on the pineapple, seeds on
+the watermelon, and a per-tier highlight-angle shift. Bundle: 217094 bytes.
+Verified visually (all nine tiers plus rainbow placed on the board via the
+debug hook and screenshotted) rather than by a new unit test — this is
+presentation-only canvas drawing with no pure-logic surface worth testing in
+isolation.
 
 ---
 
 ## Out of scope for certification
 
 Do not start these until the phases above are green: the desktop canvas scale-up,
-a display typeface, per-tier fruit detail, the upcoming-fruit queue, score
-animation, objectives, an undo item, a stats screen.
+a display typeface, the upcoming-fruit queue, score animation, objectives, an
+undo item, a stats screen. (Per-tier fruit detail was on this list before
+phase 7.4 did it.)

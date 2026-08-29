@@ -41,9 +41,50 @@ export const MAX_TIER = TIERS.length - 1;
 // Which tiers can spawn as a new falling fruit, and their relative odds.
 export const SPAWN_POOL = [0, 0, 0, 1, 1, 2];
 
-export const GRAVITY_PX_PER_SEC = 260;
+export const GRAVITY_PX_PER_SEC = 260; // the baseline the ramp below reaches at drop GRAVITY_RAMP_DROPS_TO_BASE
 export const SLOW_DROP_MULTIPLIER = 0.5;
 export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the pointer horizontally
+
+// --- Difficulty ramp -------------------------------------------------------
+// Found by playing rather than reading: gravity was a flat 260 px/s from the
+// first drop of a run to the last -- a new player's first drop fell exactly
+// as fast as an expert's hundredth. Keyed off state.spawnIndex (drops so
+// far), not score: score already drives the milestones and the theme
+// interpolation, and coupling a third system to it makes all three harder to
+// reason about, whereas "the more you play" is exactly what a drop count
+// measures. state.spawnIndex is reset to 0 in startRun, so the ramp resets
+// with every run for free.
+//
+// A starting point, tuned by feel, not derived from simulation like the
+// combo/milestone constants: begin noticeably gentler than today, reach
+// today's speed by drop 20, and cap at 1.4x by drop 60. The cap is load-
+// bearing, not just restraint -- see stepPhysics's dt clamp, which is what
+// keeps even the capped speed free of any tunnelling risk. Do not remove it
+// on the grounds that it "seems fine"; the clamp is what makes it fine.
+export const GRAVITY_RAMP_START_MULTIPLIER = 0.7;
+export const GRAVITY_RAMP_BASE_MULTIPLIER = 1.0;
+export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.4;
+export const GRAVITY_RAMP_DROPS_TO_BASE = 20;
+export const GRAVITY_RAMP_DROPS_TO_CAP = 60;
+
+// The run ends when the spawn column's stack reaches the top; this is how
+// many rows of headroom remain when the danger warning (render.js) starts
+// pulsing that column's outline.
+export const DANGER_ROWS_REMAINING = 2;
+
+// prefers-reduced-motion (js/effects.js): shake and particles are cut
+// entirely, but a merge should still read as a merge, so squash is scaled
+// down rather than removed -- a much smaller pop, not a dead board.
+export const REDUCED_MOTION_SQUASH_SCALE = 0.35;
+
+// 7.2: against the brighter boards (milestones 0-2's light creams/pinks/
+// lavenders), particle colours read as pale and linger -- "bursts turn to
+// mush" per the brief. A touch more saturation and a shorter life keeps them
+// popping rather than fading into the board. Only applied when the current
+// board is bright (js/main.js decides via theme.js's relativeLuminance);
+// the dark milestone-3 board doesn't need it.
+export const PARTICLE_BRIGHT_VIBRANCE_BOOST = 1.35;
+export const PARTICLE_BRIGHT_LIFE_SCALE = 0.8;
 
 export const WATERMELON_CLEAR_BONUS = 200;
 
@@ -66,7 +107,17 @@ export const COINS_PER_SCORE = 1 / 25; // score-to-coin conversion at run end
 // -- it still measures merge consistency rather than mere patience, so it
 // cannot degenerate into the permanent flat 3x an earlier 2.0s value produced
 // -- while letting a first-run player actually see a combo.
-export const COMBO_WINDOW_SEC = 1.8;
+//
+// Phase 6's gravity ramp broke this the moment gravity stopped being a
+// constant: at the ramp's 0.7x starting speed, an empty-board fall takes
+// ~2.5s, well past a flat 1.8s window -- the exact bug this comment
+// describes, reintroduced for anyone playing their first thirty drops. So
+// the window is no longer a constant; it is FALL_MULTIPLIER times whatever
+// the CURRENT empty-board fall time is (see comboWindowSecFor in state.js),
+// which reproduces today's 1.8s at today's 260 px/s gravity and preserves
+// the same "just above one fall, below two" relationship at every point on
+// the ramp instead of only at the ramp's baseline.
+export const COMBO_WINDOW_FALL_MULTIPLIER = 1.08;
 export const COMBO_STEP = 0.25; // multiplier gained per extra merge in the streak
 export const COMBO_MAX_MULTIPLIER = 3;
 
@@ -107,6 +158,21 @@ export const SKINS = [
     name: 'Midnight',
     unlockScore: MILESTONE_SCORES[3],
     colors: ['#6c7ae0', '#8e6fd8', '#7fd1d9', '#5aa9e6', '#4c6ef5', '#63c7b2', '#a5b4fc', '#7dd3c0', '#2f9e8f'],
+  },
+  // 6.7: every other skin separates tiers by hue alone, which is exactly what
+  // collapses under deuteranopia/protanopia -- reds, greens and browns fold
+  // together. Built from the Okabe-Ito palette (the standard reference for
+  // colorblind-safe qualitative color), extended by two (grey, dark brown)
+  // to cover all nine tiers, and varied in lightness as well as hue so two
+  // adjacent tiers stay distinguishable even under red-green confusion.
+  // Unlocked from the start, matching Classic: an accessibility option gated
+  // behind score progress is not actually accessible to the player who needs
+  // it on their first run.
+  {
+    id: 'clarity',
+    name: 'Clarity',
+    unlockScore: MILESTONE_SCORES[0],
+    colors: ['#0072B2', '#E69F00', '#F0E442', '#D55E00', '#009E73', '#56B4E9', '#CC79A7', '#999999', '#5C4033'],
   },
 ];
 
@@ -159,6 +225,21 @@ export const POWERUP_COSTS = Object.fromEntries(POWERUPS.map((p) => [p.id, p.cos
 // teleports fruit into a merge and never touches buried fruit.
 export const MAGNET_DURATION_SEC = 6;
 export const MAGNET_STEP_SEC = 0.45;
+// 7.3: a magnet-moved fruit used to snap a full 64px cell between two frames,
+// which read as a rendering glitch rather than attraction -- the grid stays
+// authoritative (this never changes stepMagnet's actual mechanics), only the
+// DRAW position eases from the old column to the new one, the same way
+// squash already lags the grid for a merge pop. Comfortably shorter than
+// MAGNET_STEP_SEC so one slide always finishes before the same fruit could
+// plausibly be picked up again.
+export const MAGNET_SLIDE_DURATION_SEC = 0.22;
+
+// 7.3: bomb footprint + detonation ring, remover crosshair, rainbow spin --
+// all drawn in js/render.js, on top of the board so arming or activating a
+// power-up changes what the board itself looks like, not just a HUD chip.
+export const BOMB_RING_DURATION_SEC = 0.35;
+export const REMOVER_CROSSHAIR_SIZE = 0.7; // fraction of CELL
+export const RAINBOW_SPIN_RADIANS_PER_SEC = 0.8;
 
 // --- Bomb ----------------------------------------------------------------
 export const BOMB_RADIUS = 1; // Chebyshev radius: 1 => up to a 3x3 clear
@@ -219,13 +300,37 @@ export const HAPTIC_BOMB_MS = 70;
 // --- Theme ---------------------------------------------------------------
 // One palette per milestone; the live palette is interpolated continuously
 // between them from the current run score, so the world warms up gradually
-// instead of snapping at each threshold.
+// instead of snapping at each threshold. 7.2: a day turning to night -- warm
+// and forgiving at the start, sweet and saturated once the rhythm is there,
+// cooling and heightening as it tightens, finally a dark board where the
+// fruit glow. Each board is two stops (top/bottom), blended as a vertical
+// gradient in js/render.js and js/style.css, not a flat fill.
+//
+// THE LANDMINE: stop 2 is dark ink on a light board; stop 3 is light ink on a
+// dark board. `text` here is NOT interpolated directly between them -- lerping
+// a dark-ink hex toward a light-ink hex arrives at the same mid-grey the
+// board itself passes through at t=0.5, and the score readout disappears
+// exactly there. js/theme.js's themeForScore() derives text from the CURRENT
+// interpolated board's own relative luminance instead (light board -> dark
+// ink, dark board -> light ink), with a hysteresis band so it does not
+// flicker right at the crossover, and only falls back to plain interpolation
+// within a segment where both endpoints already agree on which ink reads
+// (stops 0-1-2, all light boards, safe to blend their tuned per-stop hues).
+// See unit-tests/theme-contrast.js, which samples the whole 0-10000 score
+// range and asserts text-on-board contrast never drops below 4.5:1.
 export const THEMES = [
-  { page: '#2b1d14', board: '#fff6e8', text: '#3a2b20', grid: 'rgba(58,43,32,0.08)', accent: '#c0392b' },
-  { page: '#3a2033', board: '#fff0f3', text: '#4a2436', grid: 'rgba(74,36,54,0.09)', accent: '#d6336c' },
-  { page: '#1b2340', board: '#eef3ff', text: '#25325c', grid: 'rgba(37,50,92,0.10)', accent: '#4c6ef5' },
-  { page: '#0d1f24', board: '#e8fbf6', text: '#12403a', grid: 'rgba(18,64,58,0.11)', accent: '#0ca678' },
+  { boardTop: '#FFF6EA', boardBot: '#FFE4CB', page: '#2A1A12', text: '#4A3122', grid: 'rgba(74,49,34,0.08)', accent: '#F2960B' },
+  { boardTop: '#FFF1F4', boardBot: '#FFD6E2', page: '#3A1526', text: '#5A2438', grid: 'rgba(90,36,56,0.09)', accent: '#E8368F' },
+  { boardTop: '#F3EEFF', boardBot: '#D9CCFF', page: '#1E1338', text: '#3A2A6B', grid: 'rgba(58,42,107,0.10)', accent: '#7C4DFF' },
+  { boardTop: '#1E2947', boardBot: '#0C1122', page: '#05080F', text: '#D2E6FF', grid: 'rgba(210,230,255,0.12)', accent: '#00D9C0' },
 ];
+
+// Fixed, non-interpolated -- appears nowhere except the danger state (6.2).
+// One colour, one meaning. Milestone 0 used to spend an alarm red (#c0392b)
+// on its resting-state accent, which is why the game had nothing left to
+// shout with; that accent is now the warm orange above, and this is the only
+// red in the game.
+export const DANGER_COLOR = '#FF3B30';
 
 // Canvas text face. Single source of truth -- the family string used to be
 // repeated verbatim in seven separate ctx.font assignments in render.js.

@@ -4,7 +4,7 @@
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
 import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH } from './constants.js';
-import { removeFruitAt, detonateBomb, setDragTarget } from './physics.js';
+import { removeFruitAt, detonateBomb, setDragTarget, hardDrop } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
   hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
@@ -79,6 +79,13 @@ export function attachInput(canvas, state) {
     return false;
   }
 
+  // 7.3: bomb/remover now commit on release, not on the initial touch, so the
+  // footprint/crosshair (js/render.js, reading state.armPreviewCell) can
+  // genuinely follow the finger before committing rather than flashing into
+  // existence and firing in the same instant. A plain tap still works exactly
+  // as before -- press and release at the same spot commits at that cell.
+  let aiming = false;
+
   function onPointerDown(evt) {
     // Browsers only allow audio to start from a user gesture.
     unlockAudio();
@@ -91,24 +98,9 @@ export function attachInput(canvas, state) {
     }
 
     // Armed targeting modes are mutually exclusive, so at most one applies.
-    if (state.bombArmed) {
-      const cell = cellAt(point);
-      if (cell) {
-        const cleared = detonateBomb(state, cell.row, cell.col);
-        if (cleared) {
-          consumeBomb(state); // marks state.dirty
-          playUiTick();
-        }
-      }
-      return;
-    }
-
-    if (state.removerArmed) {
-      const cell = cellAt(point);
-      if (cell && removeFruitAt(state, cell.row, cell.col)) {
-        consumeRemover(state); // marks state.dirty
-        playUiTick();
-      }
+    if (state.bombArmed || state.removerArmed) {
+      aiming = true;
+      state.armPreviewCell = cellAt(point);
       return;
     }
 
@@ -122,13 +114,72 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerMove(evt) {
-    if (!dragging || !state.active) return;
     const point = toCanvasPoint(evt);
+    if (state.bombArmed || state.removerArmed) {
+      // Updated on every move regardless of `aiming`, so a mouse hovering
+      // before it ever clicks also sees the footprint -- touch has no
+      // equivalent of hover, so there `aiming` (set on pointerdown) is what
+      // makes this fire at all.
+      state.armPreviewCell = cellAt(point);
+      return;
+    }
+    if (!dragging || !state.active) return;
     setDragTarget(state, point.x);
   }
 
   function onPointerUp() {
+    if (aiming) {
+      aiming = false;
+      const cell = state.armPreviewCell;
+      if (state.bombArmed && cell) {
+        const cleared = detonateBomb(state, cell.row, cell.col);
+        if (cleared) {
+          consumeBomb(state); // marks state.dirty
+          playUiTick();
+        }
+      } else if (state.removerArmed && cell) {
+        if (removeFruitAt(state, cell.row, cell.col)) {
+          consumeRemover(state); // marks state.dirty
+          playUiTick();
+        }
+      }
+    }
     dragging = false;
+  }
+
+  // Keyboard (6.4): left/right steer via the same setDragTarget the pointer
+  // path uses (one CELL per press, rather than a per-frame held-key tracker --
+  // the browser's own key repeat gives held-key movement for free), space or
+  // down hard-drops, Escape cancels an armed power-up.
+  //
+  // Phase 6 noted Escape had no overlay to dismiss, since js/shop.js's
+  // overlay is never shown DURING a run -- it fills the screen only on the
+  // menu/game-over transition, mutually exclusive with the canvas. Phase 7.1
+  // gave it a real job there instead: js/shop.js's own Escape handler closes
+  // an open Cart/Palette/Gear panel back to the hub. The two handlers are
+  // independent (each listens on window and checks only its own precondition)
+  // and never actually compete, because the states they react to -- an armed
+  // power-up, an open panel -- cannot coexist: one requires a run in
+  // progress, the other requires the overlay that only shows when no run is.
+  function onKeyDown(evt) {
+    if (evt.key === 'Escape') {
+      if (state.bombArmed) armBomb(state, false);
+      if (state.removerArmed) armRemover(state, false);
+      return;
+    }
+
+    if (!state.active) return;
+
+    if (evt.key === 'ArrowLeft') {
+      evt.preventDefault();
+      setDragTarget(state, state.active.targetX - CELL);
+    } else if (evt.key === 'ArrowRight') {
+      evt.preventDefault();
+      setDragTarget(state, state.active.targetX + CELL);
+    } else if (evt.key === ' ' || evt.key === 'Spacebar' || evt.key === 'ArrowDown') {
+      evt.preventDefault();
+      hardDrop(state);
+    }
   }
 
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -137,10 +188,17 @@ export function attachInput(canvas, state) {
   canvas.addEventListener('pointercancel', onPointerUp);
   canvas.style.touchAction = 'none';
 
+  // Keyboard events don't target the canvas (a <canvas> isn't focusable
+  // without a tabindex), so this listens on window like main.js's own
+  // resize/DPR watchers do -- window is not the storage/lifecycle surface
+  // js/platform.js guards, just an input source.
+  if (typeof window !== 'undefined') window.addEventListener('keydown', onKeyDown);
+
   return () => {
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);
     canvas.removeEventListener('pointercancel', onPointerUp);
+    if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeyDown);
   };
 }

@@ -2,11 +2,11 @@
 // Pure functions over the state object -- no canvas or DOM access here.
 
 import {
-  COLS, CELL, GRAVITY_PX_PER_SEC, SLOW_DROP_MULTIPLIER, DRAG_LERP,
+  COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, MAGNET_STEP_SEC,
 } from './constants.js';
-import { effectiveRows, nextTierFor, addScore, registerComboHit } from './state.js';
+import { effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec } from './state.js';
 
 // Tier lookup that also answers for the rainbow sentinel, so callers that only
 // need geometry (radius) never have to special-case it.
@@ -69,7 +69,9 @@ export function stepPhysics(state, dt) {
   const col = columnForX(state, active.x);
   active.col = col;
 
-  const gravity = GRAVITY_PX_PER_SEC * (state.slowDropActive ? SLOW_DROP_MULTIPLIER : 1);
+  // Slow Drop multiplies the RAMPED value, so it stays proportionally useful
+  // late in a run rather than becoming irrelevant as the ramp climbs past it.
+  const gravity = currentGravityPxPerSec(state) * (state.slowDropActive ? SLOW_DROP_MULTIPLIER : 1);
   active.y += gravity * dt;
 
   const rows = effectiveRows(state);
@@ -82,6 +84,21 @@ export function stepPhysics(state, dt) {
     return true;
   }
   return false;
+}
+
+// Keyboard's "drop it" (6.4): skips straight to landing at the fruit's
+// current column, using the exact same landing math stepPhysics ticks toward
+// every frame -- so a hard drop resolves identically to letting gravity carry
+// it there, just without the wait a keyboard-only player has no way to skip.
+export function hardDrop(state) {
+  const active = state.active;
+  if (!active) return false;
+  const col = columnForX(state, active.x);
+  const rows = effectiveRows(state);
+  const landingRow = rows - 1 - state.stackHeight[col];
+  lockFruit(state, landingRow, col, active.tier);
+  state.active = null;
+  return true;
 }
 
 function columnForX(state, x) {
@@ -157,19 +174,30 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   // score (they are real merges) but at 1x, and they do not extend the streak.
   const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
 
+  // Pixel position of the merge, frozen right now. A later merge elsewhere in
+  // the same cascade can call settleColumns again and drop THIS cell's
+  // contents further down the column to close a gap below it -- row/col
+  // above stay correct for the squash effect, which re-checks them against
+  // the live grid (plus a tier guard) at render time, but a particle burst
+  // computed from row/col at drain time would then land wherever the fruit
+  // ended UP, not where it actually merged. x/y sidestep that: they are a
+  // point in space, not a cell reference, so no later shift can move them.
+  const x = keepC * CELL + CELL / 2;
+  const y = keepR * CELL + CELL / 2;
+
   if (tier >= MAX_TIER) {
     state.grid[keepR][keepC] = null;
     addScore(state, Math.round(WATERMELON_CLEAR_BONUS * multiplier));
-    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, multiplier });
+    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, x, y, multiplier });
   } else {
     const newTier = tier + 1;
     state.grid[keepR][keepC] = newTier;
     addScore(state, Math.round(TIERS[newTier].points * multiplier));
-    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, multiplier });
+    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, x, y, multiplier });
     if (newTier >= MAX_TIER) {
       // Reaching the highest tier for the first time is its own moment,
       // distinct from clearing a pair of them.
-      state.events.push({ type: 'reachedTop', tier: newTier, row: keepR, col: keepC });
+      state.events.push({ type: 'reachedTop', tier: newTier, row: keepR, col: keepC, x, y });
     }
   }
 }
@@ -227,8 +255,9 @@ export function detonateBomb(state, row, col) {
 
   // Emitted before settling, so the coordinates still point at where each fruit
   // actually was when it was destroyed. main.js turns this into one burst per
-  // cell; physics stays free of audio/DOM imports, as everywhere else here.
-  state.events.push({ type: 'bombCleared', cells: cleared.slice() });
+  // cell (plus one expanding ring centred on row/col, 7.3); physics stays
+  // free of audio/DOM imports, as everywhere else here.
+  state.events.push({ type: 'bombCleared', row, col, cells: cleared.slice() });
 
   settleColumns(state);
   state.suppressCombo = true;
@@ -261,6 +290,31 @@ export function detonateBomb(state, row, col) {
 // merge, worth the streak. The Bomb clears the board wholesale with no drop at
 // all; letting its cascade build a multiplier would make detonating the
 // cheapest way to run the streak up. Deliberate asymmetry -- do not "fix" it.
+// Read-only: which exposed (top-of-column) fruits currently qualify to be
+// pulled toward the held column, without moving anything. Shared by
+// stepMagnet's own planning phase below and by render.js, which calls this
+// every frame (not just on the ~magnetStepTimer cadence an actual move
+// fires on) to draw the field arcs and target rings (7.3) -- those need to
+// track what the magnet is CURRENTLY interested in, not just the instant a
+// step happens to land.
+export function magnetTargets(state) {
+  if (!state.magnetActive || !state.active) return [];
+  const heldTier = state.active.tier;
+  const targetCol = state.active.col;
+  const rows = state.grid.length;
+  const targets = [];
+  for (let c = 0; c < COLS; c++) {
+    if (c === targetCol) continue;
+    if (state.stackHeight[c] === 0) continue;
+    const topRow = rows - state.stackHeight[c];
+    const tier = state.grid[topRow][c];
+    // A held rainbow attracts everything; a rainbow on the board answers to any hold.
+    if (pairTier(tier, heldTier) === null) continue;
+    targets.push({ col: c, row: topRow, tier });
+  }
+  return targets;
+}
+
 export function stepMagnet(state, dt) {
   if (!state.magnetActive || !state.active) return [];
 
@@ -275,7 +329,6 @@ export function stepMagnet(state, dt) {
   if (state.magnetStepTimer > 0) return [];
   state.magnetStepTimer = MAGNET_STEP_SEC;
 
-  const heldTier = state.active.tier;
   const targetCol = state.active.col;
   const rows = state.grid.length;
 
@@ -286,15 +339,7 @@ export function stepMagnet(state, dt) {
   // power-up must not have. Planning against an unmutated snapshot caps every
   // fruit at one column per step.
   const planned = [];
-  for (let c = 0; c < COLS; c++) {
-    if (c === targetCol) continue;
-    if (state.stackHeight[c] === 0) continue;
-
-    const topRow = rows - state.stackHeight[c];
-    const tier = state.grid[topRow][c];
-    // A held rainbow attracts everything; a rainbow on the board answers to any hold.
-    if (pairTier(tier, heldTier) === null) continue;
-
+  for (const { col: c, row: topRow, tier } of magnetTargets(state)) {
     const dest = c + (targetCol > c ? 1 : -1);
     if (dest < 0 || dest >= COLS) continue;
     planned.push({ from: c, to: dest, tier, fromRow: topRow });

@@ -11,15 +11,75 @@ import {
   SQUASH_DURATION_SEC, SQUASH_MIN, SQUASH_MAX,
   PARTICLE_MIN, PARTICLE_MAX, PARTICLE_LIFE_SEC, PARTICLE_SPEED, PARTICLE_GRAVITY,
   SHAKE_MIN_TIER, SHAKE_DURATION_SEC, SHAKE_MAX_PX,
-  HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS,
+  HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS, REDUCED_MOTION_SQUASH_SCALE,
+  PARTICLE_BRIGHT_VIBRANCE_BOOST, PARTICLE_BRIGHT_LIFE_SCALE,
+  MAGNET_SLIDE_DURATION_SEC, BOMB_RING_DURATION_SEC,
 } from './constants.js';
+
+// Crude vibrance boost: pushes each channel away from the colour's own grey
+// point (its average) by a fixed factor. Cheaper than a full hex->hsl->hex
+// round trip and good enough for the small nudge 7.2 asks for -- this is not
+// meant to hit an exact saturation percentage, just to keep particle colours
+// from reading as pale against the brighter boards.
+function boostVibrance(hex, factor) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const avg = (r + g + b) / 3;
+  const push = (c) => Math.max(0, Math.min(255, Math.round(avg + (c - avg) * factor)));
+  const toHex = (c) => c.toString(16).padStart(2, '0');
+  return `#${toHex(push(r))}${toHex(push(g))}${toHex(push(b))}`;
+}
 
 export function createEffects() {
   return {
     squashes: [], // { row, col, t, duration, amount }
     particles: [], // { x, y, vx, vy, t, life, color, size }
     shake: { t: 0, duration: 0, magnitude: 0 },
+    magnetSlides: [], // { row, col, tier, fromX, toX, t, duration } -- 7.3
+    bombRings: [], // { x, y, t, duration } -- 7.3
   };
+}
+
+// 7.3: a magnet-moved fruit's GRID position updates instantly (stepMagnet is
+// unchanged) but its DRAW position eases from the old column to the new one
+// over MAGNET_SLIDE_DURATION_SEC, the same lag-behind-the-grid trick squash
+// already uses for a merge pop. `state` is read here (not passed values) so
+// the destination row reflects wherever settleColumns actually left the fruit.
+export function spawnMagnetSlides(fx, state, moves) {
+  const rows = state.grid.length;
+  for (const move of moves) {
+    fx.magnetSlides.push({
+      row: rows - state.stackHeight[move.to],
+      col: move.to,
+      tier: move.tier,
+      fromX: move.from * CELL + CELL / 2,
+      toX: move.to * CELL + CELL / 2,
+      t: 0,
+      duration: MAGNET_SLIDE_DURATION_SEC,
+    });
+  }
+}
+
+// Draw-time x offset for the fruit at (row, col, tier), if it is mid-slide --
+// null when there is nothing to apply. Same position+tier guard as
+// squashScaleAt, for the same reason: a later magnet step or a settle can
+// leave a DIFFERENT fruit at this exact cell before the slide finishes.
+export function magnetSlideOffsetAt(fx, row, col, tier) {
+  for (const s of fx.magnetSlides) {
+    if (s.row !== row || s.col !== col || s.tier !== tier) continue;
+    const p = Math.min(1, s.t / s.duration);
+    const eased = 1 - (1 - p) ** 3; // ease-out cubic
+    return (s.fromX - s.toX) * (1 - eased);
+  }
+  return null;
+}
+
+// Expanding ring on a bomb detonation -- the loudest action in the game
+// otherwise had no visual beyond the particle bursts per cleared cell.
+export function spawnBombRing(fx, x, y) {
+  fx.bombRings.push({ x, y, t: 0, duration: BOMB_RING_DURATION_SEC });
 }
 
 let hapticsOn = true;
@@ -39,6 +99,32 @@ export function toggleHaptics() {
   return hapticsOn;
 }
 
+// Read once at startup, the same as devicePixelRatio -- an OS-level
+// accessibility preference, not a player-facing toggle like sound, music or
+// haptics, so there is no in-game control for it. Feature-checked and
+// swallowed the same way vibrate() is below: an environment with no
+// matchMedia (or one that throws under a restrictive permissions policy)
+// simply gets full motion, matching how those environments behaved before
+// this existed.
+let reducedMotion = false;
+try {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+} catch {
+  reducedMotion = false;
+}
+
+export function isReducedMotion() {
+  return reducedMotion;
+}
+
+// Test-only: unit tests run under plain Node, with no window/matchMedia to
+// read a real preference from.
+export function _setReducedMotion(value) {
+  reducedMotion = value;
+}
+
 // 0 at tier 0, 1 at the top tier.
 function tierRatio(tier) {
   return Math.max(0, Math.min(1, tier / MAX_TIER));
@@ -50,8 +136,9 @@ function tierRatio(tier) {
 // into a single arbitrary-length tick decided by whichever cell the scan
 // visited last. The caller fires one deliberate pulse for the whole batch
 // instead. Mirrors the state.suppressCombo pattern used for the same reason.
-export function spawnMergeEffects(fx, { row, col, tier, color, silent = false }) {
+export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y, bright = false }) {
   const ratio = tierRatio(tier);
+  const squashScale = reducedMotion ? REDUCED_MOTION_SQUASH_SCALE : 1;
 
   fx.squashes.push({
     row,
@@ -63,12 +150,29 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false })
     tier,
     t: 0,
     duration: SQUASH_DURATION_SEC,
-    amount: SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio,
+    amount: (SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio) * squashScale,
   });
 
+  // Reduced motion: no particles, no shake -- a merge should still register
+  // (the squash above still fires, just smaller), but the moving, flying
+  // pieces are exactly what the preference asks to remove.
+  if (reducedMotion) {
+    if (!silent) vibrate(tier >= SHAKE_MIN_TIER ? HAPTIC_TOP_TIER_MS : HAPTIC_MERGE_MS);
+    return;
+  }
+
   const count = Math.round(PARTICLE_MIN + (PARTICLE_MAX - PARTICLE_MIN) * ratio);
-  const cx = col * CELL + CELL / 2;
-  const cy = row * CELL + CELL / 2;
+  // Prefer the caller's own frozen (x, y) when it has one -- see the comment
+  // on mergeCells in physics.js for why row/col alone is not safe here during
+  // a cascade. Callers with no cascade risk (remover, bomb) just pass row/col.
+  const cx = x ?? (col * CELL + CELL / 2);
+  const cy = y ?? (row * CELL + CELL / 2);
+  // Against the brighter boards, plain particle colours read as pale and
+  // linger -- a touch more vibrance and a shorter life keeps a burst popping
+  // rather than turning to mush (7.2). Decided by the caller (js/main.js),
+  // not looked up here, so this module stays free of a theme.js dependency.
+  const particleColor = bright ? boostVibrance(color, PARTICLE_BRIGHT_VIBRANCE_BOOST) : color;
+  const lifeScale = bright ? PARTICLE_BRIGHT_LIFE_SCALE : 1;
   for (let i = 0; i < count; i++) {
     // Spread evenly around the circle with jitter so bursts don't look banded.
     const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
@@ -79,8 +183,8 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false })
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed - 40,
       t: 0,
-      life: PARTICLE_LIFE_SEC * (0.7 + 0.6 * Math.random()),
-      color,
+      life: PARTICLE_LIFE_SEC * lifeScale * (0.7 + 0.6 * Math.random()),
+      color: particleColor,
       size: 1.8 + 2.6 * ratio * Math.random() + 1,
     });
   }
@@ -140,6 +244,18 @@ export function updateEffects(fx, dt) {
     fx.shake.t += dt;
     if (fx.shake.t >= fx.shake.duration) fx.shake.magnitude = 0;
   }
+
+  for (let i = fx.magnetSlides.length - 1; i >= 0; i--) {
+    const s = fx.magnetSlides[i];
+    s.t += dt;
+    if (s.t >= s.duration) fx.magnetSlides.splice(i, 1);
+  }
+
+  for (let i = fx.bombRings.length - 1; i >= 0; i--) {
+    const r = fx.bombRings[i];
+    r.t += dt;
+    if (r.t >= r.duration) fx.bombRings.splice(i, 1);
+  }
 }
 
 // Scale factors for the fruit at (row, col), if it is mid-pop.
@@ -183,10 +299,29 @@ export function drawParticles(ctx, fx) {
   ctx.restore();
 }
 
+// Expanding, fading rings from a bomb detonation (7.3). Drawn in the board's
+// own colour-neutral way (white, alpha-faded) so it reads on every skin.
+export function drawBombRings(ctx, fx) {
+  ctx.save();
+  ctx.translate(0, HUD_HEIGHT);
+  for (const r of fx.bombRings) {
+    const p = Math.min(1, r.t / r.duration);
+    ctx.globalAlpha = Math.max(0, 1 - p) * 0.6;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 3 * (1 - p) + 1;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, CELL * 0.4 + CELL * 2.2 * p, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function clearEffects(fx) {
   fx.squashes.length = 0;
   fx.particles.length = 0;
   fx.shake.t = 0;
   fx.shake.duration = 0;
   fx.shake.magnitude = 0;
+  fx.magnetSlides.length = 0;
+  fx.bombRings.length = 0;
 }

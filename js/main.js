@@ -2,7 +2,7 @@
 // render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
-  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS,
+  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
 } from './constants.js';
 import {
@@ -26,9 +26,9 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn,
+  hydrate as hydrateHaptics, isHapticsOn, spawnMagnetSlides, spawnBombRing,
 } from './effects.js';
-import { themeForScore, applyPageTheme } from './theme.js';
+import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -235,27 +235,41 @@ function colorForTier(tier) {
 // imports audio, effects, or the DOM, so this is the single place gameplay
 // becomes audible and tactile.
 function drainEvents() {
+  // Decided once per frame, not inside effects.js -- that module stays free
+  // of a theme.js dependency, and the board's brightness cannot change
+  // mid-frame anyway. theme.boardTop, not boardBot: particles spawn near
+  // where the merge happened, closer to the top of whichever cell it was in
+  // than the very bottom of the board.
+  const bright = relativeLuminance(themeForScore(state.score).boardTop) >= 0.5;
+
   for (const event of state.events) {
     if (event.type === 'merge') {
       playMerge(event.tier);
       spawnMergeEffects(fx, {
         row: event.row,
         col: event.col,
+        x: event.x,
+        y: event.y,
         tier: event.tier,
         color: colorForTier(event.tier),
+        bright,
       });
     } else if (event.type === 'reachedTop' || event.type === 'topTier') {
       playCelebration();
       spawnMergeEffects(fx, {
         row: event.row,
         col: event.col,
+        x: event.x,
+        y: event.y,
         tier: TIERS.length - 1,
         color: colorForTier(TIERS.length - 1),
+        bright,
       });
     } else if (event.type === 'bombCleared') {
-      // One max-intensity burst per destroyed fruit. Detonation previously
-      // produced no visual or tactile response at all, despite clearing up to
-      // nine cells -- the loudest action in the game happened in silence.
+      // One max-intensity burst per destroyed fruit, plus one expanding ring
+      // centred on the target. Detonation previously produced no visual or
+      // tactile response at all, despite clearing up to nine cells -- the
+      // loudest action in the game happened in silence.
       const topTier = TIERS.length - 1;
       for (const cell of event.cells) {
         spawnMergeEffects(fx, {
@@ -264,14 +278,17 @@ function drainEvents() {
           tier: topTier,
           color: colorForTier(cell.tier),
           silent: true, // one pulse for the batch, fired below
+          bright,
         });
       }
+      spawnBombRing(fx, event.col * CELL + CELL / 2, event.row * CELL + CELL / 2);
       vibrate(HAPTIC_BOMB_MS);
     } else if (event.type === 'removerUsed') {
       spawnMergeEffects(fx, {
         row: event.row,
         col: event.col,
         tier: event.tier,
+        bright,
         color: colorForTier(event.tier),
       });
     } else if (event.type === 'lockedPowerUp') {
@@ -316,13 +333,18 @@ function update(dt) {
   updateEffects(fx, dt);
 
   if (state.active) {
-    stepMagnet(state, dt);
+    const moves = stepMagnet(state, dt);
+    if (moves.length > 0) spawnMagnetSlides(fx, state, moves);
     stepPhysics(state, dt);
   } else {
     const result = spawnFruit(state);
     if (result.blocked || isGameOver(state)) {
       endRun(state, 'grid-full');
       persistNow();
+      // The save's highScore, not this run's score -- that is the value the
+      // requirement asks to match, and it is already what endRun just wrote.
+      // localImpl no-ops; ytgameImpl reports it to the host leaderboard.
+      platform.submitScore(state.highScore);
       playGameOver();
       stopMusic();
       showScreen();
