@@ -1,7 +1,9 @@
-// Regression test for 1.4, updated for the phase-1 brief's revised contract:
-// the callbacks parameter is gone. attachInput now takes exactly (canvas,
-// state), and bomb/remover/locked-power-up feedback all ride state.events --
-// the same queue main.js already drains everything else from.
+// Regression test for 1.4 (bomb/remover/locked-power-up feedback rides
+// state.events) plus phase 2's addition: attachInput takes a third `persist`
+// argument now -- not a revival of the callbacks object phase 1 deleted, but
+// one plain function, always given, called after anything that changes a
+// persisted field (a power-up spend, the mute toggle). A locked-power-up tap
+// changes no persisted field, so it must NOT call persist.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -38,20 +40,29 @@ function makeFakeCanvas(state) {
   };
 }
 
-assert.equal(attachInput.length, 2, 'attachInput should no longer declare a callbacks parameter');
+function makeCountingPersist() {
+  const fn = () => { fn.calls += 1; };
+  fn.calls = 0;
+  return fn;
+}
 
-// Bomb: place a fruit, arm the bomb, tap its cell -- event rides state.events.
+assert.equal(attachInput.length, 3, 'attachInput should declare (canvas, state, persist)');
+
+// Bomb: place a fruit, arm the bomb, tap its cell -- event rides state.events,
+// and consuming the bomb is a persisted-inventory change.
 {
   const state = freshState();
   state.grid[0][0] = 0;
   state.bombArmed = true;
   state.inventory.bomb = 1;
   const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state);
+  const persist = makeCountingPersist();
+  attachInput(canvas, state, persist);
   canvas.fire('pointerdown', { clientX: 0 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
   const events = state.events.filter((e) => e.type === 'bombCleared');
   assert.equal(events.length, 1, 'a bombCleared event should be pushed when a bomb clears fruit');
   assert.ok(events[0].cells.length >= 1, 'the event should carry the cleared cells');
+  assert.equal(persist.calls, 1, 'consuming a bomb should persist');
 }
 
 // Remover: place a fruit, arm the remover, tap its cell.
@@ -61,7 +72,8 @@ assert.equal(attachInput.length, 2, 'attachInput should no longer declare a call
   state.removerArmed = true;
   state.inventory.remover = 1;
   const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state);
+  const persist = makeCountingPersist();
+  attachInput(canvas, state, persist);
   canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
   const events = state.events.filter((e) => e.type === 'removerUsed');
   assert.equal(events.length, 1, 'a removerUsed event should be pushed when the remover removes a fruit');
@@ -70,13 +82,16 @@ assert.equal(attachInput.length, 2, 'attachInput should no longer declare a call
     { row: 0, col: 1, tier: 3 },
     'the event should carry where and what was removed',
   );
+  assert.equal(persist.calls, 1, 'consuming the remover should persist');
 }
 
 // Locked power-up: magnet unlocks at a score this fresh state has not reached.
+// No persisted field changes, so persist must NOT be called.
 {
   const state = freshState();
   const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state);
+  const persist = makeCountingPersist();
+  attachInput(canvas, state, persist);
   const magnetSlotRect = powerSlotRect(1); // [remover, magnet, bomb] -- see constants.POWERUPS order
   canvas.fire('pointerdown', {
     clientX: magnetSlotRect.x + POWER_SLOT.size / 2,
@@ -86,21 +101,22 @@ assert.equal(attachInput.length, 2, 'attachInput should no longer declare a call
   assert.equal(events.length, 1, 'a lockedPowerUp event should be pushed for a locked/out-of-stock slot');
   assert.equal(events[0].id, 'magnet');
   assert.equal(events[0].unlockScore, 1000);
+  assert.equal(persist.calls, 0, 'a locked-power-up tap changes no persisted field and must not persist');
 }
 
-console.log('input.js: bomb, remover, and locked-power-up all push their event onto state.events');
+console.log('input.js: bomb, remover, and locked-power-up all push their event onto state.events; persist called only where warranted');
 
-// --- Is the shipped main.js actually wired to all three? -------------------
+// --- Is the shipped main.js actually wired to all three, plus persist? -----
 
 const mainSrc = readFileSync(path.join(repoRoot, 'js/main.js'), 'utf8');
 
 const attachInputCall = mainSrc.match(/attachInput\(([^)]*)\)/);
 assert.ok(attachInputCall, 'main.js should call attachInput');
 const argCount = attachInputCall[1].split(',').filter((s) => s.trim()).length;
-assert.equal(argCount, 2, 'main.js should call attachInput with exactly (canvas, state) -- no callbacks object');
+assert.equal(argCount, 3, 'main.js should call attachInput with (canvas, state, persist)');
 
 for (const eventType of ['bombCleared', 'removerUsed', 'lockedPowerUp']) {
   assert.ok(mainSrc.includes(`'${eventType}'`), `main.js's drainEvents should handle a '${eventType}' event`);
 }
 
-console.log('main.js: attachInput called with (canvas, state); drainEvents handles all three event types');
+console.log('main.js: attachInput called with (canvas, state, persist); drainEvents handles all three event types');

@@ -17,14 +17,19 @@
 // scheduled ahead of time against the AudioContext clock rather than from
 // setInterval, because timer jitter at these tempos is audible.
 
-import { loadMusicOn, saveMusicOn } from './storage.js';
 import { MUSIC_TRACK_URL } from './constants.js';
 
 let ctx = null;
 let musicGain = null;
 let unavailable = false;
 let playing = false;
-let musicOn = loadMusicOn();
+let musicOn = true;
+
+// Sets the flag from the loaded save (main.js's boot, before the first
+// frame). This module never reads storage itself -- see js/platform.js.
+export function hydrate(save) {
+  musicOn = save ? save.musicOn !== false : true;
+}
 
 let schedulerId = null;
 let nextNoteTime = 0;
@@ -62,7 +67,6 @@ export function toggleMusic() {
 
 export function setMusicOn(value) {
   musicOn = Boolean(value);
-  saveMusicOn(musicOn);
   if (!musicOn) {
     stopMusic();
   } else if (playing) {

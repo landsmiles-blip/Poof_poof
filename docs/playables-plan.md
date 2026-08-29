@@ -219,62 +219,117 @@ adapter, not a port: the SDK does not exist outside the Playables container
 so direct SDK calls produce code that cannot be run and a live game that no
 longer works.
 
-### [ ] 2.1 Create `js/platform.js`
+### [x] 2.1 Create `js/platform.js` — done, `unit-tests/platform.js` passing
 
-One interface, two implementations, chosen once at boot.
+One interface, two implementations (`localImpl`, `ytgameImpl`), chosen once at
+import time from `window.ytgame?.IN_PLAYABLES_ENV`. `js/storage.js` is deleted
+-- its guarded design (in-memory fallback when `localStorage` throws on
+*access*, not just read/write) moved into `localImpl` intact, along with the
+`?dev=1` read-only mode (now `platform.setReadOnly`/`isReadOnly`, a local-only
+extension to the interface below, not part of the Playables-facing contract).
 
+Interface actually shipped (`save`/`flush` split per 2.2's write discipline,
+otherwise as specified):
 ```
-init()                    -> Promise<void>
-load()                    -> Promise<object>
-save(obj)                 -> Promise<void>
-firstFrameReady()         -> void
-gameReady()               -> void
-onPause(cb) / onResume(cb)
-audioEnabled()            -> boolean
-onAudioEnabledChange(cb)
-submitScore(n)            -> Promise<void>
-language()                -> Promise<string>
+init() load() save(obj) flush() firstFrameReady() gameReady()
+onPause(cb) onResume(cb) audioEnabled() onAudioEnabledChange(cb)
+submitScore(n) language() setReadOnly(v) isReadOnly()
 ```
 
-- **`ytgameImpl`** — `ytgame.game.*`, `ytgame.system.*`,
-  `ytgame.engagement.sendScore`. Selected when
-  `window.ytgame?.IN_PLAYABLES_ENV` is true.
-- **`localImpl`** — today's `js/storage.js` behind `load`/`save`,
-  `visibilitychange` behind `onPause`/`onResume`, `audioEnabled()` returns true.
-  This is the only place in the codebase permitted to use either.
+`ytgameImpl` additionally guards every single SDK call in a try/catch, failing
+open (`load()` -> null, `audioEnabled()` -> true) -- it is the one
+implementation with no local fallback behind it, so it carries the same
+"must never take the game down" burden `js/storage.js` always carried alone.
 
-**Test.** A third `failingImpl` where every call rejects or throws. The game must
-still boot and play. A platform that misbehaves must never take the game down.
+**Test, adjusted from the brief:** "boots the game against a failingImpl" is
+not something a plain-node test can do at all -- `js/main.js` touches
+`document`/canvas at import time, so running it needs a real DOM.
+`unit-tests/platform.js` instead (a) drives `ytgameImpl` against a
+`window.ytgame` stub where every SDK method throws or rejects, and (b) drives
+a literal `failingImpl` (every one of the interface's own methods throws or
+rejects) through the exact guarded call sequence `main.js`'s `boot()` and
+`persist()` make, asserting neither ever throws and both fall back to a fresh
+save. `tests/verify-features.js`'s "Survives blocked localStorage" check is
+the closest thing to an actual browser-level version of this and still
+passes.
 
-### [ ] 2.2 Collapse seven storage keys into one versioned blob
+### [x] 2.2 Collapse seven storage keys into one versioned blob — done, `unit-tests/migration.js` and `unit-tests/save-blob.js` passing
 
-`js/storage.js` currently writes seven independent keys from roughly ten call
-sites — `startRun`, `buyPowerUp`, `activateMagnet`, `consumeBomb`,
-`consumeRemover`, `selectSkin`, `endRun`, and the audio toggles. Against a
-network-backed API that pattern is untenable.
+- Blob: `{ v: 1, highScore, coins, inventory, unlockedSkins, selectedSkin,
+  musicOn, sfxOn }`. (`hapticsOn` deferred to phase 3, as planned.)
+- **Write discipline, adjusted from the brief:** `js/state.js` cannot call
+  `platform.save()` itself -- see "What must not change" below -- so it no
+  longer persists anything at all. Every mutating export (`startRun`,
+  `buyPowerUp`, `activateMagnet`, `consumeBomb`, `consumeRemover`,
+  `selectSkin`, the audio/music toggles) is now pure, and the *caller*
+  (`js/main.js`, `js/shop.js`, `js/input.js`) calls a `persist` function
+  afterward -- `platform.save()`, debounced ~1s. `js/state.js`'s new
+  `toSaveBlob(state, { musicOn, sfxOn })` shapes the blob; `js/main.js`'s
+  `currentSaveBlob()` is the only place that composes it with the audio/music
+  flags, which live in `js/audio.js`/`js/music.js`, not in `state`.
+- `persistNow()` (`save()` then `flush()`) is called at `endRun` and inside
+  the pause handler, both in `js/main.js`, per the brief -- not inside
+  `state.js`'s `endRun` itself, which the brief's own wording implied but
+  "what must not change" ruled out.
+- **Migrated:** `localImpl.load()` reads the seven legacy keys when the
+  versioned key is absent, builds the blob, and writes it back once.
+  `unit-tests/migration.js` seeds all seven, asserts nothing is lost, and
+  asserts a genuinely fresh save loads as `null` rather than a migrated blob.
+- **Order:** `platform.load()` resolves inside `main.js`'s `boot()` before
+  `createInitialState()` runs, which is itself before anything can call
+  `persist()` -- structurally enforced, not just documented.
+- **Size:** `unit-tests/save-blob.js` asserts a realistic blob stays under
+  both the 3 MiB cap and the 64 KiB target (230 bytes, in practice).
 
-- One object: `{ v: 1, highScore, coins, inventory, unlockedSkins, selectedSkin,
-  musicOn, sfxOn, hapticsOn }`.
-- Mark dirty on change; flush debounced. Flush unconditionally in `endRun` and
-  inside `onPause`.
-- **Migrate:** on first local boot, read the seven old keys into the blob so
-  existing Pages players keep their progress.
-- **Order:** `load()` must resolve before the first `save()`. The requirement is
-  explicit.
-- Size cap is 3 MiB, target 64 KiB for exit saves. This blob is under a
-  kilobyte — assert it anyway.
+### [x] 2.3 Async boot and the ready handshake — done, Pages build confirmed booting (20/20 e2e, offline boot included)
 
-### [ ] 2.3 Async boot and the ready handshake
+**Bigger than planned, as the brief warned:** three modules read storage at
+import time, not one (`state.js`, `audio.js`'s `let muted = loadMuted()`,
+`music.js`'s `let musicOn = loadMusicOn()`), plus `main.js` ran its entire
+boot at module top level.
 
-`createInitialState()` currently reads storage synchronously at module load. That
-has to become an async boot.
+**Approach taken (hydrate, don't read), per the brief:** `createInitialState(save)`
+takes the loaded blob as an argument; `audio.js`/`music.js` each export
+`hydrate(save)` instead of self-loading; `js/main.js` is now `async function
+boot()`. Handshake order as specified: `platform.init()` -> `load()` ->
+`createInitialState(save)` + `hydrateAudio(save)` + `hydrateMusic(save)` ->
+`sizeCanvas()`/`attachInput()` -> `showScreen()` (first paint) ->
+`firstFrameReady()` -> `gameReady()` (menu is already interactive, nothing
+loads after) -> one `persist()` in case boot just granted the starter Remover
+-> `onPause`/`onResume` wired -> font-ready gate -> `requestAnimationFrame(loop)`.
 
-Order: SDK script tag before all game code → `platform.init()` → `load()` →
-build state → first paint → `firstFrameReady()` → menu rendered and interactive
-→ `gameReady()`.
+**One gap, not resolved:** the brief calls for an SDK script tag in
+`index.html` before `js/main.js`. Left as a documented, uninserted comment
+rather than a guessed `src` -- an invented Playables SDK URL would be
+indistinguishable from a verified one to whoever reads this next. Needs the
+real tag from Google's onboarding docs before certification.
 
-`gameReady()` must not fire while a loading or splash screen is visible. Initial
-bundle size is measured as bytes downloaded until `gameReady`.
+**Found and fixed along the way (not in the brief):** `service-worker.js`'s
+precache list still named the deleted `js/storage.js` and was missing the new
+`js/platform.js`. Since `cache.addAll()` is all-or-nothing, this silently
+broke the *entire* offline install -- confirmed via `tests/verify-features.js`'s
+"Offline boot" check going from passing to failing the moment `js/storage.js`
+was deleted, before the list was fixed.
+
+### [x] 2.4 Route the lifecycle through the adapter now — done (added by `docs/phase2brief.md`; not in this plan's original text)
+
+`js/main.js` no longer listens for `visibilitychange` directly -- `platform.onPause`/
+`onResume` (wired inside `localImpl`'s own `visibilitychange` listener) do,
+behavior unchanged (suspend/resume audio only; stopping the render loop is
+phase 3.1). `grep -r visibilitychange js/` now matches only `js/platform.js`.
+
+## What must not change (from `docs/phase2brief.md`) -- honored
+
+`js/physics.js` and `js/state.js` stayed pure: no DOM, no canvas, no audio, no
+storage, no platform imports. `state.js` receives `save` as an argument and
+returns `toSaveBlob()`'s shape; it never calls `platform.*` itself, which is
+why 2.2's write discipline moved to the callers instead of living inside
+`state.js`'s mutators as the brief's own wording for that section literally
+suggested -- the two parts of the brief conflicted, and this section won, since
+it was the more specific and more load-bearing constraint. `js/render.js`
+still mutates nothing. All of Phase 1's `unit-tests/` stayed green throughout
+(magnet, rainbow, input-callbacks all still pass) -- gameplay, scoring, combo
+and unlock economics are untouched.
 
 ---
 

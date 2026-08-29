@@ -9,12 +9,17 @@
 // audio is unavailable -- a game must never fail because sound failed.
 
 import { MAX_TIER } from './constants.js';
-import { loadMuted, saveMuted } from './storage.js';
 
 let ctx = null;
 let masterGain = null;
-let muted = loadMuted();
+let muted = false;
 let unavailable = false;
+
+// Sets the flag from the loaded save (main.js's boot, before the first
+// frame). This module never reads storage itself -- see js/platform.js.
+export function hydrate(save) {
+  muted = save ? !save.sfxOn : false;
+}
 
 // Called from the first user gesture. Safe to call repeatedly.
 export function unlockAudio() {
@@ -58,7 +63,6 @@ export function isMuted() {
 
 export function setMuted(value) {
   muted = Boolean(value);
-  saveMuted(muted);
   if (masterGain && ctx) {
     // Ramp rather than jump, so toggling mid-tone doesn't click.
     masterGain.gain.setTargetAtTime(muted ? 0 : 0.9, ctx.currentTime, 0.01);

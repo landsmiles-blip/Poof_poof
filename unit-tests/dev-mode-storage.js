@@ -1,22 +1,18 @@
-// Regression test for 0.1.3 / 1.5: `?dev=1` must never write its inflated
-// inventory/highScore into the player's real save. storage.js's writeRaw is
-// the single choke point every save* export funnels through, gated by
-// setStorageReadOnly -- this simulates a real dev session end-to-end (the
-// same boot order main.js uses: setStorageReadOnly(devModeEnabled()) BEFORE
-// createInitialState()) and asserts the underlying "localStorage" never
-// changes.
+// Regression test for 0.1.3 / 1.5, updated for phase 2: `?dev=1` must still
+// never write its inflated inventory/highScore into the player's real save,
+// now that persistence goes through js/platform.js's localImpl instead of
+// js/storage.js (deleted this phase -- its guarded design and its read-only
+// mode both moved here intact).
 //
-// Ordering note: this must be the first test file to touch js/storage.js in
-// this run (it sorts right after constants.js, before input-callbacks.js and
-// rainbow.js, both of which also exercise save* calls) -- storage.js caches
-// whether a localStorage backend exists on its first probe, and the fake
-// `window` this file installs must be in place for that first probe to be
-// meaningful. Later files calling save* after this one's cleanup harmlessly
-// hit a caught ReferenceError and fall back to the in-memory store.
+// Ordering note: like the old version of this file, this should be the first
+// unit-tests file to touch a real 'poofpoof.save' key in this run, since
+// localImpl caches whether a localStorage backend exists on first probe. It
+// sorts after migration.js and before platform.js/rainbow.js alphabetically;
+// none of those touch localStorage, so this is safe regardless.
 import assert from 'node:assert/strict';
-import { setStorageReadOnly, loadInventory } from '../js/storage.js';
+import * as platform from '../js/platform.js';
 import {
-  devModeEnabled, createInitialState, startRun, endRun, buyPowerUp,
+  devModeEnabled, createInitialState, toSaveBlob, startRun, endRun, buyPowerUp,
   activateMagnet, consumeBomb, consumeRemover, selectSkin,
 } from '../js/state.js';
 
@@ -30,29 +26,37 @@ function makeFakeLocalStorage(seed) {
   };
 }
 
-const seed = {
-  'poofpoof.highScore': '500',
-  'poofpoof.coins': '20',
-  'poofpoof.inventory': JSON.stringify({
-    slowDrop: 0, remover: 1, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0,
-  }),
+const realSave = {
+  v: 1,
+  highScore: 500,
+  coins: 20,
+  inventory: { slowDrop: 0, remover: 1, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0 },
+  unlockedSkins: ['classic'],
+  selectedSkin: 'classic',
+  musicOn: true,
+  sfxOn: true,
 };
-const fakeLocalStorage = makeFakeLocalStorage(seed);
+const fakeLocalStorage = makeFakeLocalStorage({ 'poofpoof.save': JSON.stringify(realSave) });
 globalThis.window = { localStorage: fakeLocalStorage, location: { search: '?dev=1' } };
 
 try {
   assert.equal(devModeEnabled(), true, 'the ?dev=1 cheat is still present and live in this build');
 
-  // Exactly main.js's boot order (js/main.js:29-30).
-  setStorageReadOnly(devModeEnabled());
-  const state = createInitialState();
+  const impl = platform._createLocalImpl();
+  // Exactly main.js's boot order: setReadOnly before init()/load().
+  impl.setReadOnly(devModeEnabled());
+  await impl.init();
+  const save = await impl.load();
+  assert.deepEqual(save, realSave, 'a read-only load should still see the real save');
 
+  const state = createInitialState(save);
   assert.equal(state.highScore, 8000, 'dev mode should inflate highScore in memory');
   assert.ok(state.inventory.bomb >= 5, 'dev mode should inflate inventory in memory');
 
   const before = fakeLocalStorage.snapshot();
 
-  // A representative dev session touching every save* call site.
+  // A representative dev session touching every mutating state.js export,
+  // persisted exactly the way main.js's persist()/persistNow() would.
   startRun(state, {});
   buyPowerUp(state, 'bomb', 0);
   activateMagnet(state);
@@ -60,16 +64,18 @@ try {
   consumeRemover(state);
   selectSkin(state, 'classic');
   endRun(state, 'test');
+  impl.save(toSaveBlob(state, { musicOn: true, sfxOn: true }));
+  await impl.flush();
 
   const after = fakeLocalStorage.snapshot();
   assert.deepEqual(after, before, 'a dev session must not write anything to the real save');
 
   // In-session values still round-trip via the memory store.
-  const sessionInventory = loadInventory();
-  assert.notEqual(sessionInventory.bomb, 0, 'in-session reads should still reflect this session\'s state');
+  const sessionSave = await impl.load();
+  assert.notEqual(sessionSave.inventory.bomb, realSave.inventory.bomb,
+    'in-session reads should still reflect this session\'s state, not the untouched real save');
 
   console.log('dev-mode storage: real save untouched across a full dev session; in-session reads still work');
 } finally {
-  setStorageReadOnly(false);
   delete globalThis.window;
 }

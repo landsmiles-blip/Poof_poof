@@ -33,7 +33,7 @@ const ASSETS = [
   './manifest.json',
   './css/style.css',
   './js/constants.js',
-  './js/storage.js',
+  './js/platform.js',
   './js/audio.js',
   './js/music.js',
   './js/effects.js',

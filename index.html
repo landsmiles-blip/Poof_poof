@@ -16,6 +16,14 @@
   <canvas id="game-canvas" hidden></canvas>
   <div id="overlay"></div>
 </div>
+<!-- YouTube Playables SDK -- must load before js/main.js, since js/platform.js
+     reads window.ytgame.IN_PLAYABLES_ENV at import time to choose an
+     implementation. Deliberately left uninserted here rather than guessed:
+     an invented <script src> would be indistinguishable from a verified one
+     to a future reader. Outside the container this is meant to be a harmless
+     404 or an unused global once the real tag is in place -- confirm the
+     Pages build still boots with it present before phase 2 is considered
+     finished. See docs/playables-plan.md phase 2.3. -->
 <script type="module" src="js/main.js"></script>
 <script>
   // Service worker update handshake.

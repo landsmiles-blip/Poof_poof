@@ -95,7 +95,9 @@ async function shot(page, name, full = false) {
     await page.goto(`${BASE}/index.html`);
     await page.waitForSelector('#play-btn');
     await page.click('#play-btn');
-    await page.waitForTimeout(400);
+    // >1s: platform.save() debounces persistence by ~1s, so reading real
+    // localStorage any sooner would catch the write mid-flight, not missing.
+    await page.waitForTimeout(1200);
     const hud = await page.evaluate(async () => {
       const st = await import('./js/state.js');
       const C = await import('./js/constants.js');
@@ -107,7 +109,7 @@ async function shot(page, name, full = false) {
         milestones: C.MILESTONE_SCORES,
       };
     });
-    const inv = await page.evaluate(() => JSON.parse(localStorage.getItem('poofpoof.inventory') || '{}'));
+    const inv = await page.evaluate(() => (JSON.parse(localStorage.getItem('poofpoof.save') || '{}').inventory || {}));
     record('Power-up chips in HUD', hud.chipCount > 0, hud.chipCount > 0,
       `${hud.chipCount} chips always drawn (${hud.chips.join(', ')}); locked ones greyed. Starter remover=${inv.remover || 0}`,
       await shot(page, '02-hud-chips'));

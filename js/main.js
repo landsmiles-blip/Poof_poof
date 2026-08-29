@@ -1,14 +1,14 @@
 // Entry point: owns the requestAnimationFrame loop and wires state, physics,
-// render, input, audio, effects, theme, and the shop screens together.
+// render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
   CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, RENDER_SCALE,
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
-  triggerLockedFlash, tickLockedFlash,
+  triggerLockedFlash, tickLockedFlash, toSaveBlob,
 } from './state.js';
-import { setStorageReadOnly } from './storage.js';
+import * as platform from './platform.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
 import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
@@ -16,8 +16,9 @@ import { renderMenu, renderGameOver } from './shop.js';
 import {
   playMerge, playCelebration, playGameOver, playUiTick,
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
+  hydrate as hydrateAudio, isMuted,
 } from './audio.js';
-import { attachContext, startMusic, stopMusic } from './music.js';
+import { attachContext, startMusic, stopMusic, hydrate as hydrateMusic, isMusicOn } from './music.js';
 import { createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate } from './effects.js';
 import { themeForScore, applyPageTheme } from './theme.js';
 
@@ -25,12 +26,9 @@ const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
 
-// MUST run before createInitialState(): dev mode inflates inventory and
-// highScore in memory, and the very first startRun() would otherwise persist
-// that inflated stock over the player's real save.
-setStorageReadOnly(devModeEnabled());
-
-const state = createInitialState();
+// Assigned once, in boot(), once platform.load() resolves -- everything below
+// that references `state` is only ever called after that has happened.
+let state;
 const fx = createEffects();
 
 // The canvas has two sizes that must not be confused:
@@ -53,10 +51,6 @@ function sizeCanvas() {
   canvas.style.setProperty('--canvas-aspect', `${CANVAS_WIDTH} / ${logicalH}`);
 }
 
-sizeCanvas();
-
-attachInput(canvas, state);
-
 function resizeCanvasToState() {
   sizeCanvas();
 }
@@ -78,6 +72,27 @@ function syncMusic() {
   else stopMusic();
 }
 
+// The single point every persisted field flows through on its way to
+// platform.save()/flush(). state.js stays free of platform imports (and of
+// audio.js/music.js imports) -- this is where those two halves meet.
+function currentSaveBlob() {
+  return toSaveBlob(state, { musicOn: isMusicOn(), sfxOn: !isMuted() });
+}
+
+// Debounced -- call after anything that changes a persisted field (a
+// purchase, a skin pick, starting a run, a sound/music toggle, an in-run
+// power-up spend).
+function persist() {
+  platform.save(currentSaveBlob());
+}
+
+// Immediate -- call at the specific moments platform.js's contract requires
+// it: endRun, and the pause handler.
+function persistNow() {
+  platform.save(currentSaveBlob());
+  return platform.flush();
+}
+
 function showScreen() {
   syncReloadGuard();
   // The overlay screens use the same CSS variables as the board, so they need
@@ -90,7 +105,7 @@ function showScreen() {
     canvas.hidden = true;
     // startRun is called inside shop.js now, so the menu's run toggles (Slow
     // Drop / Extra Row / Rainbow) actually reach it.
-    renderMenu(overlay, state, () => {
+    renderMenu(overlay, state, persist, () => {
       clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
@@ -101,7 +116,7 @@ function showScreen() {
   } else if (state.screen === SCREEN.GAMEOVER) {
     overlay.hidden = false;
     canvas.hidden = true;
-    renderGameOver(overlay, state, () => {
+    renderGameOver(overlay, state, persist, () => {
       clearEffects(fx);
       resizeCanvasToState();
       overlay.hidden = true;
@@ -111,8 +126,6 @@ function showScreen() {
     });
   }
 }
-
-showScreen();
 
 function colorForTier(tier) {
   return tier === RAINBOW_TIER ? RAINBOW_DEF.color : skinColor(state, tier);
@@ -196,6 +209,7 @@ function update(dt) {
     const result = spawnFruit(state);
     if (result.blocked || isGameOver(state)) {
       endRun(state, 'grid-full');
+      persistNow();
       playGameOver();
       stopMusic();
       showScreen();
@@ -205,29 +219,62 @@ function update(dt) {
   drainEvents();
 }
 
-// Respect the host environment: stop animating and silence audio while the
-// tab or embedding frame is hidden, and pick back up on return. This is also
-// the hook a host platform's pause/resume command would drive.
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
+// Order: SDK script tag (index.html, before this module) -> platform.init()
+// -> platform.load() -> build state and hydrate audio/music -> first paint ->
+// platform.firstFrameReady() -> menu rendered and interactive ->
+// platform.gameReady(). gameReady() must not fire while a loading or splash
+// screen is visible -- there is none here, so it fires right after the first
+// showScreen().
+async function boot() {
+  // MUST run before createInitialState(): dev mode inflates inventory and
+  // highScore in memory, and the very first persist() would otherwise write
+  // that inflated stock over the player's real save.
+  platform.setReadOnly(devModeEnabled());
+
+  await platform.init();
+  const save = await platform.load();
+
+  state = createInitialState(save);
+  hydrateAudio(save);
+  hydrateMusic(save);
+
+  sizeCanvas();
+  attachInput(canvas, state, persist);
+
+  showScreen();
+  platform.firstFrameReady();
+  // The menu showScreen() just rendered is already interactive -- nothing
+  // loads after this point, so gameReady() follows immediately.
+  platform.gameReady();
+
+  // A fresh save may have just granted the starter Remover (js/state.js's
+  // startingInventory) purely in memory; write it once now that a platform
+  // exists to write it to.
+  persist();
+
+  platform.onPause(() => {
     suspendAudio();
-  } else {
+    persistNow();
+  });
+  platform.onResume(() => {
     lastTime = performance.now(); // avoid a huge dt spike on the first frame back
     resumeAudio();
+  });
+
+  // Any first interaction anywhere is a valid moment to start audio.
+  window.addEventListener('pointerdown', unlockAudio, { once: true });
+
+  applyPageTheme(themeForScore(0));
+
+  // ctx.font silently falls back when the face has not loaded -- canvas has no
+  // equivalent of font-display -- so starting the loop immediately would paint
+  // the first frames in system-ui and then snap to Fredoka. Wait for fonts, but
+  // never let a font failure stop the game starting.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => requestAnimationFrame(loop)).catch(() => requestAnimationFrame(loop));
+  } else {
+    requestAnimationFrame(loop);
   }
-});
-
-// Any first interaction anywhere is a valid moment to start audio.
-window.addEventListener('pointerdown', unlockAudio, { once: true });
-
-applyPageTheme(themeForScore(0));
-
-// ctx.font silently falls back when the face has not loaded -- canvas has no
-// equivalent of font-display -- so starting the loop immediately would paint
-// the first frames in system-ui and then snap to Fredoka. Wait for fonts, but
-// never let a font failure stop the game starting.
-if (document.fonts && document.fonts.ready) {
-  document.fonts.ready.then(() => requestAnimationFrame(loop)).catch(() => requestAnimationFrame(loop));
-} else {
-  requestAnimationFrame(loop);
 }
+
+boot();

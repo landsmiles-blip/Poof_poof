@@ -263,7 +263,16 @@ export function powerSlotRect(index) {
   };
 }
 
-export const STORAGE_KEYS = {
+// The versioned save blob's shape version (js/platform.js). Bump when the
+// blob's fields change shape in a way old saves can't just merge-default
+// into; a version bump plus a branch in platform.js's load() is a non-event.
+export const SAVE_VERSION = 1;
+
+// Where localImpl (js/platform.js) persists the blob, and the seven
+// independent keys a pre-platform save used -- read once, at migration, and
+// never written again.
+export const SAVE_KEY = 'poofpoof.save';
+export const LEGACY_STORAGE_KEYS = {
   highScore: 'poofpoof.highScore',
   coins: 'poofpoof.coins',
   inventory: 'poofpoof.inventory',

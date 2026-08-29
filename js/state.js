@@ -6,14 +6,12 @@ import {
   COMBO_WINDOW_SEC, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_TIER, RAINBOW_SCHEDULE,
-  LOCKED_FLASH_DURATION_SEC,
+  LOCKED_FLASH_DURATION_SEC, SAVE_VERSION,
 } from './constants.js';
-import {
-  loadHighScore, saveHighScore, loadCoins, saveCoins,
-  loadInventory, saveInventory,
-  loadUnlockedSkins, saveUnlockedSkins,
-  loadSelectedSkin, saveSelectedSkin,
-} from './storage.js';
+
+const DEFAULT_INVENTORY = {
+  slowDrop: 0, remover: 0, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0,
+};
 
 export const SCREEN = {
   MENU: 'menu',
@@ -31,18 +29,26 @@ export function devModeEnabled() {
   }
 }
 
-export function createInitialState() {
+// `save` is the blob platform.load() resolved to (or null/undefined for a
+// genuinely fresh player) -- this function never touches storage itself. See
+// toSaveBlob() for the inverse: state -> the shape platform.save() persists.
+export function createInitialState(save) {
+  const blob = save || {};
   const dev = devModeEnabled();
-  const storedHigh = loadHighScore();
+  const storedHigh = Number.isFinite(blob.highScore) ? blob.highScore : 0;
   const highScore = dev ? Math.max(storedHigh, MILESTONE_SCORES[MILESTONE_SCORES.length - 1]) : storedHigh;
-  const unlockedSkins = reconcileUnlocks(loadUnlockedSkins(), highScore);
-  const selectedSkin = validSkinId(loadSelectedSkin(), unlockedSkins);
+  const storedSkins = Array.isArray(blob.unlockedSkins) ? blob.unlockedSkins : [DEFAULT_SKIN_ID];
+  const unlockedSkins = reconcileUnlocks(storedSkins, highScore);
+  const selectedSkin = validSkinId(blob.selectedSkin || DEFAULT_SKIN_ID, unlockedSkins);
+  const storedInventory = (blob.inventory && typeof blob.inventory === 'object')
+    ? { ...DEFAULT_INVENTORY, ...blob.inventory }
+    : { ...DEFAULT_INVENTORY };
 
   return {
     screen: SCREEN.MENU,
     highScore,
-    coins: loadCoins(),
-    inventory: startingInventory(dev),
+    coins: Number.isFinite(blob.coins) ? blob.coins : 0,
+    inventory: startingInventory(dev, storedInventory, storedHigh),
 
     unlockedSkins,
     selectedSkin,
@@ -90,18 +96,37 @@ export function createInitialState() {
 // empty for the whole of a player's first run -- and since coins only arrive at
 // game over, the earliest a chip could otherwise appear was run 2. One free
 // charge means the bar is populated and tappable from the very first drop.
-function startingInventory(dev) {
-  const inv = loadInventory();
+//
+// Pure: this used to persist the grant itself (saveInventory), but state.js no
+// longer touches storage at all -- the caller (main.js's boot) persists once
+// after createInitialState, which covers this the same way.
+function startingInventory(dev, storedInventory, storedHigh) {
+  const inv = { ...storedInventory };
   if (dev) {
     for (const p of POWERUPS) inv[p.id] = Math.max(inv[p.id] || 0, 5);
     return inv;
   }
-  const isFreshSave = Object.values(inv).every((n) => !n) && loadHighScore() === 0;
-  if (isFreshSave) {
-    inv.remover = 1;
-    saveInventory(inv);
-  }
+  const isFreshSave = Object.values(inv).every((n) => !n) && storedHigh === 0;
+  if (isFreshSave) inv.remover = 1;
   return inv;
+}
+
+// The inverse of reading `save` in createInitialState: shapes the current
+// state into the blob platform.save()/platform.flush() persist. Audio/music
+// flags live outside `state` (js/audio.js, js/music.js own them), so the
+// caller passes them in rather than this function reaching for those modules
+// -- state.js stays free of audio imports.
+export function toSaveBlob(state, { musicOn, sfxOn }) {
+  return {
+    v: SAVE_VERSION,
+    highScore: state.highScore,
+    coins: state.coins,
+    inventory: state.inventory,
+    unlockedSkins: state.unlockedSkins,
+    selectedSkin: state.selectedSkin,
+    musicOn,
+    sfxOn,
+  };
 }
 
 export function makeEmptyGrid(rows = ROWS) {
@@ -195,7 +220,6 @@ export function skinColor(state, tierIndex) {
 export function selectSkin(state, id) {
   if (!state.unlockedSkins.includes(id)) return false;
   state.selectedSkin = id;
-  saveSelectedSkin(id);
   return true;
 }
 
@@ -284,8 +308,6 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.magnetStepTimer = 0;
   state.lockedFlash = null;
 
-  saveInventory(state.inventory);
-
   state.grid = makeEmptyGrid(effectiveRows(state));
   state.stackHeight = new Array(COLS).fill(0);
   state.score = 0;
@@ -314,7 +336,6 @@ export function endRun(state, reason) {
 
   if (state.score > state.highScore) {
     state.highScore = state.score;
-    saveHighScore(state.highScore);
   }
 
   // Power-ups unlock off the same milestones as skins, so a crossed threshold
@@ -332,13 +353,11 @@ export function endRun(state, reason) {
   state.newlyUnlockedSkins = after.filter((id) => !before.has(id));
   if (state.newlyUnlockedSkins.length > 0) {
     state.unlockedSkins = after;
-    saveUnlockedSkins(after);
   }
 
   const earned = Math.floor(state.score * COINS_PER_SCORE);
   state.lastRunCoinsEarned = earned;
   state.coins += earned;
-  saveCoins(state.coins);
 
   // Refund a Rainbow charge only when the run ended having delivered NOTHING.
   // Refunding on partial delivery (one of two wilds) would be farmable: buy a
@@ -347,7 +366,6 @@ export function endRun(state, reason) {
   // at spawn indices 3 and 8, a zero-delivery run should be rare.
   if (state.rainbowChargeSpent && state.rainbowDelivered === 0) {
     state.inventory.rainbow = (state.inventory.rainbow || 0) + 1;
-    saveInventory(state.inventory);
   }
 }
 
@@ -355,8 +373,6 @@ export function buyPowerUp(state, key, cost) {
   if (state.coins < cost) return false;
   state.coins -= cost;
   state.inventory[key] = (state.inventory[key] || 0) + 1;
-  saveCoins(state.coins);
-  saveInventory(state.inventory);
   return true;
 }
 
@@ -373,7 +389,6 @@ export function activateMagnet(state) {
   state.magnetActive = true;
   state.magnetTimer = MAGNET_DURATION_SEC;
   state.magnetStepTimer = MAGNET_STEP_SEC;
-  saveInventory(state.inventory);
   return true;
 }
 
@@ -397,7 +412,6 @@ export function consumeBomb(state) {
   if ((state.inventory.bomb || 0) <= 0) return false;
   state.inventory.bomb -= 1;
   state.bombArmed = false;
-  saveInventory(state.inventory);
   return true;
 }
 
@@ -405,6 +419,5 @@ export function consumeRemover(state) {
   if ((state.inventory.remover || 0) <= 0) return false;
   state.inventory.remover -= 1;
   state.removerArmed = false;
-  saveInventory(state.inventory);
   return true;
 }
