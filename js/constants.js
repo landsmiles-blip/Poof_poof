@@ -232,16 +232,14 @@ export const THEMES = [
 // system-ui is a fallback only; the face itself is self-hosted in assets/fonts.
 export const FONT_FAMILY = "'Fredoka', system-ui, sans-serif";
 
-// How many device pixels to render per game pixel. The board is only 384 game
-// px wide, so without this the canvas draws at its intrinsic size and is capped
-// there on any large screen -- `max-width:100%` can shrink a replaced element
-// but never grow it. Raising the backing store instead of just stretching with
-// CSS keeps 9px text and 1px grid lines sharp when scaled up.
-// 3, not 2: the board can now be displayed ~1100px tall, so a 2x backing store
-// (1132px) is only ~1:1 with the display and would still look soft on a
-// high-DPI screen. 3x leaves headroom. Purely a quality/memory trade-off --
-// nothing else depends on the value, since input maps from the logical size.
-export const RENDER_SCALE = 3;
+// Clamp for the canvas backing store's device-pixel-per-logical-pixel ratio
+// (js/main.js derives the actual value from window.devicePixelRatio; js/
+// render.js reads it back from canvas.width at draw time, so nothing else
+// needs to know the number itself). Unclamped DPR on a cheap 3x phone would
+// triple fill-rate and memory for no visible gain, and the certification
+// ceiling is a 512 MB JS heap, which Google attributes to iOS limits.
+export const MIN_BACKING_SCALE = 1;
+export const MAX_BACKING_SCALE = 3;
 
 // The top-right HUD corner previously held the in-game master mute toggle
 // (MUTE_RECT), removed in phase 3: Playables requirements prohibit an

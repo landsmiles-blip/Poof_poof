@@ -491,47 +491,108 @@ already unused before this phase.
 
 ## Phase 4 — Rendering
 
-### [ ] 4.1 Density-aware, responsive canvas — with the zero-viewport guard
+### [x] 4.1 Density-aware, responsive canvas — with the zero-viewport guard — done, all four `tests/verify-features.js` checks passing
 
-The backing store is a fixed 384x566 scaled by CSS `max-width:100%`, with no
-`devicePixelRatio` handling and no resize listener anywhere. It blurs on every
-modern phone. `js/icons.js` already does DPR correctly for the shop canvases —
-apply the same treatment to the game canvas.
+Replaced the fixed `RENDER_SCALE = 3` with `js/main.js` measuring the
+canvas's actual on-screen CSS size (`ResizeObserver`, plus a `matchMedia`
+re-subscription trick for `devicePixelRatio` changes, which fire no resize
+event of their own) and setting the backing store to that size times a
+clamped DPR (`MIN_BACKING_SCALE`/`MAX_BACKING_SCALE` in `js/constants.js`,
+1–3). `js/render.js` derives the draw-time transform scale from
+`ctx.canvas.width` instead of importing a constant, so it never needs to know
+how big the canvas currently is. `js/input.js`'s `toCanvasPoint()` already
+divided by the logical size, not `canvas.width` — verified still true, not
+"simplified" away.
 
-- Keep the 384-wide **logical** coordinate space. Set
-  `canvas.width = logicalW * dpr`, scale the context once per resize.
-- Drive layout from a `ResizeObserver`.
-- **Guard:** refuse to size from a zero or sub-1px measurement; keep the last
-  good size and re-measure on the next observation.
+**The zero-viewport guard** (`handleCanvasMeasurement` in `js/main.js`):
+refuses a width/height under 1px, keeping the last known good size. Also
+naturally covers the canvas being `hidden` behind a menu/game-over overlay,
+since `ResizeObserver` reports a zero content rect the moment an observed
+element stops rendering.
 
-That guard is not defensive programming, it is a documented failure. Google's
-certification FAQ, verbatim: *"For performance reasons, the game is initially
-loaded in a WebView that is not displayed to the user, resulting in the WebView
-viewport size being zero."* Without the guard, adding responsive sizing
-introduces an Android-only bug that never reproduces on desktop.
+**Layout, the part the brief didn't fully solve:** `#overlay` (`css/style.css`)
+used a width formula derived purely from `100vh`, which silently disagreed
+with the board the moment the canvas became the *width*-constrained one
+(an ultra-wide viewport) rather than the height-constrained one it assumed.
+Fixed by having `js/main.js` publish the canvas's actual measured width as a
+`--canvas-css-width` custom property on `:root`, which `#overlay` now reads
+directly — the two can no longer disagree about width regardless of which
+dimension the viewport constrains. Overlay height stays content-driven
+(scrollable), not tied to the board's aspect ratio, since the shop's content
+doesn't share the board's shape.
 
-**Test.** Mount the game in a 0x0 container, then expand it — the board must
-appear correctly. Then sweep 9:32, 9:16, 1:1, 16:9 and 32:9, resizing mid-run
-each time, and confirm the board state survives.
+**Test, extended:** the 0x0-container case is simulated via `display: none`
+on the canvas itself (Playwright's `setViewportSize` refuses below 1×1, but
+`ResizeObserver` reports the same zero-content-rect signal the instant an
+observed element stops rendering, which is the actual mechanism at play).
+The ratio sweep runs 9:32, 9:16, 3:4, 1:1, 16:9, 32:9 (3:4 added to the
+brief's list) checking no horizontal scroll, the canvas fully inside the
+viewport, and the backing store tracking the measured size × DPR. "State
+survives resize" is checked against `window.__poofDebugState` — a new,
+harmless, read-only-in-practice test hook (`js/main.js`, right after `state`
+is assigned) added because there was no other way to see the running game's
+actual state from outside; asserts the run stays on the `playing` screen and
+score never decreases across the sweep (an exact-snapshot comparison would be
+wrong here, since gameplay is genuinely continuing throughout, not frozen).
+The DPR clamp is checked with Playwright's `deviceScaleFactor: 4` context
+option standing in for a stubbed `devicePixelRatio`.
 
-### [ ] 4.2 Unlock orientation, strip PWA machinery from the Playables build
+### [x] 4.2 The Playables build target — done, `tools/build-playables.js`
 
-`manifest.json` sets `"orientation": "portrait"`, which is prohibited outright.
-The manifest, icons and any update-and-reload path have no role in the
-container. Add a build flag that emits a Playables `index.html` without them,
-while the Pages build keeps them.
+`node tools/build-playables.js` produces `dist/playables/` (`.gitignore`d):
+`css/`, `js/`, `assets/fonts/`, and a from-scratch `index.html` (title and
+description meta pulled from the real `index.html`; everything else built
+directly rather than stripped from it, since regex-stripping an evolving file
+is the more fragile direction) with the SDK placeholder comment before
+`js/main.js`, no manifest/icon/theme-color, no service worker registration or
+update-and-reload script. No bundler — a plain Node script, matching the
+brief.
 
-**Amended scope (from 1.5, deferred here):** the Playables bundle must also
-exclude `?dev=1` (dev mode: cut the feature or gate it out for this target
-only — the Pages build may keep it), `package.json`, `node_modules/`,
-`tests/`, `unit-tests/`, `docs/`, `.github/`, the web app manifest, the icons,
-and the service worker. Nothing that is not the game itself ships.
+**`?dev=1`** (the remaining half of item 1.5): `js/state.js`'s
+`devModeEnabled()` is replaced in the *built copy only*, matched against its
+exact current source text — if that text has changed and no longer matches,
+the build throws rather than silently shipping an unstripped `?dev=1`. The
+Pages build's real source is untouched, so `tests/verify-features.js`'s
+existing `?dev=1` check there keeps its coverage.
 
-### [ ] 4.3 Feature-check `ctx.roundRect`
+**Orientation:** the manifest is excluded entirely, so its
+`"orientation": "portrait"` cannot apply; the build script also greps every
+`js/*.js` file for `screen.orientation.lock` and refuses to build if it finds
+one (there is none).
 
-Used unguarded in `drawPowerBar` in `js/render.js`. It throws on Safari below 16
-and takes the whole HUD frame with it. Compatibility with the iOS YouTube app's
-WebView is a MUST.
+**Numbers:** 17 files, 172,026 bytes (0.164 MiB) — printed by the build
+script every run, checked against all four limits (30 MiB initial, 250 MiB
+total, 30 MiB/file, 8,000 files) in code, not just by eyeballing the log.
+
+**Test:** `tests/verify-features.js` rebuilds `dist/playables/` at the top of
+every run (so this suite also catches the build script itself breaking), then
+serves it from a dedicated Node static server rooted at exactly that
+directory — not a path under the main suite's server — so "runs standalone"
+means a request for anything outside the build 404s rather than silently
+resolving against a repo file the build was supposed to exclude. Confirms
+`?dev=1` unlocks nothing and a real drop plays.
+
+### [x] 4.3 Feature-check `ctx.roundRect` — done, `unit-tests/round-rect.js` and a real-browser check passing
+
+`js/render.js`'s three `ctx.roundRect` call sites (`drawPowerBar`) now go
+through `roundRectPath()`, which calls `ctx.roundRect` when present and falls
+back to a plain `ctx.rect` (dropping the cosmetic radius) when it is not.
+Verified two ways: `unit-tests/round-rect.js` against a fake context with
+`roundRect` deleted, and manually in a real browser with
+`delete CanvasRenderingContext2D.prototype.roundRect` — the HUD renders with
+square-cornered chips instead of rounded ones, no thrown error.
+
+### [x] 4.4 Close the one gap phase 3 left open — done, `unit-tests/music-scheduler.js` (added by `docs/phase4brief.md`; not in this plan's original text)
+
+The music-scheduler-resume behaviour (phase 3.1) was verified by construction,
+not by test, since Playwright has no inspection surface for "was there an
+audible burst." Now tested directly: a stubbed `AudioContext` with a
+`currentTime` this test controls, real `pauseScheduler()`/`resumeScheduler()`
+calls, and a 30-second fake clock jump while paused. Confirms zero oscillators
+get scheduled while paused (even across the jump) and that resume schedules
+only a handful on its first tick — not the dozens-at-once burst a scheduler
+naively catching up on a clock that moved while it wasn't looking would
+produce.
 
 ---
 

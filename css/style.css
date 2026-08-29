@@ -64,13 +64,22 @@ html, body {
 }
 
 /* Kept in step with the board so the menu and the game do not visibly jump
-   size when swapping between them. */
-/* 0.678 is the board's aspect ratio (384/566), so the shop panel tracks the
-   width the canvas resolves to and the two screens do not jump size. */
+   size when swapping between them, and so the two never visibly disagree.
+   --canvas-css-width is set by js/main.js from the canvas's own actual
+   measured width -- not recomputed here from viewport units -- because the
+   canvas can be either height- or width-constrained depending on the
+   viewport's aspect ratio (aspect-ratio + max-width below), and a formula
+   derived only from vh (as this used to be) silently goes wrong the moment
+   the canvas becomes the width-constrained one, e.g. on an ultra-wide
+   viewport: the shop panel stays a size the board is no longer actually
+   using. Height is intentionally NOT tied to the board's aspect ratio -- the
+   shop's content is scrollable and needs its own height, not the board's. */
 #overlay {
-  width: min(calc((100vh - 24px) * 0.678), 620px);
+  width: min(var(--canvas-css-width, 384px), calc(100vw - 24px));
   min-width: 320px;
   max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
 }
 
 .screen {

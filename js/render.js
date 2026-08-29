@@ -3,7 +3,7 @@
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS, COMBO_WINDOW_SEC,
   RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
-  FONT_FAMILY, RENDER_SCALE, LOCKED_FLASH_DURATION_SEC,
+  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps } from './state.js';
 import { squashScaleAt, shakeOffset, drawParticles } from './effects.js';
@@ -16,6 +16,18 @@ export function boardHeightFor(state) {
 
 export function canvasHeightFor(state) {
   return HUD_HEIGHT + boardHeightFor(state);
+}
+
+// ctx.roundRect throws on Safari below 16, taking the whole HUD frame down
+// with it -- compatibility with the iOS YouTube app's WebView is a MUST.
+// Falls back to a square-cornered rect: the radius here is cosmetic, so a
+// plain rect is a correct degradation, not a broken one.
+export function roundRectPath(ctx, x, y, w, h, r) {
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(x, y, w, h, r);
+  } else {
+    ctx.rect(x, y, w, h);
+  }
 }
 
 function tierDefFor(tierIndex) {
@@ -33,10 +45,16 @@ export function drawFrame(ctx, state, fx) {
 
   // Re-established every frame rather than once at startup. Assigning
   // canvas.width/height resets the 2D context including its transform, and
-  // resizeCanvasToState() reassigns height whenever Extra Row changes the row
-  // count -- a one-time ctx.scale() would be silently wiped mid-run and drop
-  // the game to half size in the corner.
-  ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
+  // js/main.js reassigns it whenever the viewport, DPR, or Extra Row's row
+  // count changes -- a one-time ctx.scale() would be silently wiped mid-run
+  // and drop the game to a fraction of its size in the corner.
+  //
+  // Derived from the actual backing-store width rather than a fixed constant,
+  // so js/main.js's responsive, DPR-aware sizing is reflected automatically:
+  // this file does not need to know how big the canvas currently is on
+  // screen, only how many backing pixels exist per logical pixel.
+  const scale = ctx.canvas.width / width || 1;
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = theme.board;
@@ -141,7 +159,7 @@ function drawPowerBar(ctx, state, theme) {
     if (!usable && !armed) ctx.globalAlpha = 0.4;
 
     ctx.beginPath();
-    ctx.roundRect(rect.x, rect.y, rect.w, rect.h, 6);
+    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 6);
     ctx.fillStyle = armed ? theme.accent : theme.grid;
     ctx.fill();
 
@@ -165,7 +183,7 @@ function drawPowerBar(ctx, state, theme) {
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.roundRect(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, 7);
+      roundRectPath(ctx, rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, 7);
       ctx.stroke();
       ctx.restore();
     }
@@ -176,7 +194,7 @@ function drawPowerBar(ctx, state, theme) {
       ctx.globalAlpha = 0.75;
       ctx.fillStyle = theme.text;
       ctx.beginPath();
-      ctx.roundRect(rect.x + rect.w - 8, rect.y + 2, 6, 5, 1);
+      roundRectPath(ctx, rect.x + rect.w - 8, rect.y + 2, 6, 5, 1);
       ctx.fill();
       ctx.strokeStyle = theme.text;
       ctx.lineWidth = 1.1;

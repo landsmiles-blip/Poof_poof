@@ -22,13 +22,15 @@ export function attachInput(canvas, state) {
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
   //
-  // Deliberately derived from the logical size, not `canvas.width`. The backing
-  // store is RENDER_SCALE times larger, so dividing by it would return
-  // backing-store pixels -- a uniform 2x error that silently breaks every hit
-  // target: taps in the right half of the board fall outside COLS and do
-  // nothing, the whole power-up bar drops below the HUD gate and becomes
-  // untappable, and dragging pins the fruit against the right wall. Using the
-  // logical size stays correct whatever RENDER_SCALE is set to.
+  // Deliberately derived from the logical size, not `canvas.width`. The
+  // backing store is some device-pixel-per-logical-pixel multiple larger
+  // (js/main.js, DPR-driven and responsive since phase 4), so dividing by it
+  // would return backing-store pixels -- a uniform error that silently
+  // breaks every hit target: taps in the right half of the board fall
+  // outside COLS and do nothing, the whole power-up bar drops below the HUD
+  // gate and becomes untappable, and dragging pins the fruit against the
+  // right wall. Using the logical size stays correct regardless of the
+  // backing store's actual resolution.
   function toCanvasPoint(evt) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = CANVAS_WIDTH / rect.width;

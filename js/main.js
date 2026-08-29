@@ -2,7 +2,8 @@
 // render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
-  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, RENDER_SCALE,
+  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS,
+  MIN_BACKING_SCALE, MAX_BACKING_SCALE,
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
@@ -39,28 +40,105 @@ let state;
 const fx = createEffects();
 
 // The canvas has two sizes that must not be confused:
-//   - the BACKING STORE (canvas.width/height), in device pixels, scaled up by
-//     RENDER_SCALE so text and hairlines stay sharp when the board is displayed
-//     larger than its 384px logical width;
+//   - the BACKING STORE (canvas.width/height), in device pixels -- sized to
+//     the canvas's actual on-screen CSS size times a clamped
+//     devicePixelRatio, so text and hairlines stay sharp without
+//     over-provisioning fill-rate and memory on a small display (the
+//     certification ceiling is a 512 MB JS heap);
 //   - the LOGICAL size the game draws in, always 384 x canvasHeightFor(state).
-// CSS sizing is left to the stylesheet, which fits the board to the viewport.
-function sizeCanvas() {
-  const logicalH = canvasHeightFor(state);
-  const w = CANVAS_WIDTH * RENDER_SCALE;
-  const h = logicalH * RENDER_SCALE;
-  // Compare against the backing size, not the logical one: the old guard
-  // compared canvas.height to the logical height, so under scaling it never
-  // matched and reassigned (resetting the context) on every call.
+//     js/render.js derives the backing-store scale from canvas.width at draw
+//     time, so nothing here needs to track that number separately.
+// CSS sizing (how big the canvas appears on screen) is left to the
+// stylesheet; this module only measures the result, and devicePixelRatio, to
+// decide the backing store's resolution.
+
+let lastGoodCssSize = null; // { width, height } in CSS px
+
+function clampedDPR() {
+  return Math.min(MAX_BACKING_SCALE, Math.max(MIN_BACKING_SCALE, window.devicePixelRatio || 1));
+}
+
+function applyBackingStoreSize() {
+  if (!lastGoodCssSize) return;
+  const dpr = clampedDPR();
+  const w = Math.max(1, Math.round(lastGoodCssSize.width * dpr));
+  const h = Math.max(1, Math.round(lastGoodCssSize.height * dpr));
+  // Compare against the backing size, not the logical one: an old guard here
+  // once compared canvas.height to the logical height, so under scaling it
+  // never matched and reassigned (resetting the 2D context) on every call.
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
   }
-  canvas.style.setProperty('--canvas-aspect', `${CANVAS_WIDTH} / ${logicalH}`);
 }
 
-function resizeCanvasToState() {
-  sizeCanvas();
+// The zero-viewport guard. From Google's certification FAQ, verbatim: "For
+// performance reasons, the game is initially loaded in a WebView that is not
+// displayed to the user, resulting in the WebView viewport size being zero."
+// Refuse to size the backing store from that; keep the last known good size
+// and let the next observation -- once the WebView actually becomes visible
+// -- correct it. This is the point of this function, not defensive
+// decoration: without it, responsive sizing introduces an Android-only
+// failure that never reproduces on a desktop, because nothing here would
+// ever re-measure and the game would boot at 0x0 and stay there.
+//
+// The same guard also covers the routine case of the canvas being `hidden`
+// behind a menu/game-over overlay: ResizeObserver reports a zero content
+// rect the moment an observed element stops rendering.
+function handleCanvasMeasurement(widthPx, heightPx) {
+  if (widthPx < 1 || heightPx < 1) return;
+  lastGoodCssSize = { width: widthPx, height: heightPx };
+  // #overlay (css/style.css) has no way of its own to know how wide the
+  // canvas actually renders -- it can be width- or height-constrained
+  // depending on the viewport's aspect ratio -- so that is shared through a
+  // custom property instead of duplicating the sizing logic in CSS. Without
+  // this, the shop stays a small card next to a large board on a wide
+  // screen: the two halves of the game visibly disagree.
+  document.documentElement.style.setProperty('--canvas-css-width', `${widthPx}px`);
+  applyBackingStoreSize();
 }
+
+function measureCanvasNow() {
+  const rect = canvas.getBoundingClientRect();
+  handleCanvasMeasurement(rect.width, rect.height);
+}
+
+// Extra Row changes canvasHeightFor(state), which changes the aspect ratio
+// CSS derives the canvas's (and, via --canvas-css-width above, the
+// overlay's) on-screen size from. Set on :root rather than on the canvas
+// element itself, which is what lets #overlay share it.
+function syncCanvasAspect() {
+  const logicalH = canvasHeightFor(state);
+  document.documentElement.style.setProperty('--canvas-aspect', `${CANVAS_WIDTH} / ${logicalH}`);
+  // The aspect-ratio change lands synchronously in this same task, but
+  // ResizeObserver callbacks fire asynchronously -- measure immediately too,
+  // so a screen transition or an Extra Row run does not show one stale frame
+  // at the previous size first.
+  measureCanvasNow();
+}
+
+if (typeof ResizeObserver === 'function') {
+  const canvasResizeObserver = new ResizeObserver((entries) => {
+    const box = entries[entries.length - 1].contentRect;
+    handleCanvasMeasurement(box.width, box.height);
+  });
+  canvasResizeObserver.observe(canvas);
+}
+
+// There is no "devicePixelRatio changed" event -- moving a window between
+// monitors changes it without resizing any element. The standard workaround:
+// watch a matchMedia query pinned to the CURRENT ratio, and re-pin a new one
+// each time it fires (a change means the ratio is no longer what the query
+// was watching for).
+function watchDevicePixelRatio() {
+  if (typeof window.matchMedia !== 'function') return;
+  const mql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+  mql.addEventListener('change', () => {
+    applyBackingStoreSize();
+    watchDevicePixelRatio();
+  }, { once: true });
+}
+watchDevicePixelRatio();
 
 // Tells index.html whether it is safe to reload for a service worker update.
 // A refresh mid-run would discard the player's game, so updates wait for a menu.
@@ -118,9 +196,11 @@ function showScreen() {
     // Drop / Extra Row / Rainbow) actually reach it.
     renderMenu(overlay, state, () => {
       clearEffects(fx);
-      resizeCanvasToState();
       overlay.hidden = true;
       canvas.hidden = false;
+      // After unhiding, not before: measuring a still-hidden canvas would
+      // hit the zero-viewport guard and just keep the previous size.
+      syncCanvasAspect();
       syncReloadGuard();
       syncMusic();
     });
@@ -129,9 +209,9 @@ function showScreen() {
     canvas.hidden = true;
     renderGameOver(overlay, state, () => {
       clearEffects(fx);
-      resizeCanvasToState();
       overlay.hidden = true;
       canvas.hidden = false;
+      syncCanvasAspect();
       syncReloadGuard();
       syncMusic();
     });
@@ -260,6 +340,10 @@ async function boot() {
   const save = await platform.load();
 
   state = createInitialState(save);
+  // Test-only hook: lets an automated check (e.g. "state survives a resize")
+  // read the running game's actual state without a bespoke IPC channel for
+  // it. Nothing at runtime reads or writes this; harmless in production.
+  window.__poofDebugState = state;
   hydrateAudio(save);
   hydrateMusic(save);
   hydrateHaptics(save);
@@ -286,7 +370,7 @@ async function boot() {
   // block a gesture-less resume.
   if (hostAudio) unlockAudio();
 
-  sizeCanvas();
+  syncCanvasAspect();
   attachInput(canvas, state);
 
   showScreen();

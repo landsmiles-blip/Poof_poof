@@ -15,12 +15,50 @@
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const { execFileSync } = require('child_process');
 
 const BASE = process.env.BASE_URL || 'http://localhost:8642';
 const SHOTS = process.env.SHOT_DIR || path.join(__dirname, 'screenshots');
 const EXEC = process.env.CHROMIUM_PATH || undefined;
+const REPO_ROOT = path.join(__dirname, '..');
 
 fs.mkdirSync(SHOTS, { recursive: true });
+
+// Rebuilds dist/playables/ fresh before testing it below, so this suite is
+// also the thing that catches the build script itself breaking.
+execFileSync(process.execPath, [path.join(REPO_ROOT, 'tools', 'build-playables.js')], { stdio: 'inherit' });
+
+const MIME_TYPES = {
+  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
+  '.woff2': 'font/woff2', '.txt': 'text/plain', '.json': 'application/json',
+};
+
+// A tiny static server rooted at exactly `rootDir`, refusing anything outside
+// it -- so "runs standalone" means what it says: a request for a sibling
+// file (a typo'd relative import, say) 404s here instead of silently
+// resolving against files this build was supposed to exclude.
+function serveDir(rootDir, port) {
+  const server = http.createServer((req, res) => {
+    const urlPath = decodeURIComponent(req.url.split('?')[0]);
+    const filePath = path.join(rootDir, urlPath === '/' ? '/index.html' : urlPath);
+    if (!filePath.startsWith(rootDir)) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream' });
+      res.end(data);
+    });
+  });
+  return new Promise((resolve) => server.listen(port, () => resolve(server)));
+}
 
 const results = [];
 const errors = [];
@@ -544,6 +582,172 @@ async function shot(page, name, full = false) {
     record('Survives blocked localStorage', ok, playable,
       `menu rendered: ${ok}; playable: ${playable}`);
     await context.close();
+  }
+
+  // --------------------------------------- zero-viewport guard (4.1)
+  // From Google's certification FAQ, verbatim: "the game is initially loaded
+  // in a WebView that is not displayed to the user, resulting in the WebView
+  // viewport size being zero." Forcing the canvas's own box to report zero
+  // (display:none, which ResizeObserver reports as a zero content rect the
+  // instant an observed element stops rendering) reproduces the same signal
+  // our sizing code receives from a real zero-size WebView, without needing
+  // Playwright to set an actual 0x0 viewport (most implementations refuse
+  // below 1x1 anyway).
+  {
+    const { context, page } = await freshPage(browser, 'zero-viewport');
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(250);
+
+    const beforeZero = await page.evaluate(() => {
+      const c = document.getElementById('game-canvas');
+      return { w: c.width, h: c.height };
+    });
+    await page.evaluate(() => {
+      document.getElementById('game-canvas').style.setProperty('display', 'none', 'important');
+    });
+    await page.waitForTimeout(150);
+    const duringZero = await page.evaluate(() => {
+      const c = document.getElementById('game-canvas');
+      return { w: c.width, h: c.height };
+    });
+    await page.evaluate(() => {
+      document.getElementById('game-canvas').style.removeProperty('display');
+    });
+    await page.waitForTimeout(150);
+    const afterReveal = await page.evaluate(() => {
+      const c = document.getElementById('game-canvas');
+      const rect = c.getBoundingClientRect();
+      const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+      return { w: c.width, h: c.height, rectW: rect.width, rectH: rect.height, dpr };
+    });
+
+    const heldLastGoodSize = duringZero.w === beforeZero.w && duringZero.h === beforeZero.h && duringZero.w > 0;
+    const recovered = afterReveal.w > 0 && afterReveal.h > 0
+      && Math.abs(afterReveal.w - Math.round(afterReveal.rectW * afterReveal.dpr)) <= 2;
+
+    record('Zero-viewport guard holds the backing store', heldLastGoodSize, heldLastGoodSize,
+      `backing store before a zero measurement: ${beforeZero.w}x${beforeZero.h}; during: ${duringZero.w}x${duringZero.h} (unchanged, not corrupted to 0): ${heldLastGoodSize}`);
+    record('Recovers once the WebView actually becomes visible', recovered, recovered,
+      `backing store after re-appearing: ${afterReveal.w}x${afterReveal.h}, matching its rendered size (${afterReveal.rectW.toFixed(0)}x${afterReveal.rectH.toFixed(0)}) x devicePixelRatio: ${recovered}`);
+    await context.close();
+  }
+
+  // --------------------------------------- ratio sweep + resize mid-run (4.1)
+  {
+    const { context, page } = await freshPage(browser, 'ratio-sweep');
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(250);
+
+    const RATIOS = [
+      ['9:32', 270, 960], ['9:16', 405, 720], ['3:4', 600, 800],
+      ['1:1', 700, 700], ['16:9', 960, 540], ['32:9', 1280, 360],
+    ];
+    let allLayoutOk = true;
+    let allInPlaying = true;
+    let scoreNeverDecreased = true;
+    let lastScore = -1;
+    const notes = [];
+    for (const [label, w, h] of RATIOS) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(200);
+      const info = await page.evaluate(() => {
+        const canvas = document.getElementById('game-canvas');
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+        const st = window.__poofDebugState;
+        return {
+          rectW: rect.width, rectH: rect.height,
+          backingW: canvas.width, backingH: canvas.height,
+          scrollW: document.documentElement.scrollWidth,
+          innerW: window.innerWidth,
+          withinViewport: rect.left >= -0.5 && rect.top >= -0.5
+            && rect.right <= window.innerWidth + 0.5 && rect.bottom <= window.innerHeight + 0.5,
+          dpr,
+          screen: st ? st.screen : null,
+          score: st ? st.score : -1,
+        };
+      });
+      const noHScroll = info.scrollW <= info.innerW + 1;
+      const backingMatchesDPR = Math.abs(info.backingW - Math.round(info.rectW * info.dpr)) <= 2
+        && Math.abs(info.backingH - Math.round(info.rectH * info.dpr)) <= 2;
+      if (!noHScroll || !info.withinViewport || !backingMatchesDPR) allLayoutOk = false;
+      if (info.screen !== 'playing') allInPlaying = false;
+      if (info.score < lastScore) scoreNeverDecreased = false;
+      lastScore = info.score;
+      notes.push(`${label} ${Math.round(info.rectW)}x${Math.round(info.rectH)}`);
+    }
+
+    record('Ratio sweep: nothing clipped/stretched, no horizontal scroll', allLayoutOk, allLayoutOk,
+      notes.join(', '));
+    record('Resize mid-run does not reset or corrupt the game', allInPlaying && scoreNeverDecreased, allInPlaying,
+      `stayed on the playing screen through every resize: ${allInPlaying}; score never decreased: ${scoreNeverDecreased}`);
+    await context.close();
+  }
+
+  // ------------------------------------------------------- DPR clamp (4.1)
+  {
+    const context = await browser.newContext({ viewport: { width: 500, height: 860 }, deviceScaleFactor: 4 });
+    const page = await context.newPage();
+    track(page, 'dpr-clamp');
+    await page.addInitScript(() => { try { localStorage.clear(); } catch { /* storage may be blocked on purpose */ } });
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(300);
+    const info = await page.evaluate(() => {
+      const canvas = document.getElementById('game-canvas');
+      const rect = canvas.getBoundingClientRect();
+      return { backingW: canvas.width, rectW: rect.width, dpr: window.devicePixelRatio };
+    });
+    const effectiveScale = info.backingW / info.rectW;
+    const withinClamp = effectiveScale <= 3.05; // MAX_BACKING_SCALE + rounding slack
+    record('DPR clamp (stubbed devicePixelRatio=4)', withinClamp, withinClamp,
+      `devicePixelRatio=${info.dpr}, backing-store/rendered-size ratio=${effectiveScale.toFixed(2)} (must be <= 3)`);
+    await context.close();
+  }
+
+  // ---------------------------------------- Playables build (4.2), ?dev=1
+  {
+    const PLAYABLES_PORT = 8643;
+    const playablesServer = await serveDir(path.join(REPO_ROOT, 'dist', 'playables'), PLAYABLES_PORT);
+    const PLAYABLES_BASE = `http://localhost:${PLAYABLES_PORT}`;
+    try {
+      const { context, page } = await freshPage(browser, 'playables-build');
+      await page.goto(`${PLAYABLES_BASE}/index.html?dev=1`);
+      await page.waitForSelector('#play-btn');
+      const dev = await page.evaluate(async () => {
+        const st = await import('./js/state.js');
+        const s = st.createInitialState(null);
+        return {
+          devModeEnabled: st.devModeEnabled(),
+          highScore: s.highScore,
+          inventory: s.inventory,
+        };
+      });
+      const nothingUnlocked = dev.devModeEnabled === false && dev.highScore === 0
+        && Object.values(dev.inventory).every((n) => n <= 1); // the one starter Remover is expected
+      record('?dev=1 unlocks nothing in the Playables build', nothingUnlocked, nothingUnlocked,
+        `devModeEnabled(): ${dev.devModeEnabled}; highScore: ${dev.highScore}; inventory: ${JSON.stringify(dev.inventory)}`);
+
+      await page.goto(`${PLAYABLES_BASE}/index.html`);
+      await page.waitForSelector('#play-btn');
+      await page.click('#play-btn');
+      const box = await page.locator('#game-canvas').boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.3);
+      await page.mouse.down();
+      await page.mouse.up();
+      await page.waitForTimeout(400);
+      const standalonePlayable = await page.evaluate(() => !document.getElementById('game-canvas').hidden);
+      record('Playables build runs standalone', standalonePlayable, standalonePlayable,
+        `dist/playables/index.html, served from a root with nothing else in it, boots and plays: ${standalonePlayable}`);
+      await context.close();
+    } finally {
+      playablesServer.close();
+    }
   }
 
   // ------------------------------------------------------- offline boot
