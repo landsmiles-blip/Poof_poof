@@ -109,6 +109,79 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
     'the commit should land wherever the finger was released, not where it was first pressed');
 }
 
+// Regression test for a real touch bug found after 7.3, missed by every test
+// above: they all start with the power-up already armed (`state.bombArmed =
+// true` set directly) and press DIRECTLY on the board, which was never
+// broken. A real finger arms the chip AND aims in one motion -- press the
+// chip, slide straight onto the board without lifting, release -- since
+// nothing about a touchscreen requires lifting between the two. The chip's
+// own pointerdown returns early (js/input.js's `point.y <= HUD_HEIGHT`
+// branch) before reaching the code that used to gate committing on an
+// `aiming` flag set only when a gesture's OWN pointerdown already landed on
+// the board while armed -- so this exact sequence silently did nothing.
+// Mouse-click testing could not have caught it: a click's down and up land
+// on the same point by construction, so a chip click never continues onto
+// the board within one gesture.
+{
+  const state = freshState();
+  state.grid[0][2] = 5;
+  state.inventory.bomb = 1;
+  state.highScore = 3000; // bomb unlocks at MILESTONE_SCORES[2]
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const bombSlot = powerSlotRect(2); // [remover, magnet, bomb] -- see constants.POWERUPS order
+  canvas.fire('pointerdown', { clientX: bombSlot.x + bombSlot.w / 2, clientY: bombSlot.y + bombSlot.h / 2 });
+  assert.equal(state.bombArmed, true, 'pressing the chip should arm the bomb');
+
+  // Same gesture continues: no intervening pointerup, straight to the board.
+  canvas.fire('pointermove', { clientX: 2 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  canvas.fire('pointerup', {});
+
+  const events = state.events.filter((e) => e.type === 'bombCleared');
+  assert.equal(events.length, 1, 'a continuous press-chip-then-drag-to-board-then-release must still commit');
+  assert.equal(state.bombArmed, false, 'a successful commit should consume the bomb and un-arm it');
+}
+
+// Same continuous chip-to-board drag, for the remover.
+{
+  const state = freshState();
+  state.grid[0][2] = 5;
+  state.inventory.remover = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const removerSlot = powerSlotRect(0);
+  canvas.fire('pointerdown', { clientX: removerSlot.x + removerSlot.w / 2, clientY: removerSlot.y + removerSlot.h / 2 });
+  assert.equal(state.removerArmed, true, 'pressing the chip should arm the remover');
+
+  canvas.fire('pointermove', { clientX: 2 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  canvas.fire('pointerup', {});
+
+  const events = state.events.filter((e) => e.type === 'removerUsed');
+  assert.equal(events.length, 1, 'a continuous press-chip-then-drag-to-board-then-release must still commit');
+  assert.equal(state.removerArmed, false, 'a successful commit should consume the remover and un-arm it');
+}
+
+// A plain chip tap alone (no drag onto the board at all) must still commit
+// nothing -- guards against the obvious wrong fix of just dropping the
+// armPreviewCell null-check.
+{
+  const state = freshState();
+  state.inventory.bomb = 1;
+  state.highScore = 3000;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const bombSlot = powerSlotRect(2);
+  canvas.fire('pointerdown', { clientX: bombSlot.x + bombSlot.w / 2, clientY: bombSlot.y + bombSlot.h / 2 });
+  canvas.fire('pointerup', {});
+
+  assert.equal(state.events.filter((e) => e.type === 'bombCleared').length, 0,
+    'arming alone, with no drag onto the board, must not commit');
+  assert.equal(state.bombArmed, true, 'the bomb should still be armed, waiting for an actual target');
+}
+
 // Locked power-up: magnet unlocks at a score this fresh state has not reached.
 // No persisted field changes, so state.dirty must NOT be set.
 {

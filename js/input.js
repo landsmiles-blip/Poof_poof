@@ -69,9 +69,14 @@ export function attachInput(canvas, state) {
         if (activateMagnet(state)) playUiTick(); // activateMagnet marks state.dirty
       } else if (item.id === 'bomb') {
         armBomb(state, !state.bombArmed);
+        // A fresh arm (or a cancel) must never inherit a stale target left
+        // over from a previous aim -- see the touch bug this is part of
+        // fixing below.
+        state.armPreviewCell = null;
         playUiTick();
       } else if (item.id === 'remover') {
         armRemover(state, !state.removerArmed);
+        state.armPreviewCell = null;
         playUiTick();
       }
       return true;
@@ -79,13 +84,28 @@ export function attachInput(canvas, state) {
     return false;
   }
 
-  // 7.3: bomb/remover now commit on release, not on the initial touch, so the
+  // 7.3: bomb/remover commit on release, not on the initial touch, so the
   // footprint/crosshair (js/render.js, reading state.armPreviewCell) can
   // genuinely follow the finger before committing rather than flashing into
-  // existence and firing in the same instant. A plain tap still works exactly
-  // as before -- press and release at the same spot commits at that cell.
-  let aiming = false;
-
+  // existence and firing in the same instant.
+  //
+  // Bug found on real touch (not caught by mouse-click testing, since a mouse
+  // click's down and up land on the same point by construction): arming the
+  // chip and then, in ONE continuous press -- finger never lifting --
+  // dragging onto the board never committed. The chip's own pointerdown
+  // returns early (the `point.y <= HUD_HEIGHT` branch above) without ever
+  // reaching the code that used to set an `aiming` flag, so the later
+  // pointerup on the board had nothing telling it this gesture was allowed to
+  // commit, even though armPreviewCell had been updated correctly by the
+  // pointermove in between. A real finger naturally does exactly this --
+  // press the chip, slide straight down onto a target, release -- since nothing
+  // requires lifting between arming and aiming.
+  //
+  // Fixed by dropping the `aiming` flag entirely: armPreviewCell itself is
+  // now the only thing that decides whether a release commits. It starts (or
+  // resets to) null the moment arming changes (above, and in onPointerUp
+  // below), so a plain tap that never touches the board still commits
+  // nothing -- there's no gap where a stale cell from a previous aim could.
   function onPointerDown(evt) {
     // Browsers only allow audio to start from a user gesture.
     unlockAudio();
@@ -99,7 +119,6 @@ export function attachInput(canvas, state) {
 
     // Armed targeting modes are mutually exclusive, so at most one applies.
     if (state.bombArmed || state.removerArmed) {
-      aiming = true;
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -116,10 +135,9 @@ export function attachInput(canvas, state) {
   function onPointerMove(evt) {
     const point = toCanvasPoint(evt);
     if (state.bombArmed || state.removerArmed) {
-      // Updated on every move regardless of `aiming`, so a mouse hovering
-      // before it ever clicks also sees the footprint -- touch has no
-      // equivalent of hover, so there `aiming` (set on pointerdown) is what
-      // makes this fire at all.
+      // Updated on every move so a mouse hovering before it ever clicks also
+      // sees the footprint, and so a touch that presses the chip and slides
+      // straight onto the board without lifting tracks correctly too.
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -128,9 +146,15 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerUp() {
-    if (aiming) {
-      aiming = false;
+    // armPreviewCell alone decides whether this release commits -- see the
+    // long comment above onPointerDown for why an `aiming` flag keyed to
+    // where THIS gesture's own pointerdown landed was wrong. It is null
+    // whenever there is nothing valid to act on (arming or cancelling always
+    // resets it, and a plain chip tap that never touches the board never
+    // sets it), so this is safe to check unconditionally.
+    if (state.bombArmed || state.removerArmed) {
       const cell = state.armPreviewCell;
+      state.armPreviewCell = null;
       if (state.bombArmed && cell) {
         const cleared = detonateBomb(state, cell.row, cell.col);
         if (cleared) {
@@ -165,6 +189,7 @@ export function attachInput(canvas, state) {
     if (evt.key === 'Escape') {
       if (state.bombArmed) armBomb(state, false);
       if (state.removerArmed) armRemover(state, false);
+      state.armPreviewCell = null;
       return;
     }
 

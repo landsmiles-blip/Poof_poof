@@ -553,6 +553,116 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // -------------------------------------------- power-ups on REAL touch (7.3 bug)
+  //
+  // Every check above drives physics functions directly or (elsewhere in this
+  // file) clicks with a mouse. Neither caught this: 7.3 moved bomb/remover to
+  // commit on release, gated by an `aiming` flag set only when a gesture's OWN
+  // pointerdown already landed on the board while armed. A mouse click's down
+  // and up land on the same point by construction, so a chip click never
+  // continues onto the board within one gesture -- the bug was invisible to
+  // every test that existed. A real finger naturally arms and aims in one
+  // continuous press (touch chip, slide onto the board, lift), which silently
+  // did nothing. Fixed in js/input.js by dropping `aiming` in favour of
+  // armPreviewCell itself as the sole commit gate.
+  //
+  // This uses a real touch-capable context (hasTouch) and real touch/pointer
+  // dispatch, not mouse clicks, for exactly that reason.
+  {
+    const { context, page } = await freshPage(browser, 'touch-powerups', { hasTouch: true });
+    await page.goto(`${BASE}/index.html?dev=1`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(150);
+
+    const geom = await page.evaluate(() => {
+      const rect = document.getElementById('game-canvas').getBoundingClientRect();
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    });
+    const canvasHeight = await page.evaluate(async () => (await import('./js/render.js')).canvasHeightFor(window.__poofDebugState));
+    const toPage = (lx, ly) => ({
+      x: geom.left + lx * (geom.width / 384),
+      y: geom.top + ly * (geom.height / canvasHeight),
+    });
+    // Logical HUD chip centres: powerSlotRect(i) = { x: 10 + i*34, y: 80, size: 26 }.
+    // hudPowerUps() order is [remover, magnet, bomb].
+    const chip = (i) => toPage(10 + i * 34 + 13, 80 + 13);
+    const boardCell = (col, row) => toPage(col * 64 + 32, 118 + row * 64 + 32);
+
+    async function resetRun() {
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.bombArmed = false;
+        s.removerArmed = false;
+        s.magnetActive = false;
+        s.armPreviewCell = null;
+        for (const row of s.grid) row.fill(null);
+        s.stackHeight.fill(0);
+      });
+    }
+
+    // Magnet: a single real touch tap on the chip must activate it. No board
+    // step needed -- magnet was never affected by the commit-on-release
+    // change, included for full power-up coverage per the same recipe.
+    await resetRun();
+    await page.evaluate(() => {
+      const s = window.__poofDebugState;
+      s.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
+    });
+    const magnetChip = chip(1);
+    await page.touchscreen.tap(magnetChip.x, magnetChip.y);
+    await page.waitForTimeout(80);
+    const magnetOk = await page.evaluate(() => window.__poofDebugState.magnetActive);
+    record('Magnet fires on real touch tap', magnetOk, magnetOk,
+      `magnetActive after a real touchscreen tap on its chip: ${magnetOk}`);
+
+    // Bomb and Remover, each checked two ways: (a) two separate taps -- press
+    // the chip, lift, press a board cell, lift; (b) the actual regression --
+    // ONE continuous touch: press the chip, drag onto the board, lift once.
+    for (const [id, chipIndex, tier] of [['bomb', 2, 5], ['remover', 0, 5]]) {
+      const slot = chip(chipIndex);
+      const cell = boardCell(2, 3);
+
+      // (a) two separate taps
+      await resetRun();
+      await page.evaluate((t) => { window.__poofDebugState.grid[3][2] = t; }, tier);
+      await page.touchscreen.tap(slot.x, slot.y);
+      await page.waitForTimeout(80);
+      await page.touchscreen.tap(cell.x, cell.y);
+      await page.waitForTimeout(80);
+      const twoTapResult = await page.evaluate((armedKey) => ({
+        armed: window.__poofDebugState[armedKey],
+        cleared: window.__poofDebugState.grid[3][2] === null,
+      }), id === 'bomb' ? 'bombArmed' : 'removerArmed');
+      record(`${id[0].toUpperCase()}${id.slice(1)} fires on real touch: separate taps`,
+        twoTapResult.cleared, twoTapResult.cleared,
+        `tap chip (real touch), lift, tap board cell (real touch), lift -> armed after=${twoTapResult.armed}, cell cleared=${twoTapResult.cleared}`);
+
+      // (b) one continuous press: chip -> board -> release, no lift in between.
+      // page.touchscreen has no drag primitive, so this goes through CDP's
+      // Input.dispatchTouchEvent directly to control a single, uninterrupted
+      // touch sequence -- the exact gesture the bug needed.
+      await resetRun();
+      await page.evaluate((t) => { window.__poofDebugState.grid[3][2] = t; }, tier);
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: slot.x, y: slot.y }] });
+      await page.waitForTimeout(40);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cell.x, y: cell.y }] });
+      await page.waitForTimeout(40);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(100);
+      const dragResult = await page.evaluate((armedKey) => ({
+        armed: window.__poofDebugState[armedKey],
+        cleared: window.__poofDebugState.grid[3][2] === null,
+      }), id === 'bomb' ? 'bombArmed' : 'removerArmed');
+      record(`${id[0].toUpperCase()}${id.slice(1)} fires on real touch: continuous chip-to-board drag`,
+        dragResult.cleared, dragResult.cleared,
+        `ONE touch: press chip, drag onto board, release (no lift in between) -> armed after=${dragResult.armed}, cell cleared=${dragResult.cleared}`);
+    }
+
+    await context.close();
+  }
+
   // ---------------------------------------------------------------- theme
   {
     const { context, page } = await freshPage(browser, 'theme');
