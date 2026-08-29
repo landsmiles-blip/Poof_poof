@@ -21,10 +21,12 @@ const SWATCH_TIERS = [0, 3, 6, 8];
 export function renderMenu(root, state, onStart) {
   renderShopScreen(root, state, {
     title: 'Poof Poof',
+    // Coins moved to the Cart button's own badge (7.1) -- the home screen
+    // carries only the four things the brief specifies: title, best score,
+    // Play, the icon row.
     lead: `
       <p class="subtitle">Drag falling fruit, merge matching pairs, chase the watermelon.</p>
       <p class="stat">Best score: <strong>${state.highScore}</strong></p>
-      <p class="stat">Coins: <strong>${state.coins}</strong></p>
     `,
     playLabel: 'Play',
     onStart,
@@ -47,33 +49,118 @@ export function renderGameOver(root, state, onPlayAgain) {
   });
 }
 
+// 7.1: the menu used to put everything on one page -- title, stats, six shop
+// cards, five skin cards, three run toggles, Play, three audio buttons, a
+// build stamp -- eleven cards deep before the button that starts the game.
+// Now the first screen carries exactly four things (title, best score/result,
+// Play, an icon row); the icon row opens one of three panels within the same
+// overlay, each with its own back control. The overlay still fully replaces
+// the canvas either way -- this only restructures what's inside it.
 function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
   // Held across redraws so buying something does not clear the toggles.
   const opts = { useSlowDrop: false, useExtraRow: false, useRainbow: false };
+  let panel = 'home'; // 'home' | 'cart' | 'palette' | 'gear'
 
-  function draw() {
-    root.innerHTML = `
-      <div class="screen">
+  // Esc closes an open panel back to the home screen. This module never
+  // renders alongside a run (the overlay and the canvas are mutually
+  // exclusive), so there is no armed-power-up state to conflict with here --
+  // input.js's own Escape handler covers that case independently. Removed
+  // when this screen instance is torn down (start()), so repeated
+  // menu/game-over cycles never accumulate listeners.
+  function onKeyDown(evt) {
+    if (evt.key !== 'Escape' || panel === 'home') return;
+    panel = 'home';
+    draw();
+  }
+  window.addEventListener('keydown', onKeyDown);
+
+  function openPanel(name) {
+    return () => {
+      unlockAudio();
+      playUiTick();
+      panel = name;
+      draw();
+    };
+  }
+
+  function start() {
+    window.removeEventListener('keydown', onKeyDown);
+    unlockAudio();
+    startRun(state, opts); // marks state.dirty
+    onStart();
+  }
+
+  function homeHTML() {
+    // A shop the player cannot afford anything from should say so before
+    // they tap into it, not after -- the coin badge dims rather than reading
+    // as just another number.
+    const canAffordAnything = POWERUPS.some((p) => isUnlockedByScore(p, state.highScore) && state.coins >= p.cost);
+    return `
+      <div class="screen screen-home">
         <h1>${title}</h1>
         ${lead}
+        <button class="primary" id="play-btn">${playLabel}</button>
+        <div class="icon-row">
+          <button class="icon-btn" id="open-cart">
+            <span class="icon-slot" data-icon="cart"></span>
+            <span class="icon-btn-label">Cart</span>
+            <span class="icon-btn-badge ${canAffordAnything ? '' : 'badge-muted'}">${state.coins}</span>
+          </button>
+          <button class="icon-btn" id="open-palette">
+            <span class="icon-slot" data-icon="palette"></span>
+            <span class="icon-btn-label">Palette</span>
+          </button>
+          <button class="icon-btn" id="open-gear">
+            <span class="icon-slot" data-icon="gear"></span>
+            <span class="icon-btn-label">Gear</span>
+          </button>
+        </div>
+        <p class="build-stamp">v${BUILD_VERSION}</p>
+      </div>
+    `;
+  }
 
-        <h2>Power-ups</h2>
+  function panelHeaderHTML(label) {
+    return `
+      <div class="panel-header">
+        <button class="back-btn" id="back-btn"><span class="icon-slot" data-icon="back"></span></button>
+        <h1>${label}</h1>
+      </div>
+    `;
+  }
+
+  function cartPanelHTML() {
+    return `
+      <div class="screen screen-panel">
+        ${panelHeaderHTML('Cart')}
+        <p class="coin-balance">Coins: <strong>${state.coins}</strong></p>
         <p class="hint">Remover, Magnet and Bomb are tapped from the bar at the top of the screen during a run.</p>
         <div class="shop-grid">
           ${POWERUPS.map((p) => shopItemHTML(state, p)).join('')}
         </div>
-
-        <h2>Fruit skins</h2>
-        <div class="skin-grid">
-          ${SKINS.map((skin) => skinItemHTML(state, skin)).join('')}
-        </div>
-
         <h2>Next run</h2>
         ${runToggleHTML(state, 'slowDrop', 'toggle-slowdrop', 'Use Slow Drop', opts.useSlowDrop)}
         ${runToggleHTML(state, 'extraRow', 'toggle-extrarow', 'Use Extra Row', opts.useExtraRow)}
         ${runToggleHTML(state, 'rainbow', 'toggle-rainbow', 'Use Rainbow Fruit', opts.useRainbow)}
+      </div>
+    `;
+  }
 
-        <button class="primary" id="play-btn">${playLabel}</button>
+  function palettePanelHTML() {
+    return `
+      <div class="screen screen-panel">
+        ${panelHeaderHTML('Palette')}
+        <div class="skin-grid">
+          ${SKINS.map((skin) => skinItemHTML(state, skin)).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function gearPanelHTML() {
+    return `
+      <div class="screen screen-panel">
+        ${panelHeaderHTML('Gear')}
         <div class="toggle-row">
           ${soundButtonHTML()}
           ${musicButtonHTML()}
@@ -82,39 +169,51 @@ function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
         <p class="build-stamp">v${BUILD_VERSION}</p>
       </div>
     `;
+  }
+
+  function draw() {
+    if (panel === 'home') root.innerHTML = homeHTML();
+    else if (panel === 'cart') root.innerHTML = cartPanelHTML();
+    else if (panel === 'palette') root.innerHTML = palettePanelHTML();
+    else root.innerHTML = gearPanelHTML();
 
     mountIcons(root);
 
-    root.querySelectorAll('.buy-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        unlockAudio();
-        const item = POWERUPS.find((p) => p.id === btn.dataset.key);
-        if (item && buyPowerUp(state, item.id, item.cost)) playUiTick(); // marks state.dirty
-        draw();
+    if (panel === 'home') {
+      root.querySelector('#open-cart').addEventListener('click', openPanel('cart'));
+      root.querySelector('#open-palette').addEventListener('click', openPanel('palette'));
+      root.querySelector('#open-gear').addEventListener('click', openPanel('gear'));
+      root.querySelector('#play-btn').addEventListener('click', start);
+      return;
+    }
+
+    root.querySelector('#back-btn').addEventListener('click', openPanel('home'));
+
+    if (panel === 'cart') {
+      root.querySelectorAll('.buy-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          unlockAudio();
+          const item = POWERUPS.find((p) => p.id === btn.dataset.key);
+          if (item && buyPowerUp(state, item.id, item.cost)) playUiTick(); // marks state.dirty
+          draw();
+        });
       });
-    });
-
-    root.querySelectorAll('.skin-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        unlockAudio();
-        if (selectSkin(state, btn.dataset.skin)) playUiTick(); // marks state.dirty
-        draw();
+      bindToggle(root, '#toggle-slowdrop', (v) => { opts.useSlowDrop = v; });
+      bindToggle(root, '#toggle-extrarow', (v) => { opts.useExtraRow = v; });
+      bindToggle(root, '#toggle-rainbow', (v) => { opts.useRainbow = v; });
+    } else if (panel === 'palette') {
+      root.querySelectorAll('.skin-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          unlockAudio();
+          if (selectSkin(state, btn.dataset.skin)) playUiTick(); // marks state.dirty
+          draw();
+        });
       });
-    });
-
-    bindToggle(root, '#toggle-slowdrop', (v) => { opts.useSlowDrop = v; });
-    bindToggle(root, '#toggle-extrarow', (v) => { opts.useExtraRow = v; });
-    bindToggle(root, '#toggle-rainbow', (v) => { opts.useRainbow = v; });
-
-    root.querySelector('#play-btn').addEventListener('click', () => {
-      unlockAudio();
-      startRun(state, opts); // marks state.dirty
-      onStart();
-    });
-
-    wireSoundButton(root, draw, state);
-    wireMusicButton(root, draw, state);
-    wireHapticsButton(root, draw, state);
+    } else if (panel === 'gear') {
+      wireSoundButton(root, draw, state);
+      wireMusicButton(root, draw, state);
+      wireHapticsButton(root, draw, state);
+    }
   }
 
   draw();

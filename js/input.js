@@ -136,12 +136,15 @@ export function attachInput(canvas, state) {
   // the browser's own key repeat gives held-key movement for free), space or
   // down hard-drops, Escape cancels an armed power-up.
   //
-  // The design brief for this asked for Escape to "close the shop overlay",
-  // but the overlay (js/shop.js) is never shown DURING a run to begin with --
-  // it fills the screen only on the menu/game-over transition, mutually
-  // exclusive with the canvas -- so there is no in-run overlay for Escape to
-  // dismiss. Cancelling an armed power-up is the closest real analog: it is
-  // the one piece of "modal, dismissible" UI state a run actually has.
+  // Phase 6 noted Escape had no overlay to dismiss, since js/shop.js's
+  // overlay is never shown DURING a run -- it fills the screen only on the
+  // menu/game-over transition, mutually exclusive with the canvas. Phase 7.1
+  // gave it a real job there instead: js/shop.js's own Escape handler closes
+  // an open Cart/Palette/Gear panel back to the hub. The two handlers are
+  // independent (each listens on window and checks only its own precondition)
+  // and never actually compete, because the states they react to -- an armed
+  // power-up, an open panel -- cannot coexist: one requires a run in
+  // progress, the other requires the overlay that only shows when no run is.
   function onKeyDown(evt) {
     if (evt.key === 'Escape') {
       if (state.bombArmed) armBomb(state, false);

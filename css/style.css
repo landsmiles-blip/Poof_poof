@@ -331,3 +331,80 @@ button {
   opacity: 0.7;
   text-align: left;
 }
+
+/* 7.1: the menu hub. Three icon buttons open the Cart/Palette/Gear panels
+   below -- everything else about .screen (background, radius, shadow) is
+   shared, so the home screen and a panel never visibly jump size. */
+.icon-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.icon-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border: 1px solid rgba(58, 43, 32, 0.15);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-color);
+}
+
+.icon-btn:active {
+  filter: brightness(0.92);
+}
+
+.icon-btn-label {
+  font-size: 12px;
+  font-weight: bold;
+}
+
+/* Coin count on the Cart button itself, so a shop with nothing affordable
+   says so before it is opened rather than after. */
+.icon-btn-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-weight: bold;
+}
+
+.icon-btn-badge.badge-muted {
+  background: rgba(58, 43, 32, 0.25);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.panel-header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid rgba(58, 43, 32, 0.15);
+  border-radius: 50%;
+  background: transparent;
+  flex: 0 0 34px;
+}
+
+.coin-balance {
+  margin: 4px 0 12px;
+  font-size: 14px;
+  text-align: left;
+}

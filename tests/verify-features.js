@@ -131,20 +131,54 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
-  // ------------------------------------------------- menu shop reachable now
+  // ---------------------------------------- menu hub + panels (7.1) reachable
   {
     const { context, page } = await freshPage(browser, 'menushop');
     await page.goto(`${BASE}/index.html`);
     await page.waitForSelector('#play-btn');
-    const menu = await page.evaluate(() => ({
+
+    // Home screen carries exactly the four things: title, best score, Play,
+    // the icon row -- no shop/skin cards should be present until a panel opens.
+    const home = await page.evaluate(() => ({
+      hasHome: !!document.querySelector('.screen-home'),
+      hasShopYet: document.querySelectorAll('.shop-item').length,
+      hasIconRow: document.querySelectorAll('.icon-btn').length,
+    }));
+
+    await page.click('#open-cart');
+    await page.waitForSelector('.shop-item');
+    const cart = await page.evaluate(() => ({
       hasShop: document.querySelectorAll('.shop-item').length,
+    }));
+
+    // Esc closes the panel back to the hub (7.1) -- checked before navigating
+    // to Palette, so this exercises the actual close path rather than the
+    // back button alone.
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.screen-home');
+    const closedByEscape = await page.evaluate(() => !document.querySelector('.shop-item') && !!document.querySelector('.screen-home'));
+
+    await page.click('#open-palette');
+    await page.waitForSelector('.skin-item');
+    const palette = await page.evaluate(() => ({
       hasSkins: document.querySelectorAll('.skin-item').length,
+    }));
+    await page.click('#back-btn');
+
+    await page.click('#open-gear');
+    await page.waitForSelector('#sound-btn');
+    const gear = await page.evaluate(() => ({
       hasSound: !!document.querySelector('#sound-btn'),
       hasMusic: !!document.querySelector('#music-btn'),
     }));
-    record('Shop reachable from menu', menu.hasShop > 0, menu.hasShop > 0,
-      `${menu.hasShop} power-ups, ${menu.hasSkins} skins, music toggle: ${menu.hasMusic}`,
-      await shot(page, '01-menu-shop', true));
+
+    const ok = home.hasHome && home.hasShopYet === 0 && home.hasIconRow === 3
+      && cart.hasShop > 0 && palette.hasSkins > 0 && gear.hasMusic && closedByEscape;
+    record('Menu hub + panels reachable', ok, ok,
+      `home carries no shop cards until opened (${home.hasShopYet} on load, ${home.hasIconRow} icon buttons); `
+      + `Cart ${cart.hasShop} power-ups, Palette ${palette.hasSkins} skins, Gear music toggle: ${gear.hasMusic}; `
+      + `Escape closed the panel: ${closedByEscape}`,
+      await shot(page, '01-menu-cart', true));
     await context.close();
   }
 

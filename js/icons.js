@@ -148,6 +148,85 @@ ICONS.rainbow = (ctx, x, y, s, color) => {
   ctx.stroke();
 };
 
+// Shopping cart: open basket, handle, two wheels. Menu hub button (7.1).
+ICONS.cart = (ctx, x, y, s, color) => {
+  const u = s / 2;
+  withStyle(ctx, color, s * 0.1);
+  ctx.beginPath();
+  ctx.moveTo(x - u * 0.55, y - u * 0.25);
+  ctx.lineTo(x + u * 0.65, y - u * 0.25);
+  ctx.lineTo(x + u * 0.45, y + u * 0.35);
+  ctx.lineTo(x - u * 0.35, y + u * 0.35);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - u * 0.55, y - u * 0.25);
+  ctx.lineTo(x - u * 0.75, y - u * 0.65);
+  ctx.lineTo(x - u * 0.9, y - u * 0.65);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x - u * 0.15, y + u * 0.6, u * 0.13, 0, Math.PI * 2);
+  ctx.arc(x + u * 0.3, y + u * 0.6, u * 0.13, 0, Math.PI * 2);
+  ctx.fill();
+};
+
+// Artist's palette: a rounded blob, a thumb-hole, three paint dots. Menu hub
+// button (7.1) for the skin picker.
+ICONS.palette = (ctx, x, y, s, color) => {
+  const u = s / 2;
+  withStyle(ctx, color, s * 0.1);
+  ctx.beginPath();
+  ctx.ellipse(x, y, u * 0.85, u * 0.68, -0.3, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(x + u * 0.28, y + u * 0.42, u * 0.2, u * 0.14, -0.3, 0, Math.PI * 2);
+  ctx.stroke();
+  [[-0.4, -0.2], [-0.05, -0.5], [0.35, -0.35]].forEach(([dx, dy]) => {
+    ctx.beginPath();
+    ctx.arc(x + dx * u, y + dy * u, u * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+  });
+};
+
+// Cog: a filled disc, eight radiating teeth, a punched-out center. Menu hub
+// button (7.1) for audio/haptics settings.
+ICONS.gear = (ctx, x, y, s, color) => {
+  const u = s / 2;
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, u * 0.62, 0, Math.PI * 2);
+  ctx.fill();
+  const teeth = 8;
+  const toothLen = u * 0.28;
+  const toothW = u * 0.26;
+  for (let i = 0; i < teeth; i++) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate((i / teeth) * Math.PI * 2);
+    ctx.fillRect(u * 0.5, -toothW / 2, toothLen, toothW);
+    ctx.restore();
+  }
+  // Punched out rather than left as a stroked ring, so the hole is genuinely
+  // transparent regardless of what the icon sits on top of.
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath();
+  ctx.arc(x, y, u * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+};
+
+// Left chevron: back out of a panel to the home screen (7.1).
+ICONS.back = (ctx, x, y, s, color) => {
+  const u = s / 2;
+  withStyle(ctx, color, s * 0.14);
+  ctx.beginPath();
+  ctx.moveTo(x + u * 0.35, y - u * 0.6);
+  ctx.lineTo(x - u * 0.35, y);
+  ctx.lineTo(x + u * 0.35, y + u * 0.6);
+  ctx.stroke();
+};
+
 export function drawIcon(ctx, name, x, y, size, color = '#3a2b20') {
   const fn = ICONS[name];
   if (!fn) return false;
