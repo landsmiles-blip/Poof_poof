@@ -851,6 +851,86 @@ isolation.
 
 ---
 
+## Phase 8 — power-ups become play
+
+Certification does not require any of this; done per `docs/phase8brief.md`,
+the biggest gameplay change in the project. All four sections landed (the
+brief allowed landing just 8.1/8.2). All 22 `unit-tests/` pass, all 39
+`tests/verify-features.js` checks pass (including a re-run of the phase 5 CSP
+check), and `tools/check-prohibited-apis.js` is clean against the rebuilt
+bundle. Bundle grew from 217094 to 241056 bytes across the whole phase (17
+files throughout) — see each subsection for the per-commit figure.
+
+The problem being solved: coins arrive only at `endRun` and get spent only
+before the next run, so during the run where a player is actually in
+trouble, nothing could arrive to help.
+
+### [x] 8.1 Earn charges during the run — done — commit `f692e40`
+
+A meter fills as you merge, weighted by tier (`TIERS[].points`, no second
+weight table), and grants one random charge from the power-ups already
+unlocked — usable immediately, in the same run. Earned charges
+(`state.earnedCharges`) are run-scoped by construction: a separate object
+from `inventory`, never marks `state.dirty`, discarded unconditionally by
+both `startRun` and `endRun`. `consumeCharge` spends the earned pool before
+touching purchased stock. Announced as a reward (expanding chip ring, a
+two-note rising sound, a haptic tick, a small marker distinguishing earned
+from owned stock). Bundle: unrecorded mid-phase, see 8.2.
+
+`unit-tests/merge-meter.js` covers the three acceptance criteria verbatim
+against the real merge pipeline, not a direct call to the meter function.
+
+### [x] 8.2 Stretch the ramp, hard — done — commit `8966d09`
+
+Start at 0.6x (was 0.7x), don't reach 1.0x until drop 40 (was 20), cap at
+1.3x (was 1.4x) by drop 120 (was 60), with the opening now eased in
+(quadratic) rather than linear — nearly flat for the first ~15 of those 40
+drops. `comboWindowSecFor`'s invariant held by construction (phase 6);
+`unit-tests/difficulty-ramp.js`'s sweep now explicitly covers drop 0 through
+150, not a range derived from the constants. Bundle: 228287 bytes.
+
+### [x] 8.3 The Magnet becomes a companion — done — commit `dfe73ec`
+
+Replaced the fixed 6-second timer with energy that drains only while
+actually pulling and regenerates while idle (capped, never simply "spent"),
+and replaced automatic targeting (wherever the falling fruit is) with a
+draggable rail across the top of the board (`state.magnetCol`, genuinely
+decoupled from the falling fruit's own column). The puck's drawn position
+eases toward wherever it was dragged, the same `DRAG_LERP` smoothing the
+falling fruit already uses. Bundle: 234785 bytes.
+
+New interaction (drag within a thin strip at the top of the board) verified
+with a real continuous touch (press, drag, release — not a tap) in
+`tests/verify-features.js`. `unit-tests/magnet-companion.js` covers the
+energy/idle/retract mechanics; the pre-existing 7.3 movement tween needed no
+changes, since it already targeted "wherever the magnet is interested in",
+transparently now `magnetCol` instead of the held fruit's column.
+
+### [x] 8.4 The Bomb becomes a planted object — done — commit `93eec3a`
+
+Instead of arm-then-tap, the bomb drops into the board like a fruit and
+detonates on its own, wherever it sits, when a drop-counted fuse
+(`state.bombFuseDrops`) ends. The landmine — a bomb sentinel colliding with
+the rainbow wildcard in `pairTier` — was closed in the specified order, with
+one test per point in `unit-tests/bomb-landmine.js`, including the
+specifically dangerous rainbow interaction. `armBomb`/`consumeBomb`/
+`state.bombArmed` and input.js's whole arm/aim/footprint path for the bomb
+were removed entirely, not left dead. Bundle: 241056 bytes.
+
+New interaction (a single real touch tap plants it) verified end-to-end
+through actual gameplay code (tap the chip, `hardDrop`, `BOMB_FUSE_DROPS`
+more real `spawnFruit` calls) via the debug hook, confirming the fuse
+actually burns down and detonates through real code rather than a simulated
+shortcut. The shrinking-fuse rendering was also verified visually.
+
+### Also
+
+Phase 6's danger pulse was already pointed at `theme.danger`, not
+`theme.accent` — fixed during phase 7.2's palette work, verified rather than
+assumed before starting this phase.
+
+---
+
 ## Out of scope for certification
 
 Do not start these until the phases above are green: the desktop canvas scale-up,
