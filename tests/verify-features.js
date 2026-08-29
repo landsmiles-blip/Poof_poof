@@ -60,6 +60,27 @@ function serveDir(rootDir, port) {
   return new Promise((resolve) => server.listen(port, () => resolve(server)));
 }
 
+// Total bytes, file count, and the single largest file -- 5.3's bundle figures.
+function bundleStats(dir) {
+  let files = 0;
+  let bytes = 0;
+  let largest = { path: null, size: -1 };
+  (function walk(d) {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, entry.name);
+      if (entry.isDirectory()) {
+        walk(p);
+      } else {
+        const size = fs.statSync(p).size;
+        files += 1;
+        bytes += size;
+        if (size > largest.size) largest = { path: path.relative(dir, p), size };
+      }
+    }
+  })(dir);
+  return { files, bytes, largest };
+}
+
 const results = [];
 const errors = [];
 
@@ -747,6 +768,131 @@ async function shot(page, name, full = false) {
       await context.close();
     } finally {
       playablesServer.close();
+    }
+  }
+
+  // -------------------------------------- runs under the real CSP (5.1)
+  // Google publishes this exact policy for local testing; the docs suggest a
+  // DevTools response-header override, which is a manual, forgettable step.
+  // Playwright can inject it itself via page.route(), which makes it a
+  // repeatable part of this suite instead. Run against dist/playables/ --
+  // that is what ships -- not the Pages build.
+  {
+    const CSP_HEADER = "default-src 'none'; script-src 'report-sample' 'self' 'unsafe-eval' 'unsafe-inline' blob: https://www.youtube.com/game_api/v0 https://www.youtube.com/game_api/v0/ https://www.youtube.com/game_api/v1 https://www.youtube.com/game_api/v1/; object-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self' blob: data:; sandbox allow-pointer-lock allow-same-origin allow-scripts; base-uri 'self'; manifest-src 'self'; worker-src 'self' blob:";
+    const CSP_PORT = 8644;
+    const cspServer = await serveDir(path.join(REPO_ROOT, 'dist', 'playables'), CSP_PORT);
+    const CSP_BASE = `http://localhost:${CSP_PORT}`;
+    try {
+      const context = await browser.newContext({ viewport: { width: 500, height: 860 } });
+      const page = await context.newPage();
+      track(page, 'csp');
+      // Directive violations (script-src, style-src, connect-src, etc.) fire
+      // this DOM event. The sandbox directive's own restrictions (no forms,
+      // no popups -- unused by this game) are enforced silently rather than
+      // reported this way; nothing here calls anything sandbox would block.
+      await page.addInitScript(() => {
+        window.__cspViolations = [];
+        document.addEventListener('securitypolicyviolation', (e) => {
+          window.__cspViolations.push(`${e.violatedDirective}: ${e.blockedURI || e.sourceFile || '(inline)'}`);
+        });
+      });
+      await page.route('**/index.html', async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({ response, headers: { ...response.headers(), 'content-security-policy': CSP_HEADER } });
+      });
+
+      await page.goto(`${CSP_BASE}/index.html`);
+      await page.waitForSelector('#play-btn');
+      await page.click('#play-btn');
+      await page.waitForTimeout(300);
+
+      // A representative pass through the mechanics phases 1-4 exercise
+      // separately: drop a few fruit, pause, resume.
+      const box = await page.locator('#game-canvas').boundingBox();
+      for (let i = 0; i < 4; i++) {
+        await page.mouse.move(box.x + box.width * (0.2 + 0.15 * i), box.y + box.height * 0.3);
+        await page.mouse.down();
+        await page.mouse.up();
+        await page.waitForTimeout(350);
+      }
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForTimeout(200);
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await page.waitForTimeout(300);
+
+      const violations = await page.evaluate(() => window.__cspViolations || []);
+      const clean = violations.length === 0;
+      record('Runs clean under the real Playables CSP', clean, clean,
+        clean ? 'zero CSP violations across boot, play, pause/resume' : `violations: ${violations.join(' | ')}`);
+      await context.close();
+    } finally {
+      cspServer.close();
+    }
+  }
+
+  // ------------------------------------------ compliance figures (5.3)
+  // Measured against dist/playables/ -- what actually ships -- not the Pages
+  // build. Printed and recorded here; docs/playables-plan.md carries the
+  // committed numbers so a future regression is visible without re-running
+  // this suite.
+  let complianceFigures = null;
+  {
+    const PORT = 8645;
+    const server = await serveDir(path.join(REPO_ROOT, 'dist', 'playables'), PORT);
+    const base = `http://localhost:${PORT}`;
+    try {
+      const context = await browser.newContext({ viewport: { width: 500, height: 860 } });
+      const page = await context.newPage();
+      track(page, 'compliance');
+      const client = await context.newCDPSession(page);
+      await client.send('Performance.enable');
+
+      const t0 = Date.now();
+      await page.goto(`${base}/index.html`);
+      await page.waitForSelector('#play-btn');
+      // The menu is interactive at this point by construction (shop.js wires
+      // its listeners synchronously); platform.gameReady() itself fires
+      // roughly two animation frames later (js/main.js's boot()) with no
+      // externally observable signal in localImpl -- close enough at 60fps
+      // (~33ms) to not be worth a dedicated production hook for.
+      const timeToInteractiveMs = Date.now() - t0;
+
+      await page.click('#play-btn');
+      await page.waitForTimeout(300);
+      const box = await page.locator('#game-canvas').boundingBox();
+      let peakHeapBytes = 0;
+      for (let i = 0; i < 18; i++) {
+        const x = box.x + box.width * (0.12 + 0.76 * ((i * 37 % 100) / 100));
+        await page.mouse.move(x, box.y + box.height * 0.35);
+        await page.mouse.down();
+        await page.mouse.up();
+        await page.waitForTimeout(220);
+        const metrics = await client.send('Performance.getMetrics');
+        const heap = metrics.metrics.find((m) => m.name === 'JSHeapUsedSize')?.value || 0;
+        if (heap > peakHeapBytes) peakHeapBytes = heap;
+      }
+
+      const bundle = bundleStats(path.join(REPO_ROOT, 'dist', 'playables'));
+      complianceFigures = { bundle, peakHeapBytes, timeToInteractiveMs };
+
+      const bundleMiB = (bundle.bytes / (1024 * 1024)).toFixed(3);
+      const heapMiB = (peakHeapBytes / (1024 * 1024)).toFixed(2);
+      console.log('\n--- Compliance figures (5.3) ---');
+      console.log(`Bundle: ${bundle.files} files, ${bundle.bytes} bytes (${bundleMiB} MiB); largest file: ${bundle.largest.path} (${bundle.largest.size} bytes)`);
+      console.log(`Peak JS heap over an 18-drop run: ${peakHeapBytes} bytes (${heapMiB} MiB); ceiling is 512 MiB`);
+      console.log(`Navigation to interactive menu: ${timeToInteractiveMs} ms; target is under 5000 ms\n`);
+
+      record('Compliance figures recorded', true, true,
+        `bundle ${bundle.files} files / ${bundleMiB} MiB; peak heap ${heapMiB} MiB; time-to-interactive ${timeToInteractiveMs} ms`);
+      await context.close();
+    } finally {
+      server.close();
     }
   }
 

@@ -16,7 +16,7 @@ proven done.
 Nothing else is safe until this is true. Three facts about this repository could
 not be determined from outside it.
 
-### [x] 0.1 Report the three unknowns — done, tests N/A (investigation only)
+### [x] 0.1 Report the three unknowns — done, tests N/A (investigation only) — commit `2645952`
 
 Found first, before any of the three listed unknowns: `main` had never been
 fast-forwarded past the initial commit. It held only `README.md`. The entire
@@ -43,13 +43,13 @@ see the re-scoping note at the top of Phase 1.
    all seven save functions funnel through. Fully landed, not half — this was
    one of the five defects fixed in `-5`.
 
-### [x] 0.2 Tag the baseline — done
+### [x] 0.2 Tag the baseline — done — commit `2645952`
 
 `main` fast-forwarded to `claude/fruit-merge-game-twa04f` (`9ae427d`, ff-only,
 no merge commit). Tagged `v2026.08.28-5-pre-cert`. Branch `playables` created
 from it. Not yet pushed to `origin`.
 
-### [x] 0.3 Set up the test harness — done, `node unit-tests/run.js` passing
+### [x] 0.3 Set up the test harness — done, `node unit-tests/run.js` passing — commit `2645952`
 
 `unit-tests/run.js` — plain Node, no framework, no dependencies: discovers
 `unit-tests/*.js` (excluding itself), dynamically imports each, exits non-zero
@@ -94,7 +94,7 @@ properly in a follow-up pass (see `docs/phase1brief.md`, now folded in below):
   below) — the callback mechanism was deleted rather than completed.
   `unit-tests/input-callbacks.js` now passes against the new contract.
 
-### [x] 1.1 Magnet must not complete merges by itself — fixed in `9ae427d`, `unit-tests/magnet.js` passing
+### [x] 1.1 Magnet must not complete merges by itself — fixed in `9ae427d`, `unit-tests/magnet.js` passing — closed in `39ef439`
 
 **Bug.** `stepMagnet()` in `js/physics.js` calls `resolveMerges(state)` after
 moving fruit. The Magnet therefore performs merges rather than making them
@@ -111,7 +111,7 @@ resolves on the next landing, as it does for every other move.
 assert the two cherries are now adjacent and both still tier 0, and that
 `state.score` is unchanged and `state.events` is empty.
 
-### [x] 1.2 Make the combo rule consistent across power-ups — decided, closed
+### [x] 1.2 Make the combo rule consistent across power-ups — decided, closed — commit `39ef439`
 
 **Problem.** `detonateBomb()` wraps its cascade in `state.suppressCombo` so those
 merges score at 1x and do not extend the streak — a deliberate decision,
@@ -126,7 +126,7 @@ multiplier would make detonating the cheapest way to run the streak up.
 Recorded in a comment above `stepMagnet()` in `js/physics.js` so the asymmetry
 is not re-flagged later. No code behavior changed by this item.
 
-### [x] 1.3 Rainbow charges must always be delivered — fixed, `unit-tests/rainbow.js` passing
+### [x] 1.3 Rainbow charges must always be delivered — fixed, `unit-tests/rainbow.js` passing — commit `39ef439`
 
 **Original bug.** `startRun()` in `js/state.js` spent the charge and set
 `rainbowRemaining = 2`, `rainbowChance = 0.12`; `spawnFruit()` then rolled 12%
@@ -159,7 +159,7 @@ either delivers at least one wild or is refunded, never both and never
 neither; every preview matches what actually spawns; a run that survives to
 spawn 3 and then ends receives no refund.
 
-### [x] 1.4 One feedback path, not two — fixed, `unit-tests/input-callbacks.js` passing
+### [x] 1.4 One feedback path, not two — fixed, `unit-tests/input-callbacks.js` passing — commit `39ef439`
 
 **Original bug.** `js/input.js` called `callbacks.onBombUsed`,
 `callbacks.onRemoverUsed` and `callbacks.onLockedPowerUp`, but `js/main.js`
@@ -194,7 +194,7 @@ rather than completed.
 declares a third parameter, and that using the remover, detonating a bomb, and
 tapping a locked chip each push exactly the right event onto `state.events`.
 
-### [~] 1.5 Remove `?dev=1` from the shipped bundle — deferred to 4.2
+### [~] 1.5 Remove `?dev=1` from the shipped bundle — deferred to 4.2 — storage half closed in `9ae427d`, remainder closed in `19af974` (4.2)
 
 `setStorageReadOnly` is wired correctly (0.1.3, confirmed by
 `unit-tests/dev-mode-storage.js`) — dev mode can no longer corrupt a real
@@ -219,7 +219,7 @@ adapter, not a port: the SDK does not exist outside the Playables container
 so direct SDK calls produce code that cannot be run and a live game that no
 longer works.
 
-### [x] 2.1 Create `js/platform.js` — done, `unit-tests/platform.js` passing
+### [x] 2.1 Create `js/platform.js` — done, `unit-tests/platform.js` passing — commit `9a62593`
 
 One interface, two implementations (`localImpl`, `ytgameImpl`), chosen once at
 import time from `window.ytgame?.IN_PLAYABLES_ENV`. `js/storage.js` is deleted
@@ -253,7 +253,7 @@ save. `tests/verify-features.js`'s "Survives blocked localStorage" check is
 the closest thing to an actual browser-level version of this and still
 passes.
 
-### [x] 2.2 Collapse seven storage keys into one versioned blob — done, `unit-tests/migration.js` and `unit-tests/save-blob.js` passing
+### [x] 2.2 Collapse seven storage keys into one versioned blob — done, `unit-tests/migration.js` and `unit-tests/save-blob.js` passing — commit `9a62593`, write-discipline corrected in `a6850e4`
 
 - Blob: `{ v: 1, highScore, coins, inventory, unlockedSkins, selectedSkin,
   musicOn, sfxOn }`. (`hapticsOn` deferred to phase 3, as planned.)
@@ -300,7 +300,7 @@ passes.
 - **Size:** `unit-tests/save-blob.js` asserts a realistic blob stays under
   both the 3 MiB cap and the 64 KiB target (230 bytes, in practice).
 
-### [x] 2.3 Async boot and the ready handshake — done, Pages build confirmed booting (20/20 e2e, offline boot included)
+### [x] 2.3 Async boot and the ready handshake — done, Pages build confirmed booting (20/20 e2e, offline boot included) — commit `9a62593`, ready-handshake timing corrected in `a6850e4`
 
 **Bigger than planned, as the brief warned:** three modules read storage at
 import time, not one (`state.js`, `audio.js`'s `let muted = loadMuted()`,
@@ -347,7 +347,7 @@ broke the *entire* offline install -- confirmed via `tests/verify-features.js`'s
 "Offline boot" check going from passing to failing the moment `js/storage.js`
 was deleted, before the list was fixed.
 
-### [x] 2.4 Route the lifecycle through the adapter now — done (added by `docs/phase2brief.md`; not in this plan's original text)
+### [x] 2.4 Route the lifecycle through the adapter now — done (added by `docs/phase2brief.md`; not in this plan's original text) — commit `9a62593`
 
 `js/main.js` no longer listens for `visibilitychange` directly -- `platform.onPause`/
 `onResume` (wired inside `localImpl`'s own `visibilitychange` listener) do,
@@ -374,7 +374,7 @@ and unlock economics are untouched.
 Both are MUST-level, and both appear in Google's published list of what actually
 fails games.
 
-### [x] 3.1 Replace the Page Visibility API — done, `tests/verify-features.js` "Pause actually stops the game" / "Resume continues, no silent context" passing
+### [x] 3.1 Replace the Page Visibility API — done, `tests/verify-features.js` "Pause actually stops the game" / "Resume continues, no silent context" passing — commit `885e61f`
 
 `js/main.js` listened for `visibilitychange` and suspended audio only — the
 rAF loop kept running, because `loop()` always re-requested the frame.
@@ -411,7 +411,7 @@ introspection or reading `js/main.js`'s private `state`, neither of which
 existed already, and adding either was judged more machinery than this check
 warranted.
 
-### [x] 3.2 Audio must start without a gesture — done, both halves of `tests/verify-features.js`'s split audio-without-gesture check passing
+### [x] 3.2 Audio must start without a gesture — done, both halves of `tests/verify-features.js`'s split audio-without-gesture check passing — commit `885e61f`, check hardened/split in `25d4ba3`
 
 `js/audio.js` built its `AudioContext` inside `unlockAudio()`, reached only
 from `pointerdown`. `js/main.js`'s `boot()` now calls `unlockAudio()`
@@ -457,7 +457,7 @@ before. Replaced the fixed wait with a poll on `ctx.state === 'running'` (2s
 deadline) purely to get a running context for that check's own purpose — not
 evidence about the no-gesture case, which the two checks above cover.
 
-### [x] 3.3 Follow the host mute; delete the in-HUD mute button — done
+### [x] 3.3 Follow the host mute; delete the in-HUD mute button — done — commit `885e61f`
 
 `MUTE_RECT` (`js/constants.js`), `drawMuteToggle` (`js/render.js`, plus its
 now-unused `isMuted` import there), and the mute hit-test (`js/input.js`) are
@@ -475,7 +475,7 @@ alongside the player's own toggle; neither module persists the host's half —
 cannot leak into the save. The freed HUD corner is left empty, as instructed;
 nothing new drawn there.
 
-### [x] 3.4 Give haptics an off switch — done, `unit-tests/haptics.js` and `unit-tests/save-blob.js` passing
+### [x] 3.4 Give haptics an off switch — done, `unit-tests/haptics.js` and `unit-tests/save-blob.js` passing — commit `885e61f`
 
 `hapticsOn` joins the save blob (`state.js`'s `toSaveBlob`, defaulting to
 `true` when absent — both for a fresh save and for an existing save from
@@ -491,7 +491,7 @@ already unused before this phase.
 
 ## Phase 4 — Rendering
 
-### [x] 4.1 Density-aware, responsive canvas — with the zero-viewport guard — done, all four `tests/verify-features.js` checks passing
+### [x] 4.1 Density-aware, responsive canvas — with the zero-viewport guard — done, all four `tests/verify-features.js` checks passing — commit `19af974`
 
 Replaced the fixed `RENDER_SCALE = 3` with `js/main.js` measuring the
 canvas's actual on-screen CSS size (`ResizeObserver`, plus a `matchMedia`
@@ -537,7 +537,7 @@ wrong here, since gameplay is genuinely continuing throughout, not frozen).
 The DPR clamp is checked with Playwright's `deviceScaleFactor: 4` context
 option standing in for a stubbed `devicePixelRatio`.
 
-### [x] 4.2 The Playables build target — done, `tools/build-playables.js`
+### [x] 4.2 The Playables build target — done, `tools/build-playables.js` — commit `19af974`, carry-over fixes (5.0.1-5.0.3) in phase 5
 
 `node tools/build-playables.js` produces `dist/playables/` (`.gitignore`d):
 `css/`, `js/`, `assets/fonts/`, and a from-scratch `index.html` (title and
@@ -572,7 +572,7 @@ means a request for anything outside the build 404s rather than silently
 resolving against a repo file the build was supposed to exclude. Confirms
 `?dev=1` unlocks nothing and a real drop plays.
 
-### [x] 4.3 Feature-check `ctx.roundRect` — done, `unit-tests/round-rect.js` and a real-browser check passing
+### [x] 4.3 Feature-check `ctx.roundRect` — done, `unit-tests/round-rect.js` and a real-browser check passing — commit `19af974`
 
 `js/render.js`'s three `ctx.roundRect` call sites (`drawPowerBar`) now go
 through `roundRectPath()`, which calls `ctx.roundRect` when present and falls
@@ -582,7 +582,7 @@ Verified two ways: `unit-tests/round-rect.js` against a fake context with
 `delete CanvasRenderingContext2D.prototype.roundRect` — the HUD renders with
 square-cornered chips instead of rounded ones, no thrown error.
 
-### [x] 4.4 Close the one gap phase 3 left open — done, `unit-tests/music-scheduler.js` (added by `docs/phase4brief.md`; not in this plan's original text)
+### [x] 4.4 Close the one gap phase 3 left open — done, `unit-tests/music-scheduler.js` (added by `docs/phase4brief.md`; not in this plan's original text) — commit `19af974`
 
 The music-scheduler-resume behaviour (phase 3.1) was verified by construction,
 not by test, since Playwright has no inspection surface for "was there an
@@ -598,48 +598,97 @@ produce.
 
 ## Phase 5 — Compliance sweep and test rig
 
-### [ ] 5.1 Run under YouTube's real CSP
+This plan's original 5.1–5.4 (Chrome DevTools CSP overrides, a device matrix
+table, a one-off grep, a "verify, do not investigate" figures list) was
+superseded by `docs/phase5brief.md`'s more thorough version: a repeatable
+Playwright CSP run instead of a manual DevTools step, a committed grep
+*script* instead of a one-off, and measured figures instead of estimates. One
+thing the original text got right and the brief's replacement kept: it
+predicted this phase's one real finding, below.
 
-Override the `Content-Security-Policy` response header for `index.html` using
-Chrome DevTools local overrides, with the exact string Google publishes:
+**Part A (automated) done in this phase's commit** — Part B is
+`docs/device-test-checklist.md`, for a human on real hardware; not markable
+done by an agent.
 
-```
-default-src 'none'; script-src 'report-sample' 'self' 'unsafe-eval' 'unsafe-inline' blob: https://www.youtube.com/game_api/v0 https://www.youtube.com/game_api/v0/ https://www.youtube.com/game_api/v1 https://www.youtube.com/game_api/v1/; object-src 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self' data: https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self' blob: data:; sandbox allow-pointer-lock allow-same-origin allow-scripts; base-uri 'self'; manifest-src 'self'; worker-src 'self' blob:
-```
+### [x] 5.0 Three carry-overs from phase 4
 
-Note `connect-src 'self' blob: data:` — `tryLoadTrackFile()` in `js/music.js`
-would be permitted by the policy, but the requirements still say all game data
-must ship in the bundle. Leave `MUSIC_TRACK_URL` null and cut the fetch path
-from the Playables build.
+- **5.0.1** `tools/build-playables.js`'s `assertGeneratedIndexInSync()` parses
+  the repo's `index.html`, collects every `<script src>`/`<link>` target, and
+  fails the build if one is missing from the generated output and not on the
+  explicit `INDEX_IGNORE_LIST` (manifest + icon, both PWA-only).
+- **5.0.2** `window.__poofDebugState` is now gated behind
+  `platform.isPlayablesEnv` (new export, `js/platform.js`) at runtime, and
+  `stripDebugHook()` removes the line from `dist/playables/js/main.js`
+  entirely — `assertNoDebugHookString()` greps the whole build afterward to
+  confirm.
+- **5.0.3** Added the fallback the brief offered as one of two acceptable
+  answers: `js/main.js` now does a one-shot `measureCanvasNow()` plus a
+  `window.resize` listener when `typeof ResizeObserver !== 'function'`. Not
+  expected to ever trigger (support is broad enough), but "a game that
+  renders nothing" was judged worse than the few lines this costs.
 
-### [ ] 5.2 Device matrix
+### [x] 5.1 Run the whole suite under YouTube's real CSP
 
-| Surface | What it is uniquely for |
-|---|---|
-| Chrome DevTools + CSP override | Policy violations, aspect-ratio sweep, foldable postures |
-| Real Android phone (WebView test app) | The zero-size viewport boot; the Android-only rendering failure |
-| iOS device | `roundRect`, AudioContext behaviour, the 512 MB heap ceiling |
-| DevTools memory profiler | Peak JS heap under 512 MB across a long run |
+`tests/verify-features.js` injects Google's published policy on the document
+response via `page.route()` (not a DevTools override — repeatable, not
+forgettable), against `dist/playables/` specifically, and fails on any
+`securitypolicyviolation` event across boot, four drops, and a pause/resume
+cycle. **Result: zero violations.**
 
-Skip the Android Studio emulator — a real phone reproduces the WebView boot
-better and does not need the RAM.
+**The one real finding this phase surfaced**, and the thing the *original*
+5.1 text (above) predicted almost exactly: `js/music.js`'s optional
+recorded-track path called `fetch(MUSIC_TRACK_URL)`. `MUSIC_TRACK_URL` was
+always `null`, so it never executed, but the literal `fetch(` call still
+shipped in the bundle — a real hard-rule violation ("No fetch... All game
+data ships in the bundle") regardless of whether the dead branch ever ran.
+The original plan's proposed fix (strip it from the Playables build only,
+alongside `?dev=1`) was **not** what got done: the rule is a project-wide hard
+rule with no Pages-only carve-out, so the entire recorded-track feature —
+`tryLoadTrackFile()`, `trackSource`/`trackBuffer`, `MUSIC_TRACK_URL` itself —
+was deleted from the source. Synth-generated music was always what actually
+shipped; nothing about the game's behavior changed.
 
-### [ ] 5.3 Grep for prohibited APIs
+### [x] 5.2 Grep sweep for prohibited APIs
 
-`localStorage`, `sessionStorage`, `indexedDB`, `document.cookie`,
-`visibilitychange`, `navigator.language`, `fetch`, `XMLHttpRequest`,
-`WebSocket`, `eval`, `Worker`, `WebAssembly`, `alert`, `confirm`, `prompt`.
-Only `js/platform.js` may match, and only for storage and lifecycle.
+`tools/check-prohibited-apis.js` (a committed, standalone script per the
+brief — `node tools/build-playables.js && node tools/check-prohibited-apis.js`)
+greps `dist/playables/` for the full list, failing on any match outside
+`js/platform.js` (and even there, only the storage/lifecycle terms
+`CLAUDE.md`'s "one platform seam" rule actually permits it to contain).
+**Result, after the `fetch()` removal above: clean.**
 
-### [ ] 5.4 Already compliant — verify, do not investigate
+### [x] 5.3 Compliance figures — recorded
 
-Roughly 100 KB total against a 30 MiB initial cap; 13 modules against an 8,000
-file limit; alphanumeric filenames; relative paths; sub-5-second load; no
-WebAssembly, `eval` or Workers; no external calls; no personal data collection;
-no login; no clipboard access; no external links, share prompt or exit button;
-no off-platform monetization; pointer events covering touch and mouse;
-English-only satisfying the single language mandate; synthesized audio meaning
-there are no music rights to clear.
+Measured against `dist/playables/`, by `tests/verify-features.js` (CDP
+`Performance.getMetrics` for heap, wall-clock for time-to-interactive):
+
+| Figure | Value | Limit |
+|---|---|---|
+| Bundle size | 170,916 bytes (0.163 MiB) | 30 MiB initial / 250 MiB total |
+| File count | 17 | 8,000 |
+| Largest single file | `assets/fonts/fredoka-latin.woff2`, 29,732 bytes | 30 MiB |
+| Peak JS heap, 18-drop run | 3,304,804 bytes (3.15 MiB) | 512 MiB |
+| Navigation → interactive menu | 396 ms | under 5,000 ms target |
+
+"Interactive menu" is a proxy for `platform.gameReady()`, which fires roughly
+two animation frames later in `localImpl` with no externally observable
+signal — close enough at 60fps (~33 ms) not to be worth a dedicated
+production hook. All five figures were comfortably inside every limit; the
+point, per the brief, is having them on record so a future regression is
+visible.
+
+### [x] 5.4 Already compliant — verified, not just re-asserted
+
+The original list (below, kept for the record) was written as an estimate
+("roughly 100 KB", "13 modules"). Now actually measured: 13 modules holds
+exactly (`js/storage.js` removed in phase 2, `js/platform.js` added — net
+zero); bundle size is 170,916 bytes, not "roughly 100 KB" (still trivially
+under the 30 MiB cap, so the conclusion was right even though the number
+was off). Alphanumeric filenames, relative paths, no WebAssembly/`eval`/
+Workers, no external calls: confirmed by the 5.2 grep sweep above, not
+re-eyeballed. Sub-5-second load: confirmed by 5.3's 396 ms measurement.
+Pointer events, English-only, synthesized audio: unchanged since originally
+written, still true by inspection of the same code.
 
 ---
 

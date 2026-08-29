@@ -103,6 +103,51 @@ export function devModeEnabled() {
   fs.writeFileSync(statePath, src.replace(original, replacement));
 }
 
+// Prevents the generated index.html from silently falling behind the real
+// one. buildIndexHtml() below generates from scratch rather than stripping --
+// the right call, since regex-surgery on an evolving file is more fragile
+// long-term -- but that creates exactly this failure mode: if index.html
+// later gains a stylesheet, a font preload, or a script the game needs, the
+// generated copy will not have it, and the game breaks in Playables while
+// passing every test on Pages. Anything genuinely Pages-only (the manifest,
+// the icons) is named on the ignore list below, with a reason -- everything
+// else referenced by index.html must show up somewhere in the generated HTML.
+const INDEX_IGNORE_LIST = new Map([
+  ['manifest.json', 'PWA-only, has no role in the Playables container'],
+  ['icons/icon-192.png', 'PWA-only icon (rel=icon and rel=apple-touch-icon both point here)'],
+]);
+
+function collectIndexAssetRefs(html) {
+  const refs = [];
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    const hrefMatch = m[0].match(/\bhref=["']([^"']+)["']/i);
+    const relMatch = m[0].match(/\brel=["']([^"']+)["']/i);
+    if (hrefMatch) refs.push({ kind: `link[rel=${relMatch ? relMatch[1] : '?'}]`, target: hrefMatch[1] });
+  }
+  for (const m of html.matchAll(/<script\b[^>]*>/gi)) {
+    const srcMatch = m[0].match(/\bsrc=["']([^"']+)["']/i);
+    if (srcMatch) refs.push({ kind: 'script', target: srcMatch[1] });
+  }
+  return refs;
+}
+
+function assertGeneratedIndexInSync(generatedHtml) {
+  const src = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const missing = collectIndexAssetRefs(src).filter(
+    (ref) => !INDEX_IGNORE_LIST.has(ref.target) && !generatedHtml.includes(ref.target),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      'build-playables: index.html references ' +
+      missing.map((r) => `${r.kind}="${r.target}"`).join(', ') +
+      ' -- not present in the generated dist/playables/index.html, and not on the ' +
+      'explicit INDEX_IGNORE_LIST in tools/build-playables.js. If this is genuinely ' +
+      'Pages-only, add it to that list with a reason; otherwise the Playables build is ' +
+      'missing something the game needs.',
+    );
+  }
+}
+
 function buildIndexHtml() {
   const src = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const titleMatch = src.match(/<title>([^<]*)<\/title>/);
@@ -135,7 +180,46 @@ function buildIndexHtml() {
 </body>
 </html>
 `;
+  assertGeneratedIndexInSync(html);
   fs.writeFileSync(path.join(OUT, 'index.html'), html);
+}
+
+// 5.0.2: window.__poofDebugState is already gated behind platform.isPlayablesEnv
+// at runtime (defense in depth), but the container should never see the
+// identifier at all -- stripped from the built copy entirely, matched
+// against exact source text so a change this script has not been updated
+// for fails the build instead of silently shipping the hook.
+function stripDebugHook() {
+  const mainPath = path.join(OUT, 'js', 'main.js');
+  const src = fs.readFileSync(mainPath, 'utf8').replace(/\r\n/g, '\n');
+  const original = `  // Test-only hook: lets an automated check (e.g. "state survives a resize")
+  // read the running game's actual state without a bespoke IPC channel for
+  // it. Gated out of the Playables container at runtime (defense in depth)
+  // AND stripped from dist/playables/ entirely by tools/build-playables.js
+  // -- the container should never see this identifier at all, not just have
+  // it be inert. Pages-only, where tests/verify-features.js uses it.
+  if (!platform.isPlayablesEnv) window.__poofDebugState = state;
+`;
+  if (!src.includes(original)) {
+    throw new Error(
+      'build-playables: the __poofDebugState hook in js/main.js did not match the text ' +
+      'this script expects -- update tools/build-playables.js.',
+    );
+  }
+  fs.writeFileSync(mainPath, src.replace(original, ''));
+}
+
+function assertNoDebugHookString() {
+  let found = false;
+  walk(OUT, (p) => {
+    if (fs.readFileSync(p, 'utf8').includes('__poofDebugState')) {
+      found = true;
+      console.error(`build-playables: found __poofDebugState in ${path.relative(OUT, p)}`);
+    }
+  });
+  if (found) {
+    throw new Error('build-playables: __poofDebugState must not appear anywhere in dist/playables/.');
+  }
 }
 
 function main() {
@@ -149,7 +233,9 @@ function main() {
   }
 
   stripDevMode();
+  stripDebugHook();
   buildIndexHtml();
+  assertNoDebugHookString();
 
   const { files, bytes } = countFilesAndBytes(OUT);
   const mib = (bytes / (1024 * 1024)).toFixed(3);

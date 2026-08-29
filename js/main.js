@@ -123,6 +123,15 @@ if (typeof ResizeObserver === 'function') {
     handleCanvasMeasurement(box.width, box.height);
   });
   canvasResizeObserver.observe(canvas);
+} else {
+  // Support is broad enough (every target here: Chromium-based WebViews,
+  // Safari 13.1+) that this should not happen -- but "should not happen" and
+  // "a game that renders nothing" are a bad combination to leave unhandled.
+  // A window resize listener does not catch a container-only resize with the
+  // window unchanged, but it is a real measurement rather than no measurement
+  // at all, and syncCanvasAspect()'s own explicit calls (screen transitions,
+  // Extra Row) still fire regardless of which sizing path is active.
+  window.addEventListener('resize', measureCanvasNow);
 }
 
 // There is no "devicePixelRatio changed" event -- moving a window between
@@ -342,8 +351,11 @@ async function boot() {
   state = createInitialState(save);
   // Test-only hook: lets an automated check (e.g. "state survives a resize")
   // read the running game's actual state without a bespoke IPC channel for
-  // it. Nothing at runtime reads or writes this; harmless in production.
-  window.__poofDebugState = state;
+  // it. Gated out of the Playables container at runtime (defense in depth)
+  // AND stripped from dist/playables/ entirely by tools/build-playables.js
+  // -- the container should never see this identifier at all, not just have
+  // it be inert. Pages-only, where tests/verify-features.js uses it.
+  if (!platform.isPlayablesEnv) window.__poofDebugState = state;
   hydrateAudio(save);
   hydrateMusic(save);
   hydrateHaptics(save);

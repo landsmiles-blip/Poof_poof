@@ -260,9 +260,13 @@ function createYtgameImpl() {
   };
 }
 
-const impl = (typeof window !== 'undefined' && window.ytgame?.IN_PLAYABLES_ENV)
-  ? createYtgameImpl()
-  : createLocalImpl();
+// Exposed so other files can tell the two targets apart without reaching for
+// `window.ytgame` themselves -- this remains the only file that does that.
+// Used by js/main.js (5.0.2) to keep a Pages-only debug hook out of the
+// container entirely, not just inert inside it.
+export const isPlayablesEnv = typeof window !== 'undefined' && Boolean(window.ytgame?.IN_PLAYABLES_ENV);
+
+const impl = isPlayablesEnv ? createYtgameImpl() : createLocalImpl();
 
 export const init = impl.init;
 export const load = impl.load;

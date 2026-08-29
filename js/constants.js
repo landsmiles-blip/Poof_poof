@@ -282,13 +282,3 @@ export const LEGACY_STORAGE_KEYS = {
   muted: 'poofpoof.muted',
   musicOn: 'poofpoof.musicOn',
 };
-
-// Optional recorded background track.
-//
-// null means music is generated at runtime by js/music.js -- original by
-// construction, so there is no licence to honour and no attribution to carry.
-// To use a real (copyright-free) track instead, drop the file in the repo and
-// set this to its path, e.g. 'assets/music/theme.ogg'. It is an explicit
-// setting rather than a probe so the game never fires a 404 looking for a file
-// that was never meant to exist.
-export const MUSIC_TRACK_URL = null;
