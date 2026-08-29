@@ -28,7 +28,7 @@ import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
   hydrate as hydrateHaptics, isHapticsOn,
 } from './effects.js';
-import { themeForScore, applyPageTheme } from './theme.js';
+import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -235,6 +235,13 @@ function colorForTier(tier) {
 // imports audio, effects, or the DOM, so this is the single place gameplay
 // becomes audible and tactile.
 function drainEvents() {
+  // Decided once per frame, not inside effects.js -- that module stays free
+  // of a theme.js dependency, and the board's brightness cannot change
+  // mid-frame anyway. theme.boardTop, not boardBot: particles spawn near
+  // where the merge happened, closer to the top of whichever cell it was in
+  // than the very bottom of the board.
+  const bright = relativeLuminance(themeForScore(state.score).boardTop) >= 0.5;
+
   for (const event of state.events) {
     if (event.type === 'merge') {
       playMerge(event.tier);
@@ -245,6 +252,7 @@ function drainEvents() {
         y: event.y,
         tier: event.tier,
         color: colorForTier(event.tier),
+        bright,
       });
     } else if (event.type === 'reachedTop' || event.type === 'topTier') {
       playCelebration();
@@ -255,6 +263,7 @@ function drainEvents() {
         y: event.y,
         tier: TIERS.length - 1,
         color: colorForTier(TIERS.length - 1),
+        bright,
       });
     } else if (event.type === 'bombCleared') {
       // One max-intensity burst per destroyed fruit. Detonation previously
@@ -268,6 +277,7 @@ function drainEvents() {
           tier: topTier,
           color: colorForTier(cell.tier),
           silent: true, // one pulse for the batch, fired below
+          bright,
         });
       }
       vibrate(HAPTIC_BOMB_MS);
@@ -276,6 +286,7 @@ function drainEvents() {
         row: event.row,
         col: event.col,
         tier: event.tier,
+        bright,
         color: colorForTier(event.tier),
       });
     } else if (event.type === 'lockedPowerUp') {

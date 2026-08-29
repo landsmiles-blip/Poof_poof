@@ -7,7 +7,7 @@ import {
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
 import { squashScaleAt, shakeOffset, drawParticles } from './effects.js';
-import { themeForScore } from './theme.js';
+import { themeForScore, themePosition } from './theme.js';
 import { drawIcon } from './icons.js';
 
 export function boardHeightFor(state) {
@@ -57,7 +57,14 @@ export function drawFrame(ctx, state, fx) {
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = theme.board;
+  // 7.2: a vertical gradient replacing the old flat fill, spanning the whole
+  // canvas (HUD and board share one continuous background, as they always
+  // have) so the day-to-night palette actually reads as depth rather than a
+  // single flat colour that merely changes hue at each milestone.
+  const boardGradient = ctx.createLinearGradient(0, 0, 0, height);
+  boardGradient.addColorStop(0, theme.boardTop);
+  boardGradient.addColorStop(1, theme.boardBot);
+  ctx.fillStyle = boardGradient;
   ctx.fillRect(0, 0, width, height);
 
   drawHUD(ctx, state, width, theme);
@@ -163,7 +170,7 @@ function drawPowerBar(ctx, state, theme) {
     ctx.fillStyle = armed ? theme.accent : theme.grid;
     ctx.fill();
 
-    drawIcon(ctx, item.icon, cx, cy, rect.w * 0.72, armed ? theme.board : theme.text);
+    drawIcon(ctx, item.icon, cx, cy, rect.w * 0.72, armed ? theme.boardTop : theme.text);
 
     // Below each slot: the unlock score while locked, otherwise the count.
     ctx.font = `bold 9px ${FONT_FAMILY}`;
@@ -221,8 +228,14 @@ function drawPowerBar(ctx, state, theme) {
 
 // The run ends when the spawn column (always the centre one) reaches the
 // top, with previously no warning of any kind. Pulses that column's outline
-// once it is within DANGER_ROWS_REMAINING of full, in the theme's own accent
-// colour so it moves with the milestone palette instead of fighting it.
+// once it is within DANGER_ROWS_REMAINING of full.
+//
+// 7.2: uses theme.danger, not theme.accent. The accent moves with the
+// milestone palette and used to double as the only alarm colour the game
+// had (milestone 0's accent was literally an alarm red) -- which meant
+// nothing was left to visually distinguish "you are about to lose" from
+// "this is just today's UI colour". theme.danger is fixed and appears
+// nowhere else, so this is now the one thing in the game that means "danger".
 function drawDangerState(ctx, state, rows, theme) {
   const startCol = Math.floor(COLS / 2);
   if (state.stackHeight[startCol] < rows - DANGER_ROWS_REMAINING) return;
@@ -230,10 +243,34 @@ function drawDangerState(ctx, state, rows, theme) {
   const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
   ctx.save();
   ctx.globalAlpha = 0.3 + 0.4 * pulse;
-  ctx.strokeStyle = theme.accent;
+  ctx.strokeStyle = theme.danger;
   ctx.lineWidth = 4;
   ctx.strokeRect(startCol * CELL + 2, 2, CELL - 4, rows * CELL - 4);
   ctx.restore();
+}
+
+// Soft radial darkening toward the board's edges -- cheap depth, strengthening
+// slightly at each milestone so the later, more saturated palettes read as
+// more dramatic rather than flatter.
+function drawVignette(ctx, width, height, progress) {
+  const cx = width / 2;
+  const cy = height / 2;
+  const outerR = Math.max(width, height) * 0.75;
+  const strength = 0.05 + 0.04 * progress;
+  const gradient = ctx.createRadialGradient(cx, cy, outerR * 0.35, cx, cy, outerR);
+  gradient.addColorStop(0, 'rgba(0,0,0,0)');
+  gradient.addColorStop(1, `rgba(0,0,0,${strength.toFixed(3)})`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+}
+
+// One low-alpha ellipse under each resting fruit, so it reads as sitting on
+// the board rather than floating on it.
+function drawContactShadow(ctx, cx, cy, radius) {
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + radius * 0.78, radius * 0.62, radius * 0.2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.16)';
+  ctx.fill();
 }
 
 function drawBoard(ctx, state, fx, theme) {
@@ -261,6 +298,8 @@ function drawBoard(ctx, state, fx, theme) {
       const def = tierDefFor(tierIndex);
       const color = colorFor(state, tierIndex);
 
+      drawContactShadow(ctx, cx, cy, def.radius);
+
       const squash = fx ? squashScaleAt(fx, r, c, tierIndex) : null;
       if (squash) {
         // Scale about the fruit's own centre so it pops in place.
@@ -280,6 +319,9 @@ function drawBoard(ctx, state, fx, theme) {
     drawFruit(ctx, state.active.x, state.active.y, def, colorFor(state, state.active.tier));
   }
 
+  const { index, t } = themePosition(state.score);
+  drawVignette(ctx, COLS * CELL, rows * CELL, index + t);
+
   ctx.restore();
 }
 
@@ -296,6 +338,24 @@ export function drawFruit(ctx, x, y, tier, color) {
   }
 }
 
+// Rim highlight (upper edge) + a slightly darker lower rim, on top of the
+// existing outline + highlight dot -- three cheap lines that turn a flat
+// disc into something reading as a lit, rounded object (7.2 depth pass).
+// Shared between drawCircle and drawFlower's centre disc.
+function drawRim(ctx, x, y, radius) {
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.9, -Math.PI * 0.85, -Math.PI * 0.15);
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = Math.max(1, radius * 0.12);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.9, Math.PI * 0.15, Math.PI * 0.85);
+  ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+  ctx.lineWidth = Math.max(1, radius * 0.1);
+  ctx.stroke();
+}
+
 function drawCircle(ctx, x, y, radius, fill) {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
@@ -304,6 +364,8 @@ function drawCircle(ctx, x, y, radius, fill) {
   ctx.lineWidth = 2;
   ctx.strokeStyle = 'rgba(0,0,0,0.15)';
   ctx.stroke();
+
+  drawRim(ctx, x, y, radius);
 
   ctx.beginPath();
   ctx.arc(x - radius * 0.35, y - radius * 0.35, radius * 0.28, 0, Math.PI * 2);
@@ -343,6 +405,8 @@ function drawFlower(ctx, x, y, radius, fill) {
   ctx.fill();
   ctx.fillStyle = 'rgba(0,0,0,0.13)';
   ctx.fill();
+
+  drawRim(ctx, x, y, radius * 0.42);
 
   ctx.beginPath();
   ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.2, 0, Math.PI * 2);

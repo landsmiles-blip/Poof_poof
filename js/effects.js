@@ -12,7 +12,24 @@ import {
   PARTICLE_MIN, PARTICLE_MAX, PARTICLE_LIFE_SEC, PARTICLE_SPEED, PARTICLE_GRAVITY,
   SHAKE_MIN_TIER, SHAKE_DURATION_SEC, SHAKE_MAX_PX,
   HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS, REDUCED_MOTION_SQUASH_SCALE,
+  PARTICLE_BRIGHT_VIBRANCE_BOOST, PARTICLE_BRIGHT_LIFE_SCALE,
 } from './constants.js';
+
+// Crude vibrance boost: pushes each channel away from the colour's own grey
+// point (its average) by a fixed factor. Cheaper than a full hex->hsl->hex
+// round trip and good enough for the small nudge 7.2 asks for -- this is not
+// meant to hit an exact saturation percentage, just to keep particle colours
+// from reading as pale against the brighter boards.
+function boostVibrance(hex, factor) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const avg = (r + g + b) / 3;
+  const push = (c) => Math.max(0, Math.min(255, Math.round(avg + (c - avg) * factor)));
+  const toHex = (c) => c.toString(16).padStart(2, '0');
+  return `#${toHex(push(r))}${toHex(push(g))}${toHex(push(b))}`;
+}
 
 export function createEffects() {
   return {
@@ -76,7 +93,7 @@ function tierRatio(tier) {
 // into a single arbitrary-length tick decided by whichever cell the scan
 // visited last. The caller fires one deliberate pulse for the whole batch
 // instead. Mirrors the state.suppressCombo pattern used for the same reason.
-export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y }) {
+export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y, bright = false }) {
   const ratio = tierRatio(tier);
   const squashScale = reducedMotion ? REDUCED_MOTION_SQUASH_SCALE : 1;
 
@@ -107,6 +124,12 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x
   // a cascade. Callers with no cascade risk (remover, bomb) just pass row/col.
   const cx = x ?? (col * CELL + CELL / 2);
   const cy = y ?? (row * CELL + CELL / 2);
+  // Against the brighter boards, plain particle colours read as pale and
+  // linger -- a touch more vibrance and a shorter life keeps a burst popping
+  // rather than turning to mush (7.2). Decided by the caller (js/main.js),
+  // not looked up here, so this module stays free of a theme.js dependency.
+  const particleColor = bright ? boostVibrance(color, PARTICLE_BRIGHT_VIBRANCE_BOOST) : color;
+  const lifeScale = bright ? PARTICLE_BRIGHT_LIFE_SCALE : 1;
   for (let i = 0; i < count; i++) {
     // Spread evenly around the circle with jitter so bursts don't look banded.
     const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
@@ -117,8 +140,8 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed - 40,
       t: 0,
-      life: PARTICLE_LIFE_SEC * (0.7 + 0.6 * Math.random()),
-      color,
+      life: PARTICLE_LIFE_SEC * lifeScale * (0.7 + 0.6 * Math.random()),
+      color: particleColor,
       size: 1.8 + 2.6 * ratio * Math.random() + 1,
     });
   }

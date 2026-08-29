@@ -77,6 +77,15 @@ export const DANGER_ROWS_REMAINING = 2;
 // down rather than removed -- a much smaller pop, not a dead board.
 export const REDUCED_MOTION_SQUASH_SCALE = 0.35;
 
+// 7.2: against the brighter boards (milestones 0-2's light creams/pinks/
+// lavenders), particle colours read as pale and linger -- "bursts turn to
+// mush" per the brief. A touch more saturation and a shorter life keeps them
+// popping rather than fading into the board. Only applied when the current
+// board is bright (js/main.js decides via theme.js's relativeLuminance);
+// the dark milestone-3 board doesn't need it.
+export const PARTICLE_BRIGHT_VIBRANCE_BOOST = 1.35;
+export const PARTICLE_BRIGHT_LIFE_SCALE = 0.8;
+
 export const WATERMELON_CLEAR_BONUS = 200;
 
 export const COINS_PER_SCORE = 1 / 25; // score-to-coin conversion at run end
@@ -276,13 +285,37 @@ export const HAPTIC_BOMB_MS = 70;
 // --- Theme ---------------------------------------------------------------
 // One palette per milestone; the live palette is interpolated continuously
 // between them from the current run score, so the world warms up gradually
-// instead of snapping at each threshold.
+// instead of snapping at each threshold. 7.2: a day turning to night -- warm
+// and forgiving at the start, sweet and saturated once the rhythm is there,
+// cooling and heightening as it tightens, finally a dark board where the
+// fruit glow. Each board is two stops (top/bottom), blended as a vertical
+// gradient in js/render.js and js/style.css, not a flat fill.
+//
+// THE LANDMINE: stop 2 is dark ink on a light board; stop 3 is light ink on a
+// dark board. `text` here is NOT interpolated directly between them -- lerping
+// a dark-ink hex toward a light-ink hex arrives at the same mid-grey the
+// board itself passes through at t=0.5, and the score readout disappears
+// exactly there. js/theme.js's themeForScore() derives text from the CURRENT
+// interpolated board's own relative luminance instead (light board -> dark
+// ink, dark board -> light ink), with a hysteresis band so it does not
+// flicker right at the crossover, and only falls back to plain interpolation
+// within a segment where both endpoints already agree on which ink reads
+// (stops 0-1-2, all light boards, safe to blend their tuned per-stop hues).
+// See unit-tests/theme-contrast.js, which samples the whole 0-10000 score
+// range and asserts text-on-board contrast never drops below 4.5:1.
 export const THEMES = [
-  { page: '#2b1d14', board: '#fff6e8', text: '#3a2b20', grid: 'rgba(58,43,32,0.08)', accent: '#c0392b' },
-  { page: '#3a2033', board: '#fff0f3', text: '#4a2436', grid: 'rgba(74,36,54,0.09)', accent: '#d6336c' },
-  { page: '#1b2340', board: '#eef3ff', text: '#25325c', grid: 'rgba(37,50,92,0.10)', accent: '#4c6ef5' },
-  { page: '#0d1f24', board: '#e8fbf6', text: '#12403a', grid: 'rgba(18,64,58,0.11)', accent: '#0ca678' },
+  { boardTop: '#FFF6EA', boardBot: '#FFE4CB', page: '#2A1A12', text: '#4A3122', grid: 'rgba(74,49,34,0.08)', accent: '#F2960B' },
+  { boardTop: '#FFF1F4', boardBot: '#FFD6E2', page: '#3A1526', text: '#5A2438', grid: 'rgba(90,36,56,0.09)', accent: '#E8368F' },
+  { boardTop: '#F3EEFF', boardBot: '#D9CCFF', page: '#1E1338', text: '#3A2A6B', grid: 'rgba(58,42,107,0.10)', accent: '#7C4DFF' },
+  { boardTop: '#1E2947', boardBot: '#0C1122', page: '#05080F', text: '#D2E6FF', grid: 'rgba(210,230,255,0.12)', accent: '#00D9C0' },
 ];
+
+// Fixed, non-interpolated -- appears nowhere except the danger state (6.2).
+// One colour, one meaning. Milestone 0 used to spend an alarm red (#c0392b)
+// on its resting-state accent, which is why the game had nothing left to
+// shout with; that accent is now the warm orange above, and this is the only
+// red in the game.
+export const DANGER_COLOR = '#FF3B30';
 
 // Canvas text face. Single source of truth -- the family string used to be
 // repeated verbatim in seven separate ctx.font assignments in render.js.
