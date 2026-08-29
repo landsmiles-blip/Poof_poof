@@ -104,7 +104,7 @@ function drawHUD(ctx, state, width, theme) {
   ctx.fillStyle = theme.text;
   ctx.fillText('Next', width - 10, 6);
   const nextDef = tierDefFor(state.nextTier);
-  drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier));
+  drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier), state.nextTier);
 
   drawPowerBar(ctx, state, theme);
 
@@ -406,10 +406,10 @@ function drawBoard(ctx, state, fx, theme) {
         ctx.save();
         ctx.translate(cx, cy);
         ctx.scale(squash.sx, squash.sy);
-        drawFruit(ctx, 0, 0, def, color);
+        drawFruit(ctx, 0, 0, def, color, tierIndex);
         ctx.restore();
       } else {
-        drawFruit(ctx, cx, cy, def, color);
+        drawFruit(ctx, cx, cy, def, color, tierIndex);
       }
     }
   }
@@ -419,7 +419,7 @@ function drawBoard(ctx, state, fx, theme) {
 
   if (state.active) {
     const def = tierDefFor(state.active.tier);
-    drawFruit(ctx, state.active.x, state.active.y, def, colorFor(state, state.active.tier));
+    drawFruit(ctx, state.active.x, state.active.y, def, colorFor(state, state.active.tier), state.active.tier);
   }
 
   const { index, t } = themePosition(state.score);
@@ -430,15 +430,115 @@ function drawBoard(ctx, state, fx, theme) {
 
 // Dispatches on the tier's `shape`. Adding a shape means adding a branch here
 // and a value in constants.js -- nothing else in the game needs to change.
-export function drawFruit(ctx, x, y, tier, color) {
+//
+// `tierIndex` is optional (callers that only have the tier DEFINITION, not
+// its index, simply omit it) and is what 7.4's per-tier detail keys off --
+// see drawTierDetail. It is never the rainbow sentinel here: the rainbow
+// branch below draws its own thing and never calls it.
+export function drawFruit(ctx, x, y, tier, color, tierIndex) {
   const fill = color || tier.color;
   if (tier.shape === 'flower') {
-    drawFlower(ctx, x, y, tier.radius, fill);
+    drawFlower(ctx, x, y, tier.radius, fill, tierIndex);
   } else if (tier.shape === 'rainbow') {
     drawRainbow(ctx, x, y, tier.radius);
+    return;
   } else {
-    drawCircle(ctx, x, y, tier.radius, fill);
+    drawCircle(ctx, x, y, tier.radius, fill, tierIndex);
   }
+  drawTierDetail(ctx, x, y, tier.radius, tierIndex);
+}
+
+// 7.4: nine tiers used to differ only by hue, size, and a circle/flower
+// alternation -- distinguishable, but memorised rather than recognised. This
+// also doubles as accessibility: every extra channel separating the tiers is
+// one less thing riding on colour alone.
+function drawTierDetail(ctx, x, y, radius, tierIndex) {
+  if (tierIndex === undefined || tierIndex === RAINBOW_TIER) return;
+  const tier = TIERS[tierIndex];
+  if (!tier) return;
+
+  if (tierIndex >= 4) drawStemAndLeaf(ctx, x, y, radius);
+  if (tier.name === 'pineapple') drawPineappleCrown(ctx, x, y, radius);
+  if (tier.name === 'watermelon') drawWatermelonSeeds(ctx, x, y, radius);
+}
+
+// Short curved stem plus a single leaf, from apple (tier 4) upward -- the
+// point where a fruit ladder conventionally starts reading as "tree fruit"
+// rather than "berry".
+function drawStemAndLeaf(ctx, x, y, radius) {
+  ctx.save();
+  ctx.strokeStyle = '#6b4a2b';
+  ctx.lineWidth = Math.max(1.4, radius * 0.1);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.92);
+  ctx.quadraticCurveTo(x + radius * 0.12, y - radius * 1.15, x + radius * 0.05, y - radius * 1.32);
+  ctx.stroke();
+
+  ctx.translate(x + radius * 0.2, y - radius * 1.1);
+  ctx.rotate(-0.5);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 0.32, radius * 0.15, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#4c9a4c';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Small dark seeds scattered across the face -- watermelon only.
+const SEED_POSITIONS = [
+  [-0.35, -0.1], [0.12, -0.36], [0.4, 0.05], [0.02, 0.36],
+  [-0.32, 0.3], [0.3, -0.34], [-0.46, 0.14],
+];
+
+function drawWatermelonSeeds(ctx, x, y, radius) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(25,20,10,0.55)';
+  for (const [dx, dy] of SEED_POSITIONS) {
+    ctx.save();
+    ctx.translate(x + dx * radius, y + dy * radius);
+    ctx.rotate(Math.atan2(dy, dx));
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius * 0.09, radius * 0.045, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// A small spiky crown -- pineapple only.
+function drawPineappleCrown(ctx, x, y, radius) {
+  const spikes = 5;
+  ctx.save();
+  ctx.fillStyle = '#3f8f4a';
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < spikes; i++) {
+    const t = (i - (spikes - 1) / 2) / spikes;
+    const baseX = x + t * radius * 1.1;
+    const baseY = y - radius * 0.85;
+    const tipX = x + t * radius * 0.6;
+    const tipY = y - radius * (1.5 + Math.abs(t) * 0.3);
+    ctx.beginPath();
+    ctx.moveTo(baseX - radius * 0.08, baseY);
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(baseX + radius * 0.08, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// The highlight dot's angle shifts deterministically by tier, so each rung
+// on the ladder reads with a slightly different "light source" rather than
+// nine discs lit identically -- a cheap extra channel alongside colour/size/
+// shape, and 7.4's dimple-or-highlight-shift ask.
+function highlightAngleFor(tierIndex) {
+  if (tierIndex === undefined) return -Math.PI * 0.75;
+  return -Math.PI * 0.75 - (tierIndex % 5) * 0.22;
 }
 
 // Rim highlight (upper edge) + a slightly darker lower rim, on top of the
@@ -459,7 +559,7 @@ function drawRim(ctx, x, y, radius) {
   ctx.stroke();
 }
 
-function drawCircle(ctx, x, y, radius, fill) {
+function drawCircle(ctx, x, y, radius, fill, tierIndex) {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fillStyle = fill;
@@ -470,8 +570,9 @@ function drawCircle(ctx, x, y, radius, fill) {
 
   drawRim(ctx, x, y, radius);
 
+  const angle = highlightAngleFor(tierIndex);
   ctx.beginPath();
-  ctx.arc(x - radius * 0.35, y - radius * 0.35, radius * 0.28, 0, Math.PI * 2);
+  ctx.arc(x + Math.cos(angle) * radius * 0.5, y + Math.sin(angle) * radius * 0.5, radius * 0.28, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(255,255,255,0.35)';
   ctx.fill();
 }
@@ -482,7 +583,7 @@ const PETAL_COUNT = 6;
 // Ring offset + petal radius sum to the tier radius so a flower occupies
 // exactly the same footprint as the circle it replaces -- the grid geometry
 // and landing math stay untouched.
-function drawFlower(ctx, x, y, radius, fill) {
+function drawFlower(ctx, x, y, radius, fill, tierIndex) {
   const petalR = radius * 0.42;
   const ringR = radius - petalR;
 
@@ -511,8 +612,9 @@ function drawFlower(ctx, x, y, radius, fill) {
 
   drawRim(ctx, x, y, radius * 0.42);
 
+  const hAngle = highlightAngleFor(tierIndex);
   ctx.beginPath();
-  ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.2, 0, Math.PI * 2);
+  ctx.arc(x + Math.cos(hAngle) * radius * 0.42, y + Math.sin(hAngle) * radius * 0.42, radius * 0.2, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(255,255,255,0.4)';
   ctx.fill();
   ctx.restore();
