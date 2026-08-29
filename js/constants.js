@@ -218,8 +218,8 @@ export const POWERUPS = [
   },
   {
     id: 'bomb', name: 'Bomb', cost: 60, unlockScore: MILESTONE_SCORES[2], icon: 'bomb',
-    desc: 'Tap a cell to clear the fruit around it. No points awarded.',
-    usage: 'tap',
+    desc: 'Plants as your next drop. Clears a 3x3 blast when its fuse ends.',
+    usage: 'activate',
   },
   {
     id: 'rainbow', name: 'Rainbow Fruit', cost: 80, unlockScore: MILESTONE_SCORES[3], icon: 'rainbow',
@@ -272,6 +272,20 @@ export const RAINBOW_SPIN_RADIANS_PER_SEC = 0.8;
 
 // --- Bomb ----------------------------------------------------------------
 export const BOMB_RADIUS = 1; // Chebyshev radius: 1 => up to a 3x3 clear
+
+// 8.4: instead of arm-then-tap, the bomb drops into the board like a fruit,
+// with a lit fuse that burns down over a few DROPS (not wall-clock time --
+// js/physics.js's spawnFruit decrements it, so it only burns while the game
+// is actually being played, and a run does not lose a bomb to idling). It
+// detonates automatically, wherever it currently sits, when the fuse ends.
+//
+// A second sentinel alongside RAINBOW_TIER, and just as dangerous: pairTier
+// must reject it BEFORE the rainbow wildcard check, or a held/board rainbow
+// would treat the bomb as mergeable. See physics.js's pairTier and the tests
+// named after this comment.
+export const BOMB_TIER = 98;
+export const BOMB_DEF = { name: 'bomb', color: '#2b2118', radius: 27, points: 0, shape: 'bomb' };
+export const BOMB_FUSE_DROPS = 4;
 
 // --- Rainbow -------------------------------------------------------------
 // Sentinel stored in the grid alongside normal tier indices. Chosen well past

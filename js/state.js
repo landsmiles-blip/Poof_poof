@@ -5,7 +5,7 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE,
+  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
@@ -117,13 +117,20 @@ export function createInitialState(save) {
     slowDropActive: false,
     removerArmed: false,
 
-    bombArmed: false,
-    // Cell the pointer is currently over while bomb/remover is armed (7.3) --
-    // purely a render hint for the footprint/crosshair; never persisted.
-    // Written directly by js/input.js, not through a state.js mutator: it
-    // carries no game-state meaning of its own, the same way `dragging` in
-    // input.js's own closure never needed one either.
+    // Cell the pointer is currently over while the remover is armed (7.3) --
+    // purely a render hint for the crosshair; never persisted. Written
+    // directly by js/input.js, not through a state.js mutator: it carries no
+    // game-state meaning of its own, the same way `dragging` in input.js's
+    // own closure never needed one either. The bomb stopped using this in
+    // 8.4 -- it plants as a falling fruit instead of an armed tap-target.
     armPreviewCell: null,
+    // 8.4: true from the moment a bomb is planted until it actually
+    // detonates (or is defused early -- see spawnFruit's fuse check),
+    // covering falling, resting, and counting down as ONE state so only one
+    // can ever be in play. bombFuseDrops is null until it lands (see
+    // lockFruit) and counts DOWN, not time, toward zero.
+    bombInPlay: false,
+    bombFuseDrops: null,
     magnetActive: false,
     // 8.3: energy replaces a fixed timer -- drains while pulling, regenerates
     // while idle (see physics.js's stepMagnet). magnetCol is where the
@@ -431,7 +438,8 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.spawnIndex = 0;
 
   state.removerArmed = false;
-  state.bombArmed = false;
+  state.bombInPlay = false;
+  state.bombFuseDrops = null;
   state.magnetActive = false;
   state.magnetEnergy = 0;
   state.magnetCol = Math.floor(COLS / 2);
@@ -475,7 +483,8 @@ export function endRun(state, reason) {
   state.mergeMeter = 0;
   state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
   state.chipPulse = null;
-  state.bombArmed = false;
+  state.bombInPlay = false;
+  state.bombFuseDrops = null;
   state.removerArmed = false;
   resetCombo(state);
 
@@ -574,30 +583,32 @@ function consumeCharge(state, id) {
   return false;
 }
 
-// Arming is exclusive: two armed targeting modes at once would make the next
-// tap ambiguous.
-export function armBomb(state, armed) {
-  if (armed && totalCharges(state, 'bomb') <= 0) return false;
-  state.bombArmed = armed;
-  if (armed) state.removerArmed = false;
-  return true;
-}
-
 export function armRemover(state, armed) {
   if (armed && totalCharges(state, 'remover') <= 0) return false;
   state.removerArmed = armed;
-  if (armed) state.bombArmed = false;
-  return true;
-}
-
-export function consumeBomb(state) {
-  if (!consumeCharge(state, 'bomb')) return false;
-  state.bombArmed = false;
   return true;
 }
 
 export function consumeRemover(state) {
   if (!consumeCharge(state, 'remover')) return false;
   state.removerArmed = false;
+  return true;
+}
+
+// 8.4: plants a bomb as the next thing to drop -- instead of arm-then-tap, it
+// falls and is steered like any other fruit, then detonates on its own where
+// it sits once the fuse (physics.js's spawnFruit/lockFruit) ends. Only one
+// may ever be in play (bombInPlay covers the whole lifecycle: falling,
+// resting, and counting down), so a second tap while one is already out is a
+// no-op, same shape as activateMagnet refusing a second summons.
+export function plantBomb(state) {
+  if (state.bombInPlay) return false;
+  if (!consumeCharge(state, 'bomb')) return false;
+  state.bombInPlay = true;
+  if (state.active) {
+    state.active.tier = BOMB_TIER;
+  } else {
+    state.nextTier = BOMB_TIER;
+  }
   return true;
 }

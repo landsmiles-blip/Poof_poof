@@ -644,7 +644,8 @@ async function shot(page, name, full = false) {
     async function resetRun() {
       await page.evaluate(() => {
         const s = window.__poofDebugState;
-        s.bombArmed = false;
+        s.bombInPlay = false;
+        s.bombFuseDrops = null;
         s.removerArmed = false;
         s.magnetActive = false;
         s.armPreviewCell = null;
@@ -691,12 +692,13 @@ async function shot(page, name, full = false) {
         `press column 1 (real touch): magnetCol=${afterPress}; drag to column 4, no lift: magnetCol=${afterDrag}; still out after release: ${stillActive}`);
     }
 
-    // Bomb and Remover, each checked two ways: (a) two separate taps -- press
-    // the chip, lift, press a board cell, lift; (b) the actual regression --
-    // ONE continuous touch: press the chip, drag onto the board, lift once.
-    for (const [id, chipIndex, tier] of [['bomb', 2, 5], ['remover', 0, 5]]) {
-      const slot = chip(chipIndex);
+    // Remover, checked two ways: (a) two separate taps -- press the chip,
+    // lift, press a board cell, lift; (b) the actual regression -- ONE
+    // continuous touch: press the chip, drag onto the board, lift once.
+    {
+      const slot = chip(0);
       const cell = boardCell(2, 3);
+      const tier = 5;
 
       // (a) two separate taps
       await resetRun();
@@ -705,11 +707,11 @@ async function shot(page, name, full = false) {
       await page.waitForTimeout(80);
       await page.touchscreen.tap(cell.x, cell.y);
       await page.waitForTimeout(80);
-      const twoTapResult = await page.evaluate((armedKey) => ({
-        armed: window.__poofDebugState[armedKey],
+      const twoTapResult = await page.evaluate(() => ({
+        armed: window.__poofDebugState.removerArmed,
         cleared: window.__poofDebugState.grid[3][2] === null,
-      }), id === 'bomb' ? 'bombArmed' : 'removerArmed');
-      record(`${id[0].toUpperCase()}${id.slice(1)} fires on real touch: separate taps`,
+      }));
+      record('Remover fires on real touch: separate taps',
         twoTapResult.cleared, twoTapResult.cleared,
         `tap chip (real touch), lift, tap board cell (real touch), lift -> armed after=${twoTapResult.armed}, cell cleared=${twoTapResult.cleared}`);
 
@@ -726,13 +728,61 @@ async function shot(page, name, full = false) {
       await page.waitForTimeout(40);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       await page.waitForTimeout(100);
-      const dragResult = await page.evaluate((armedKey) => ({
-        armed: window.__poofDebugState[armedKey],
+      const dragResult = await page.evaluate(() => ({
+        armed: window.__poofDebugState.removerArmed,
         cleared: window.__poofDebugState.grid[3][2] === null,
-      }), id === 'bomb' ? 'bombArmed' : 'removerArmed');
-      record(`${id[0].toUpperCase()}${id.slice(1)} fires on real touch: continuous chip-to-board drag`,
+      }));
+      record('Remover fires on real touch: continuous chip-to-board drag',
         dragResult.cleared, dragResult.cleared,
         `ONE touch: press chip, drag onto board, release (no lift in between) -> armed after=${dragResult.armed}, cell cleared=${dragResult.cleared}`);
+    }
+
+    // 8.4: the bomb plants as the falling fruit instead of arming a
+    // tap-target -- a single real touch tap on the chip is the whole
+    // interaction. Then confirm the fuse actually burns down and detonates
+    // on its own, driven entirely through real gameplay (stepPhysics/
+    // spawnFruit via the debug hook, not a direct detonateBomb call).
+    {
+      await resetRun();
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
+      });
+      const bombSlot = chip(2);
+      await page.touchscreen.tap(bombSlot.x, bombSlot.y);
+      await page.waitForTimeout(80);
+
+      const result = await page.evaluate(async () => {
+        const C = await import('./js/constants.js');
+        const ph = await import('./js/physics.js');
+        const s = window.__poofDebugState;
+        const plantedAsBomb = s.active.tier === C.BOMB_TIER;
+        const inPlayAfterPlant = s.bombInPlay;
+
+        // Land it, then run exactly enough further drops to burn the fuse out.
+        ph.hardDrop(s);
+        const fuseAtLanding = s.bombFuseDrops;
+        for (let i = 0; i < C.BOMB_FUSE_DROPS; i++) {
+          s.active = null;
+          ph.spawnFruit(s);
+        }
+        return {
+          plantedAsBomb,
+          inPlayAfterPlant,
+          fuseAtLanding,
+          fuseAfter: s.bombFuseDrops,
+          inPlayAfter: s.bombInPlay,
+          detonated: s.events.some((e) => e.type === 'bombCleared'),
+        };
+      });
+
+      const ok = result.plantedAsBomb && result.inPlayAfterPlant
+        && result.fuseAtLanding > 0 && result.fuseAfter === null && !result.inPlayAfter && result.detonated;
+      record('Bomb plants on a real touch tap and detonates on its own when the fuse ends',
+        ok, ok,
+        `tap the chip (real touch) -> planted as the falling fruit: ${result.plantedAsBomb}, in play: ${result.inPlayAfterPlant}; `
+        + `landed with fuse=${result.fuseAtLanding}; after BOMB_FUSE_DROPS more drops: fuse=${result.fuseAfter}, `
+        + `inPlay=${result.inPlayAfter}, detonated=${result.detonated}`);
     }
 
     await context.close();

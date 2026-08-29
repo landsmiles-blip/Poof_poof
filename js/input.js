@@ -4,11 +4,10 @@
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
 import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT } from './constants.js';
-import { removeFruitAt, detonateBomb, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
+import { removeFruitAt, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
-  hudPowerUps, canUsePowerUp, activateMagnet, armBomb, armRemover,
-  consumeBomb, consumeRemover,
+  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb,
 } from './state.js';
 import { unlockAudio, playUiTick } from './audio.js';
 
@@ -81,12 +80,10 @@ export function attachInput(canvas, state) {
       if (item.id === 'magnet') {
         if (activateMagnet(state)) playUiTick(); // activateMagnet marks state.dirty
       } else if (item.id === 'bomb') {
-        armBomb(state, !state.bombArmed);
-        // A fresh arm (or a cancel) must never inherit a stale target left
-        // over from a previous aim -- see the touch bug this is part of
-        // fixing below.
-        state.armPreviewCell = null;
-        playUiTick();
+        // 8.4: plants as the next drop instead of arming a tap-target -- see
+        // js/state.js's plantBomb. No-ops (silently, same as activateMagnet
+        // while already active) if one is already in play.
+        if (plantBomb(state)) playUiTick();
       } else if (item.id === 'remover') {
         armRemover(state, !state.removerArmed);
         state.armPreviewCell = null;
@@ -97,10 +94,12 @@ export function attachInput(canvas, state) {
     return false;
   }
 
-  // 7.3: bomb/remover commit on release, not on the initial touch, so the
-  // footprint/crosshair (js/render.js, reading state.armPreviewCell) can
-  // genuinely follow the finger before committing rather than flashing into
-  // existence and firing in the same instant.
+  // 7.3: the remover commits on release, not on the initial touch, so the
+  // crosshair (js/render.js, reading state.armPreviewCell) can genuinely
+  // follow the finger before committing rather than flashing into existence
+  // and firing in the same instant. The bomb used this same path until 8.4,
+  // which replaced arm-then-tap with planting it as a falling fruit instead
+  // -- see plantBomb in js/state.js.
   //
   // Bug found on real touch (not caught by mouse-click testing, since a mouse
   // click's down and up land on the same point by construction): arming the
@@ -136,8 +135,7 @@ export function attachInput(canvas, state) {
       return;
     }
 
-    // Armed targeting modes are mutually exclusive, so at most one applies.
-    if (state.bombArmed || state.removerArmed) {
+    if (state.removerArmed) {
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -157,9 +155,9 @@ export function attachInput(canvas, state) {
       setMagnetColumn(state, columnAt(point));
       return;
     }
-    if (state.bombArmed || state.removerArmed) {
+    if (state.removerArmed) {
       // Updated on every move so a mouse hovering before it ever clicks also
-      // sees the footprint, and so a touch that presses the chip and slides
+      // sees the crosshair, and so a touch that presses the chip and slides
       // straight onto the board without lifting tracks correctly too.
       state.armPreviewCell = cellAt(point);
       return;
@@ -177,20 +175,12 @@ export function attachInput(canvas, state) {
     // whenever there is nothing valid to act on (arming or cancelling always
     // resets it, and a plain chip tap that never touches the board never
     // sets it), so this is safe to check unconditionally.
-    if (state.bombArmed || state.removerArmed) {
+    if (state.removerArmed) {
       const cell = state.armPreviewCell;
       state.armPreviewCell = null;
-      if (state.bombArmed && cell) {
-        const cleared = detonateBomb(state, cell.row, cell.col);
-        if (cleared) {
-          consumeBomb(state); // marks state.dirty
-          playUiTick();
-        }
-      } else if (state.removerArmed && cell) {
-        if (removeFruitAt(state, cell.row, cell.col)) {
-          consumeRemover(state); // marks state.dirty
-          playUiTick();
-        }
+      if (cell && removeFruitAt(state, cell.row, cell.col)) {
+        consumeRemover(state); // marks state.dirty
+        playUiTick();
       }
     }
     dragging = false;
@@ -212,7 +202,6 @@ export function attachInput(canvas, state) {
   // progress, the other requires the overlay that only shows when no run is.
   function onKeyDown(evt) {
     if (evt.key === 'Escape') {
-      if (state.bombArmed) armBomb(state, false);
       if (state.removerArmed) armRemover(state, false);
       state.armPreviewCell = null;
       return;
