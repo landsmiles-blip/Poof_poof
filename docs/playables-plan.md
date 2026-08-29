@@ -411,29 +411,51 @@ introspection or reading `js/main.js`'s private `state`, neither of which
 existed already, and adding either was judged more machinery than this check
 warranted.
 
-### [x] 3.2 Audio must start without a gesture — done, `tests/verify-features.js` "Audio starts without a gesture" passing
+### [x] 3.2 Audio must start without a gesture — done, both halves of `tests/verify-features.js`'s split audio-without-gesture check passing
 
 `js/audio.js` built its `AudioContext` inside `unlockAudio()`, reached only
 from `pointerdown`. `js/main.js`'s `boot()` now calls `unlockAudio()`
 unconditionally when `platform.audioEnabled()` is true (always true for
 `localImpl`), and again from `platform.onAudioEnabledChange` when audio
-becomes enabled. The `pointerdown` fallback stays — a browser autoplay policy
-can still block a gesture-less resume, confirmed live: headless Chromium logs
-*"The AudioContext was not allowed to start... must be resumed after a user
-gesture"* on every boot, then a later real gesture (or, in the test, a second
-`unlockAudio()` call) does successfully resume it. The existing unconditional
+becomes enabled. The `pointerdown` fallback stays. The existing unconditional
 `resume()` inside `unlockAudio()` was already correct; untouched.
 
-**Test, extended (not a second mechanism):** the existing Playwright "audio"
-block now checks `getAudioContext() !== null` immediately after the menu
-renders, before any pointer event has been dispatched at all. **Found while
-writing it:** headless Chromium takes a variable, sometimes 500ms+ amount of
-time to actually flip a previously-blocked context to `'running'` after a
-resume call — the merge-sound check's fixed 80ms wait was already borderline
-before this phase and became flaky once boot() started attempting (and being
-blocked on) a resume earlier than before. Replaced the fixed wait with a poll
-on `ctx.state === 'running'` (2s deadline). Not a phase-3 requirement, but a
-prerequisite for phase 3.2's own test to be reliable.
+**Test, split in two, not retried in product code.** A first attempt asserted
+`ctx.state === 'running'` outright against default Chromium, with zero
+pointer events. It failed, consistently and reproducibly — not flaky, blocked
+every time. Default Chromium's autoplay policy refuses a gesture-less
+`resume()` outright (logs *"The AudioContext was not allowed to start...
+must be resumed after a user gesture"*) and does not self-resolve; a second
+explicit `unlockAudio()` call, still with zero gestures, does not help
+either. Adding a retry loop to `boot()` to chase that was explicitly rejected
+— it would change the product to satisfy a browser policy quirk the real
+Playables container doesn't share (the container grants audio out-of-band via
+`platform.audioEnabled()`, not through the page's gesture history). Instead:
+
+- **"Audio context created without a gesture"** (default Chromium): asserts
+  `getAudioContext() !== null` right after the menu renders, zero pointer
+  events dispatched anywhere in the block. This is the actual game's
+  responsibility and the thing that fails certification -- gating context
+  *creation* behind a gesture. Passes.
+- **"Audio actually starts, no gesture (permissive Chromium)"**: a second,
+  separate `chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })`
+  — the closest local equivalent of the Playables audio grant — asserts
+  `ctx.state === 'running'`, zero pointer events. Passes, consistently across
+  repeated runs. Kept in its own browser instance, closed immediately after,
+  so the shared `browser` (and therefore the merge/celebration sound checks)
+  stays on default Chromium and honest about what a real Pages visitor's
+  browser actually does. Has a documented fallback (assertion 1 alone, `wired`
+  but not `visibleToNewPlayer`, with an explanatory note) if the flag ever
+  stops working in this Playwright setup.
+
+**Also found while writing this:** headless Chromium takes a variable,
+sometimes 500ms+ amount of time to actually flip a previously-blocked context
+to `'running'` after an explicit resume call. The merge-sound check's fixed
+80ms wait was already borderline before this phase and became flaky once
+boot() started attempting (and being blocked on) a resume earlier than
+before. Replaced the fixed wait with a poll on `ctx.state === 'running'` (2s
+deadline) purely to get a running context for that check's own purpose — not
+evidence about the no-gesture case, which the two checks above cover.
 
 ### [x] 3.3 Follow the host mute; delete the in-HUD mute button — done
 

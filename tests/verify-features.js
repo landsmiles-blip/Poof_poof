@@ -173,17 +173,25 @@ async function shot(page, name, full = false) {
     // unlockAudio() call (3.2: "YouTube Playables may be given focus
     // automatically", so the game must not be waiting on a gesture for this).
     await page.waitForSelector('#play-btn');
-    const bootedWithoutGesture = await page.evaluate(async () => {
+    // This is the half of 3.2 that is actually the game's responsibility:
+    // boot() must not gate AudioContext *creation* behind a gesture. Whether
+    // the context then reaches 'running' without a gesture is a browser
+    // autoplay policy decision, not something this line can tell apart from
+    // a code defect -- checked separately, against a permissive Chromium
+    // flag, in the next block.
+    const audioContextCreatedWithoutGesture = await page.evaluate(async () => {
       const a = await import('./js/audio.js');
       return a.getAudioContext() !== null;
     });
     const audio = await page.evaluate(async () => {
       const a = await import('./js/audio.js');
       a.unlockAudio();
-      // boot() already tried this once before any gesture existed and was
-      // blocked (logged, not thrown); actually resuming from that blocked
-      // state takes headless Chromium a variable, sometimes-500ms+ amount of
-      // time -- poll rather than guess a fixed delay, so this is not flaky.
+      // Default Chromium's autoplay policy blocks boot()'s gesture-less
+      // resume (logged, not thrown) and takes a variable, sometimes 500ms+
+      // amount of time to actually resume even after this explicit retry --
+      // poll rather than guess a fixed delay, so this is not flaky. This is
+      // just to get a running context for the merge/celebration checks
+      // below; it is not evidence about the no-gesture case (see above).
       const deadline = Date.now() + 2000;
       while (a.getAudioContext()?.state !== 'running' && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 25));
@@ -201,13 +209,63 @@ async function shot(page, name, full = false) {
         celebrationNotes: window.__osc.length,
       };
     });
-    record('Audio starts without a gesture', bootedWithoutGesture, bootedWithoutGesture,
-      `AudioContext created by boot() before any pointer event: ${bootedWithoutGesture}`);
+    record('Audio context created without a gesture', audioContextCreatedWithoutGesture, audioContextCreatedWithoutGesture,
+      `boot() calls unlockAudio() unconditionally; AudioContext exists before any pointer event: ${audioContextCreatedWithoutGesture}. ` +
+      `(Reaching 'running' with zero gesture is checked separately below, against a permissive Chromium flag -- default Chromium's ` +
+      `autoplay policy blocks it here, which is exactly why the pointerdown fallback stays in js/main.js for the Pages build.)`);
     record('Merge sound (pitch rises with tier)', true, audio.rising,
       `${audio.merges[0]}Hz -> ${audio.merges[audio.merges.length - 1]}Hz, monotonic: ${audio.rising}`);
     record('Celebration sound', audio.celebrationNotes > 1, false,
       `${audio.celebrationNotes}-note arpeggio -- needs a top-tier merge, not a first-run event`);
     await context.close();
+  }
+
+  // ------------------------ audio actually starts, no gesture (permissive)
+  // A separate Chromium launch, --autoplay-policy=no-user-gesture-required --
+  // the closest local equivalent of the Playables audio grant (the real
+  // container permits audio out-of-band via platform.audioEnabled(), not
+  // through the page's own gesture history, which default Chromium has no
+  // equivalent for). Kept out of the shared `browser` used everywhere else in
+  // this suite so the merge/celebration checks above stay honest about what
+  // default Chromium actually does.
+  {
+    let permissiveBrowser = null;
+    let flagUsable = false;
+    let running = false;
+    try {
+      permissiveBrowser = await chromium.launch({
+        executablePath: EXEC,
+        args: ['--autoplay-policy=no-user-gesture-required'],
+      });
+      const context = await permissiveBrowser.newContext({ viewport: { width: 500, height: 860 } });
+      const page = await context.newPage();
+      track(page, 'audio-permissive');
+      await page.goto(`${BASE}/index.html`);
+      await page.waitForSelector('#play-btn');
+      running = await page.evaluate(async () => {
+        const a = await import('./js/audio.js');
+        const deadline = Date.now() + 2000;
+        while (a.getAudioContext()?.state !== 'running' && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        return a.getAudioContext()?.state === 'running';
+      });
+      flagUsable = true;
+    } catch (e) {
+      errors.push(`audio-permissive: ${e.message}`);
+    } finally {
+      if (permissiveBrowser) await permissiveBrowser.close();
+    }
+
+    if (flagUsable) {
+      record('Audio actually starts, no gesture (permissive Chromium)', running, running,
+        `--autoplay-policy=no-user-gesture-required, zero pointer events: AudioContext reached 'running': ${running}`);
+    } else {
+      record('Audio actually starts, no gesture -- unverifiable here', true, false,
+        `--autoplay-policy=no-user-gesture-required did not produce a usable browser in this Playwright setup, so this could not be ` +
+        `checked directly. Falling back to "Audio context created without a gesture" above. Whether the real Pages build reaches ` +
+        `'running' with zero gesture is host/browser-policy dependent and not verifiable from this suite -- see docs/playables-plan.md phase 3.2.`);
+    }
   }
 
   // --------------------------------------------------------------- music
