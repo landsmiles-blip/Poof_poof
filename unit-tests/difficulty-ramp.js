@@ -33,8 +33,14 @@ import {
 }
 
 // --- The invariant test: one fall < window < two falls, everywhere on the ramp
+//
+// 8.2 stretched the ramp hard (cap now reached at drop 120, not 60) and eased
+// the opening instead of leaving it linear -- sweeping the full new range
+// explicitly (0 through 150, not a range derived from the constants) is the
+// point: this must keep catching a regression even if DROPS_TO_CAP itself
+// changes again later.
 {
-  for (let drop = 0; drop <= GRAVITY_RAMP_DROPS_TO_CAP + 20; drop += 1) {
+  for (let drop = 0; drop <= 150; drop += 1) {
     const state = { spawnIndex: drop };
     const gravity = currentGravityPxPerSec(state);
     const window = comboWindowSecFor(state);

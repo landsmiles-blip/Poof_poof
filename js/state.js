@@ -9,6 +9,7 @@ import {
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
+  GRAVITY_RAMP_EASE_POWER,
 } from './constants.js';
 
 // --- Difficulty ramp -------------------------------------------------------
@@ -16,8 +17,10 @@ import {
 // truth for anything comboWindowSecFor also needs -- physics.js already
 // imports from state.js, and the reverse would be a cycle.
 //
-// Piecewise-linear in spawnIndex: START -> BASE over [0, DROPS_TO_BASE], then
-// BASE -> CAP over [DROPS_TO_BASE, DROPS_TO_CAP], flat at CAP after that.
+// START -> BASE over [0, DROPS_TO_BASE] (8.2: eased in, not linear -- nearly
+// flat for the first ~15 drops of that stretch, then climbing), then BASE ->
+// CAP over [DROPS_TO_BASE, DROPS_TO_CAP] (still linear -- only the opening
+// needed to feel generous), flat at CAP after that.
 export function gravityRampMultiplier(spawnIndex) {
   const drops = Math.max(0, spawnIndex);
   if (drops >= GRAVITY_RAMP_DROPS_TO_CAP) return GRAVITY_RAMP_CAP_MULTIPLIER;
@@ -26,7 +29,8 @@ export function gravityRampMultiplier(spawnIndex) {
     return GRAVITY_RAMP_BASE_MULTIPLIER + (GRAVITY_RAMP_CAP_MULTIPLIER - GRAVITY_RAMP_BASE_MULTIPLIER) * t;
   }
   const t = drops / GRAVITY_RAMP_DROPS_TO_BASE;
-  return GRAVITY_RAMP_START_MULTIPLIER + (GRAVITY_RAMP_BASE_MULTIPLIER - GRAVITY_RAMP_START_MULTIPLIER) * t;
+  const eased = t ** GRAVITY_RAMP_EASE_POWER;
+  return GRAVITY_RAMP_START_MULTIPLIER + (GRAVITY_RAMP_BASE_MULTIPLIER - GRAVITY_RAMP_START_MULTIPLIER) * eased;
 }
 
 export function currentGravityPxPerSec(state) {

@@ -56,16 +56,28 @@ export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the poin
 // with every run for free.
 //
 // A starting point, tuned by feel, not derived from simulation like the
-// combo/milestone constants: begin noticeably gentler than today, reach
-// today's speed by drop 20, and cap at 1.4x by drop 60. The cap is load-
-// bearing, not just restraint -- see stepPhysics's dt clamp, which is what
-// keeps even the capped speed free of any tunnelling risk. Do not remove it
-// on the grounds that it "seems fine"; the clamp is what makes it fine.
-export const GRAVITY_RAMP_START_MULTIPLIER = 0.7;
+// combo/milestone constants. The cap is load-bearing, not just restraint --
+// see stepPhysics's dt clamp, which is what keeps even the capped speed free
+// of any tunnelling risk. Do not remove it on the grounds that it "seems
+// fine"; the clamp is what makes it fine.
+//
+// 8.2: the first version of this ramp reached today's baseline speed by drop
+// 20 -- roughly ninety seconds in. That is not a ramp, it is a short runway,
+// and it read as one immediately. Stretched hard: the opening is now eased
+// in (see gravityRampMultiplier's `t ** GRAVITY_RAMP_EASE_POWER`, not a
+// straight line) so the first ~15 drops are nearly flat before it starts
+// climbing, baseline speed does not arrive until drop 40, and the cap -- now
+// slightly lower, since a much longer runway needs a gentler ceiling to
+// still feel like ONE curve -- is not reached until drop 120.
+export const GRAVITY_RAMP_START_MULTIPLIER = 0.6;
 export const GRAVITY_RAMP_BASE_MULTIPLIER = 1.0;
-export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.4;
-export const GRAVITY_RAMP_DROPS_TO_BASE = 20;
-export const GRAVITY_RAMP_DROPS_TO_CAP = 60;
+export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.3;
+export const GRAVITY_RAMP_DROPS_TO_BASE = 40;
+export const GRAVITY_RAMP_DROPS_TO_CAP = 120;
+// Power for the ease-in curve over [0, DROPS_TO_BASE]: quadratic. At 15/40 of
+// the way through that stretch, an eased quadratic has covered only ~14% of
+// the distance from START to BASE -- genuinely flat, not merely slower.
+export const GRAVITY_RAMP_EASE_POWER = 2;
 
 // The run ends when the spawn column's stack reaches the top; this is how
 // many rows of headroom remain when the danger warning (render.js) starts
