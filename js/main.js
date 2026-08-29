@@ -2,12 +2,12 @@
 // render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
-  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, CELL,
+  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
-  triggerLockedFlash, tickLockedFlash, toSaveBlob,
+  triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob,
 } from './state.js';
 import * as platform from './platform.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
@@ -15,7 +15,7 @@ import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver } from './shop.js';
 import {
-  playMerge, playCelebration, playGameOver, playUiTick,
+  playMerge, playCelebration, playGameOver, playUiTick, playChargeEarned,
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
   hydrate as hydrateAudio, isMuted, setHostAudioEnabled as setAudioHostEnabled,
 } from './audio.js';
@@ -294,6 +294,11 @@ function drainEvents() {
     } else if (event.type === 'lockedPowerUp') {
       playUiTick();
       triggerLockedFlash(state, event.id);
+    } else if (event.type === 'chargeEarned') {
+      // 8.1: a reward moment, announced -- the chip's own pulse is already
+      // set by grantEarnedCharge (state.js); this is just the sound/haptic.
+      playChargeEarned();
+      vibrate(HAPTIC_CHARGE_EARNED_MS);
     }
   }
   state.events.length = 0;
@@ -330,6 +335,7 @@ function loop(now) {
 function update(dt) {
   tickCombo(state, dt);
   tickLockedFlash(state, dt);
+  tickChipPulse(state, dt);
   updateEffects(fx, dt);
 
   if (state.active) {

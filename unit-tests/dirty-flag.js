@@ -101,4 +101,18 @@ function freshRunningState() {
   assert.equal(state.dirty, true, 'endRun should mark dirty (main.js flushes it immediately)');
 }
 
+// 8.1: spending an EARNED (run-scoped, never persisted) charge must not mark
+// dirty -- nothing that needs saving changed. Spending purchased inventory
+// still must, exactly as above.
+{
+  const state = freshRunningState();
+  state.inventory.bomb = 0; // force the spend to come from earnedCharges only
+  state.earnedCharges.bomb = 1;
+  armBomb(state, true);
+  state.dirty = false;
+  assert.equal(consumeBomb(state), true);
+  assert.equal(state.dirty, false, 'consuming an earned (unpersisted) charge must not mark dirty');
+  assert.equal(state.inventory.bomb, 0, 'purchased inventory must be untouched when an earned charge covers the spend');
+}
+
 console.log('dirty-flag: every mutating export marks dirty on success, transient/no-op actions leave it alone');

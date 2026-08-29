@@ -6,7 +6,9 @@ import {
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, MAGNET_STEP_SEC,
 } from './constants.js';
-import { effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec } from './state.js';
+import {
+  effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter,
+} from './state.js';
 
 // Tier lookup that also answers for the rainbow sentinel, so callers that only
 // need geometry (radius) never have to special-case it.
@@ -173,6 +175,9 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   // detonating the cheapest way to run the multiplier up. Those merges still
   // score (they are real merges) but at 1x, and they do not extend the streak.
   const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
+  // Same gate as the combo streak above, same reason (8.1): a bomb's cascade
+  // must not also be a way to farm free charges.
+  if (!state.suppressCombo) fillMergeMeter(state, tier >= MAX_TIER ? MAX_TIER : tier + 1);
 
   // Pixel position of the merge, frozen right now. A later merge elsewhere in
   // the same cascade can call settleColumns again and drop THIS cell's

@@ -2,8 +2,8 @@
 
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
-  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, MAGNET_DURATION_SEC, BUILD_VERSION,
-  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, DANGER_ROWS_REMAINING,
+  RAINBOW_TIER, RAINBOW_DEF, powerSlotRect, POWER_SLOT, MAGNET_DURATION_SEC, BUILD_VERSION,
+  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC, BOMB_RADIUS,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
@@ -107,6 +107,7 @@ function drawHUD(ctx, state, width, theme) {
   drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier), state.nextTier);
 
   drawPowerBar(ctx, state, theme);
+  drawMergeMeter(ctx, state, theme);
 
   // Build stamp: low-contrast, but the fastest way to confirm which code a
   // browser is actually running when a deploy appears not to have landed.
@@ -163,7 +164,11 @@ function drawPowerBar(ctx, state, theme) {
     const cy = rect.y + rect.h / 2;
 
     const locked = state.highScore < (item.unlockScore || 0);
-    const count = state.inventory[item.id] || 0;
+    // 8.1: purchased stock and this run's earned charges both count toward
+    // what the chip shows and whether it reads as usable -- see
+    // canUsePowerUp/consumeCharge in state.js for the same combined figure.
+    const earned = state.earnedCharges[item.id] || 0;
+    const count = (state.inventory[item.id] || 0) + earned;
     const usable = !locked && count > 0;
     const armed = (item.id === 'bomb' && state.bombArmed)
       || (item.id === 'remover' && state.removerArmed)
@@ -202,6 +207,23 @@ function drawPowerBar(ctx, state, theme) {
       ctx.restore();
     }
 
+    // A brief expanding, fading ring when this chip just earned a charge
+    // (8.1) -- a reward, so it gets a growing pop rather than the flat flash
+    // above, which means "denied".
+    if (state.chipPulse && state.chipPulse.id === item.id) {
+      const p = Math.min(1, state.chipPulse.t / CHIP_PULSE_DURATION_SEC);
+      const wave = Math.sin(p * Math.PI); // one hump: 0 -> 1 -> 0
+      ctx.save();
+      ctx.globalAlpha = wave * 0.85;
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 2 + wave * 2;
+      const grow = wave * 5;
+      ctx.beginPath();
+      roundRectPath(ctx, rect.x - 3 - grow, rect.y - 3 - grow, rect.w + 6 + grow * 2, rect.h + 6 + grow * 2, 8);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Padlock corner marker, so "locked" is not conveyed by dimming alone.
     if (locked) {
       ctx.save();
@@ -215,6 +237,18 @@ function drawPowerBar(ctx, state, theme) {
       ctx.beginPath();
       ctx.arc(rect.x + rect.w - 5, rect.y + 2.5, 2, Math.PI, 0);
       ctx.stroke();
+      ctx.restore();
+    }
+
+    // Small marker (opposite corner from the padlock) distinguishing "earned
+    // this run only" stock from owned stock -- 8.1 requires the two read as
+    // different, since one evaporates at endRun and the other does not.
+    if (earned > 0) {
+      ctx.save();
+      ctx.fillStyle = theme.accent;
+      ctx.beginPath();
+      ctx.arc(rect.x + 4, rect.y + 4, 3, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
   });
@@ -231,6 +265,21 @@ function drawPowerBar(ctx, state, theme) {
       ctx.fillRect(rect.x, rect.y - 4, rect.w * pct, 2.5);
     }
   }
+}
+
+// 8.1: the meter that fills as you merge, spanning exactly the width of the
+// three chips above it so the two visually read as one system.
+function drawMergeMeter(ctx, state, theme) {
+  const barX = POWER_SLOT.x0;
+  const barY = POWER_SLOT.y + POWER_SLOT.size + 4;
+  const barW = 3 * POWER_SLOT.size + 2 * POWER_SLOT.gap;
+  const pct = Math.max(0, Math.min(1, state.mergeMeter / MERGE_METER_MAX));
+  ctx.save();
+  ctx.fillStyle = theme.grid;
+  ctx.fillRect(barX, barY, barW, 3);
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(barX, barY, barW * pct, 3);
+  ctx.restore();
 }
 
 // The run ends when the spawn column (always the centre one) reaches the

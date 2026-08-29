@@ -290,12 +290,34 @@ export const SHAKE_MAX_PX = 5; // deliberately small -- readable, not disorienti
 // How long a locked/out-of-stock power-up chip's tap flash stays lit.
 export const LOCKED_FLASH_DURATION_SEC = 0.35;
 
+// How long a chip's "you just earned this" pulse lasts (8.1). Longer than the
+// locked-flash above and a distinct visual (see render.js) -- this is a
+// reward, not a denial, and should read as one.
+export const CHIP_PULSE_DURATION_SEC = 0.6;
+
 // Haptics, in ms. Only fires where navigator.vibrate exists.
 export const HAPTIC_MERGE_MS = 12;
 export const HAPTIC_TOP_TIER_MS = 45;
 // One deliberate pulse for a whole bomb detonation. Longer than a top-tier
 // merge because clearing nine fruit is the biggest single thing a player can do.
 export const HAPTIC_BOMB_MS = 70;
+// A charge earned mid-run (8.1) is a reward moment, not a hazard -- a single
+// crisp tick, shorter than the bomb's but distinct from a plain merge's.
+export const HAPTIC_CHARGE_EARNED_MS = 30;
+
+// --- Merge meter (8.1) -----------------------------------------------------
+// Power-ups used to be inventory, not play: coins arrive only at endRun and
+// get spent only before the NEXT run, so during the run where a player is
+// actually in trouble, nothing can arrive to help. This meter fills as you
+// merge and grants a free, run-scoped charge on every fill -- the reward loop
+// moves inside the run it rewards.
+//
+// Fill is weighted by tier using TIERS[].points directly (already a tuned
+// per-tier scale, 1..45) rather than a second parallel weight table. At those
+// weights, MERGE_METER_MAX is a starting point tuned by feel: roughly ten to
+// fifteen mixed merges per fill, so a run sees a handful of grants rather than
+// zero or ten.
+export const MERGE_METER_MAX = 75;
 
 // --- Theme ---------------------------------------------------------------
 // One palette per milestone; the live palette is interpolated continuously

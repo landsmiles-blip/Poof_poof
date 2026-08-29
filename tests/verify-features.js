@@ -553,6 +553,53 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // -------------------------------------------------- merge meter earns charges (8.1)
+  {
+    const { context, page } = await freshPage(browser, 'mergemeter');
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(150);
+
+    const result = await page.evaluate(async () => {
+      const st = await import('./js/state.js');
+      const ph = await import('./js/physics.js');
+      const s = window.__poofDebugState;
+      s.highScore = 8000;
+      s.inventory.remover = 0;
+      s.inventory.magnet = 0;
+      s.inventory.bomb = 0;
+      const beforeInventory = JSON.stringify(s.inventory);
+
+      for (let i = 0; i < 30; i++) {
+        s.grid[0][0] = 0;
+        s.grid[1][0] = 0;
+        s.stackHeight[0] = Math.max(s.stackHeight[0], 2);
+        ph.resolveMerges(s);
+      }
+      const earnedTotal = ['remover', 'magnet', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
+      const grantedId = ['remover', 'magnet', 'bomb'].find((id) => s.earnedCharges[id] > 0);
+      const usableFromEarnedAlone = grantedId
+        ? st.canUsePowerUp(s, { unlockScore: 0, id: grantedId })
+        : false;
+
+      st.endRun(s, 'test');
+      const afterEndRunEarned = ['remover', 'magnet', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
+
+      return {
+        earnedTotal,
+        usableFromEarnedAlone,
+        inventoryUnchanged: JSON.stringify(s.inventory) === beforeInventory,
+        afterEndRunEarned,
+      };
+    });
+
+    const ok = result.earnedTotal > 0 && result.usableFromEarnedAlone && result.inventoryUnchanged && result.afterEndRunEarned === 0;
+    record('Merge meter earns a usable charge, clears at endRun', ok, ok,
+      `through real page/canvas code (not just pure functions): earned ${result.earnedTotal} charge(s), usable from the earned pool alone: ${result.usableFromEarnedAlone}, inventory untouched: ${result.inventoryUnchanged}, cleared at endRun: ${result.afterEndRunEarned === 0}`);
+    await context.close();
+  }
+
   // -------------------------------------------- power-ups on REAL touch (7.3 bug)
   //
   // Every check above drives physics functions directly or (elsewhere in this

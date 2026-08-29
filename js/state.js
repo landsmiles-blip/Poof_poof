@@ -6,7 +6,7 @@ import {
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   MAGNET_DURATION_SEC, MAGNET_STEP_SEC, RAINBOW_TIER, RAINBOW_SCHEDULE,
-  LOCKED_FLASH_DURATION_SEC, SAVE_VERSION,
+  LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
 } from './constants.js';
@@ -129,6 +129,14 @@ export function createInitialState(save) {
     spawnIndex: 0,
     lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
 
+    // 8.1: fills as you merge (see fillMergeMeter) and grants a free,
+    // run-scoped charge on every fill. Deliberately separate from
+    // `inventory`: these never persist and are discarded at endRun -- see
+    // the long comment on grantEarnedCharge for why that separation matters.
+    mergeMeter: 0,
+    earnedCharges: { remover: 0, magnet: 0, bomb: 0 },
+    chipPulse: null, // { id, t } while a chip is announcing an earned charge
+
     comboCount: 0,
     comboTimer: 0,
     bestComboThisRun: 0,
@@ -245,7 +253,9 @@ export function hudPowerUps() {
 // lets a locked chip be visible but inert.
 export function canUsePowerUp(state, item) {
   if (!isUnlockedByScore(item, state.highScore)) return false;
-  return (state.inventory[item.id] || 0) > 0;
+  // 8.1: purchased stock and this run's earned charges are both spendable --
+  // see consumeCharge for which one actually gets decremented first.
+  return ((state.inventory[item.id] || 0) + (state.earnedCharges[item.id] || 0)) > 0;
 }
 
 function reconcileUnlocks(stored, highScore) {
@@ -311,6 +321,58 @@ export function resetCombo(state) {
   state.comboTimer = 0;
 }
 
+// --- Merge meter / earned charges (8.1) -----------------------------------
+// The problem this solves: power-ups were inventory, not play. Coins arrive
+// only at endRun and get spent only before the NEXT run, so during the run
+// where a player is actually in trouble, nothing could arrive to help. This
+// meter fills as you merge and grants a free charge on every fill, moving the
+// reward loop inside the run it rewards.
+
+// Which power-ups a merge can possibly earn: unlocked, and usable mid-run
+// (the same tap/activate set hudPowerUps() draws a chip for -- earning a
+// charge for a 'run' power-up like Slow Drop would be unusable until the
+// NEXT run anyway, defeating the entire point of this mechanic).
+function earnableCandidates(state) {
+  return hudPowerUps().filter((p) => isUnlockedByScore(p, state.highScore));
+}
+
+// Deliberately separate from buyPowerUp: earned charges are NOT inventory.
+// They live in state.earnedCharges, never touch state.dirty (nothing
+// persisted changed), and startRun/endRun both discard them unconditionally.
+// If earned charges entered `inventory` instead, the shop would stop meaning
+// anything -- coins would no longer be the only way to build permanent stock.
+function grantEarnedCharge(state) {
+  const candidates = earnableCandidates(state);
+  // Never actually empty in practice -- Fruit Remover unlocks at score 0 --
+  // but a meter with nothing eligible to grant must not throw.
+  if (candidates.length === 0) return;
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  state.earnedCharges[pick.id] = (state.earnedCharges[pick.id] || 0) + 1;
+  state.chipPulse = { id: pick.id, t: 0 };
+  // main.js turns this into a rising sound + haptic tick -- physics/state
+  // stay free of audio imports, as everywhere else events are used for this.
+  state.events.push({ type: 'chargeEarned', id: pick.id });
+}
+
+// Called from physics.js's mergeCells on every merge that is not part of a
+// suppressed (bomb-cascade) cascade -- same gate registerComboHit's caller
+// already applies to the combo streak, for the same anti-farming reason: a
+// bomb clears the board with no further player input, so letting its
+// cascade also fill this meter would make detonating free charges.
+export function fillMergeMeter(state, tier) {
+  state.mergeMeter += TIERS[tier].points;
+  while (state.mergeMeter >= MERGE_METER_MAX) {
+    state.mergeMeter -= MERGE_METER_MAX;
+    grantEarnedCharge(state);
+  }
+}
+
+export function tickChipPulse(state, dt) {
+  if (!state.chipPulse) return;
+  state.chipPulse.t += dt;
+  if (state.chipPulse.t >= CHIP_PULSE_DURATION_SEC) state.chipPulse = null;
+}
+
 // --- Locked power-up tap feedback ----------------------------------------
 // A tap on a locked/out-of-stock chip changes no board state, so unlike the
 // remover or bomb this has no physics event to ride -- input.js pushes the
@@ -364,6 +426,14 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.magnetStepTimer = 0;
   state.lockedFlash = null;
 
+  // 8.1: a fresh run starts with an empty meter and no earned charges,
+  // regardless of what the previous run left behind -- see endRun, which
+  // also clears these the instant a run ends, and the acceptance test that
+  // checks inventory is byte-identical across a run with charges earned.
+  state.mergeMeter = 0;
+  state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
+  state.chipPulse = null;
+
   state.grid = makeEmptyGrid(effectiveRows(state));
   state.stackHeight = new Array(COLS).fill(0);
   state.score = 0;
@@ -385,6 +455,13 @@ export function endRun(state, reason) {
   state.active = null;
   state.magnetActive = false;
   state.magnetTimer = 0;
+  // 8.1: earned charges are run-scoped and must never survive to the next
+  // run or leak into anything persisted -- explicit here (not left to the
+  // next startRun) so "gone the instant the run ends" is true even before
+  // another run begins.
+  state.mergeMeter = 0;
+  state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
+  state.chipPulse = null;
   state.bombArmed = false;
   state.removerArmed = false;
   resetCombo(state);
@@ -445,44 +522,64 @@ export function addScore(state, points) {
 // --- In-run power-up activation -----------------------------------------
 
 export function activateMagnet(state) {
-  if ((state.inventory.magnet || 0) <= 0) return false;
   if (state.magnetActive) return false;
-  state.inventory.magnet -= 1;
+  if (!consumeCharge(state, 'magnet')) return false;
   state.magnetActive = true;
   state.magnetTimer = MAGNET_DURATION_SEC;
   state.magnetStepTimer = MAGNET_STEP_SEC;
-  state.dirty = true;
   return true;
+}
+
+// 8.1: total spendable stock for one power-up id -- purchased inventory plus
+// whatever this run has earned. Arming and canUsePowerUp both need this same
+// combined figure, so it lives in one place.
+function totalCharges(state, id) {
+  return (state.inventory[id] || 0) + (state.earnedCharges[id] || 0);
+}
+
+// Spends one charge for `id`, preferring the run-scoped earned pool first: it
+// evaporates at endRun regardless of whether it gets used, so spending it
+// ahead of permanent stock never costs the player anything, and it means a
+// rescue charge is never wasted while paid-for stock sits untouched.
+// state.dirty is set only when inventory (persisted) actually changes --
+// spending an earned charge changes nothing that needs saving.
+function consumeCharge(state, id) {
+  if ((state.earnedCharges[id] || 0) > 0) {
+    state.earnedCharges[id] -= 1;
+    return true;
+  }
+  if ((state.inventory[id] || 0) > 0) {
+    state.inventory[id] -= 1;
+    state.dirty = true;
+    return true;
+  }
+  return false;
 }
 
 // Arming is exclusive: two armed targeting modes at once would make the next
 // tap ambiguous.
 export function armBomb(state, armed) {
-  if (armed && (state.inventory.bomb || 0) <= 0) return false;
+  if (armed && totalCharges(state, 'bomb') <= 0) return false;
   state.bombArmed = armed;
   if (armed) state.removerArmed = false;
   return true;
 }
 
 export function armRemover(state, armed) {
-  if (armed && (state.inventory.remover || 0) <= 0) return false;
+  if (armed && totalCharges(state, 'remover') <= 0) return false;
   state.removerArmed = armed;
   if (armed) state.bombArmed = false;
   return true;
 }
 
 export function consumeBomb(state) {
-  if ((state.inventory.bomb || 0) <= 0) return false;
-  state.inventory.bomb -= 1;
+  if (!consumeCharge(state, 'bomb')) return false;
   state.bombArmed = false;
-  state.dirty = true;
   return true;
 }
 
 export function consumeRemover(state) {
-  if ((state.inventory.remover || 0) <= 0) return false;
-  state.inventory.remover -= 1;
+  if (!consumeCharge(state, 'remover')) return false;
   state.removerArmed = false;
-  state.dirty = true;
   return true;
 }

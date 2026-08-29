@@ -162,6 +162,15 @@ export function playUiTick() {
   blip(660, { duration: 0.08, type: 'square', gain: 0.12, bendTo: 880 });
 }
 
+// A charge earned mid-run (8.1): a short, bright two-note rise. Distinct from
+// playCelebration's five-note arpeggio -- that one means "you reached the top
+// tier"; this one means "a free charge just became available".
+export function playChargeEarned() {
+  const root = 660;
+  blip(root, { duration: 0.1, type: 'triangle', gain: 0.22 });
+  blip(root * Math.pow(2, 7 / 12), { duration: 0.16, type: 'triangle', gain: 0.24, delay: 0.07 });
+}
+
 // Descending tone when a run ends.
 export function playGameOver() {
   blip(330, { duration: 0.5, type: 'triangle', gain: 0.28, bendTo: 110 });
