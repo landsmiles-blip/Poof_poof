@@ -7,11 +7,11 @@ import {
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
-  triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob, debugHitEnabled,
+  triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob,
 } from './state.js';
 import * as platform from './platform.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
-import { drawFrame, canvasHeightFor, drawDebugHitOverlay } from './render.js';
+import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver } from './shop.js';
 import {
@@ -38,11 +38,6 @@ const overlay = document.getElementById('overlay');
 // that references `state` is only ever called after that has happened.
 let state;
 const fx = createEffects();
-
-// ?hitdebug=1: see js/state.js's debugHitEnabled and js/render.js's
-// drawDebugHitOverlay. Read once at boot, same as the rest of this module's
-// URL-driven behavior -- it can't change mid-session anyway.
-const DEBUG_HIT = debugHitEnabled();
 
 // The canvas has two sizes that must not be confused:
 //   - the BACKING STORE (canvas.width/height), in device pixels -- sized to
@@ -112,9 +107,16 @@ function measureCanvasNow() {
 // CSS derives the canvas's (and, via --canvas-css-width above, the
 // overlay's) on-screen size from. Set on :root rather than on the canvas
 // element itself, which is what lets #overlay share it.
+//
+// Two custom properties, not one: --canvas-aspect (a <ratio>, "384 / N") is
+// what the `aspect-ratio` property consumes; --canvas-ratio (a plain number,
+// 384/N) is what css/style.css's width formula multiplies a length by. Both
+// come from this one logicalH so they can never drift apart -- see that
+// rule's own comment for why width has to be computed this way at all.
 function syncCanvasAspect() {
   const logicalH = canvasHeightFor(state);
   document.documentElement.style.setProperty('--canvas-aspect', `${CANVAS_WIDTH} / ${logicalH}`);
+  document.documentElement.style.setProperty('--canvas-ratio', `${CANVAS_WIDTH / logicalH}`);
   // The aspect-ratio change lands synchronously in this same task, but
   // ResizeObserver callbacks fire asynchronously -- measure immediately too,
   // so a screen transition or an Extra Row run does not show one stale frame
@@ -326,7 +328,6 @@ function loop(now) {
   if (state.screen === SCREEN.PLAYING) {
     update(dt);
     drawFrame(ctx, state, fx);
-    if (DEBUG_HIT) drawDebugHitOverlay(ctx, state);
     applyPageTheme(themeForScore(state.score));
   }
 
