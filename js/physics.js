@@ -151,9 +151,32 @@ export function hardDrop(state) {
   return true;
 }
 
+// Pre-existing bug surfaced by 9.5's board-integrity stress test, unrelated
+// to the magnet itself: only the SPAWN column governs isGameOver, so a
+// non-spawn column can already be completely full while play continues
+// normally, and dragging (or, since 9.2, the magnet pulling) a falling fruit
+// over that column crashed lockFruit outright -- landingRow going negative,
+// state.grid[-1] being undefined. Fixed at the root, here, rather than at
+// each landing call site: a full column is simply never a valid answer,
+// redirected to the nearest column (checked left/right alternately, outward)
+// that still has room. Both stepPhysics and hardDrop call this, and the
+// magnet's own pull needs no separate awareness of full columns at all --
+// it only ever nudges targetX, and this is what turns that into an actual
+// landing column.
 function columnForX(state, x) {
-  const col = Math.floor(x / CELL);
-  return Math.min(COLS - 1, Math.max(0, col));
+  const col = Math.min(COLS - 1, Math.max(0, Math.floor(x / CELL)));
+  const rows = effectiveRows(state);
+  if (state.stackHeight[col] < rows) return col;
+  for (let offset = 1; offset < COLS; offset++) {
+    const left = col - offset;
+    const right = col + offset;
+    if (left >= 0 && state.stackHeight[left] < rows) return left;
+    if (right < COLS && state.stackHeight[right] < rows) return right;
+  }
+  // Every column is full -- the board is already in a terminal state that
+  // isGameOver will catch on the next spawn attempt; nothing better to do
+  // with THIS fruit than leave it exactly where it naturally was.
+  return col;
 }
 
 function lockFruit(state, row, col, tier) {
