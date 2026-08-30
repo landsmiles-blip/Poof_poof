@@ -3,7 +3,7 @@
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
-  powerSlotRect, POWER_SLOT, pauseButtonRect, BUILD_VERSION,
+  powerSlotRect, POWER_SLOT, pauseButtonRect,
   FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
 } from './constants.js';
@@ -11,7 +11,7 @@ import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './st
 import {
   squashScaleAt, shakeOffset, drawParticles, drawBombRings,
 } from './effects.js';
-import { themeForScore, themePosition } from './theme.js';
+import { themeForScore, themePosition, relativeLuminance } from './theme.js';
 import { drawIcon } from './icons.js';
 
 export function boardHeightFor(state) {
@@ -88,6 +88,26 @@ export function drawFrame(ctx, state, fx) {
   ctx.fillStyle = boardGradient;
   ctx.fillRect(0, 0, width, height);
 
+  // 11.2: without an edge, that one gradient runs unbroken from the score
+  // readout to the floor and the play area does not read as a panel. A soft
+  // shadow cast onto the board just below the HUD, and a 1px highlight along
+  // the seam itself -- see docs/phase11brief.md section 4.1.
+  //
+  // The brief also specified a tint across the HUD strip, dropped entirely
+  // (see the "Board panel (11.2)" comment in constants.js and
+  // unit-tests/theme-contrast.js): the crossing segment's text/board
+  // contrast has only a 0.06 margin over the 4.5:1 floor with NO tint, and
+  // any tint can only shrink that margin further, never grow it.
+  const hudIsLight = relativeLuminance(theme.boardTop) >= 0.5;
+  const hudShadow = ctx.createLinearGradient(0, HUD_HEIGHT, 0, HUD_HEIGHT + 10);
+  hudShadow.addColorStop(0, 'rgba(0,0,0,0.10)');
+  hudShadow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = hudShadow;
+  ctx.fillRect(0, HUD_HEIGHT, width, 10);
+
+  ctx.fillStyle = hudIsLight ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.16)';
+  ctx.fillRect(0, HUD_HEIGHT, width, 1);
+
   drawHUD(ctx, state, width, theme);
 
   // Shake displaces only the board, never the HUD -- shaking the score readout
@@ -127,17 +147,6 @@ function drawHUD(ctx, state, width, theme) {
   drawPowerBar(ctx, state, theme);
   drawMergeMeter(ctx, state, theme);
   drawPauseButton(ctx, theme);
-
-  // Build stamp: low-contrast, but the fastest way to confirm which code a
-  // browser is actually running when a deploy appears not to have landed.
-  ctx.save();
-  ctx.font = `9px ${FONT_FAMILY}`;
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'bottom';
-  ctx.globalAlpha = 0.38;
-  ctx.fillStyle = theme.text;
-  ctx.fillText(`v${BUILD_VERSION}`, width - 8, HUD_HEIGHT - 3);
-  ctx.restore();
 }
 
 // Combo readout fades as the window runs out, so the player can see the streak
@@ -330,6 +339,17 @@ function drawDangerState(ctx, state, rows, theme) {
   ctx.restore();
 }
 
+// theme.grid (js/constants.js's THEMES) is always an rgba() string -- swap
+// just the alpha channel so a gradient's transparent end is the SAME hue as
+// its solid end, just invisible, rather than a hardcoded black that would
+// mismatch the grid's actual (theme-tinted) colour on later boards.
+function withAlpha(rgbaString, alpha) {
+  const m = rgbaString.match(/rgba?\(([^)]+)\)/);
+  if (!m) return rgbaString;
+  const [r, g, b] = m[1].split(',').map((s) => parseFloat(s));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 // Soft radial darkening toward the board's edges -- cheap depth, strengthening
 // slightly at each milestone so the later, more saturated palettes read as
 // more dramatic rather than flatter.
@@ -423,7 +443,16 @@ function drawBoard(ctx, state, fx, theme) {
   ctx.rect(0, 0, COLS * CELL, rows * CELL);
   ctx.clip();
 
-  ctx.strokeStyle = theme.grid;
+  // 11.2: a flat opacity read as ruled paper across the empty top half of the
+  // board (the whole reason the board is tall enough to have one -- see
+  // ROWS's own comment in constants.js). Fully transparent at the top,
+  // reaching theme.grid by 45% down and holding, so alignment stays legible
+  // exactly where fruit actually rests.
+  const gridFade = ctx.createLinearGradient(0, 0, 0, rows * CELL);
+  gridFade.addColorStop(0, withAlpha(theme.grid, 0));
+  gridFade.addColorStop(0.45, theme.grid);
+  gridFade.addColorStop(1, theme.grid);
+  ctx.strokeStyle = gridFade;
   ctx.lineWidth = 1;
   for (let c = 1; c < COLS; c++) {
     ctx.beginPath();

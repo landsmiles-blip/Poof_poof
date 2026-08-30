@@ -29,6 +29,7 @@ import {
   hydrate as hydrateHaptics, isHapticsOn, spawnBombRing,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
+import { initBackground, setBoardRect, drawBackground } from './background.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -106,6 +107,11 @@ function handleCanvasMeasurement(widthPx, heightPx) {
   // screen: the two halves of the game visibly disagree.
   document.documentElement.style.setProperty('--canvas-css-width', `${widthPx}px`);
   applyBackingStoreSize();
+  // js/background.js's halo is centred on the board -- cached here (this
+  // function already early-returns on a zero rect) rather than measured per
+  // frame, so the halo stays where the board was even while canvas.hidden
+  // makes getBoundingClientRect() return zero (behind the menu).
+  setBoardRect(canvas.getBoundingClientRect());
 }
 
 function measureCanvasNow() {
@@ -206,6 +212,20 @@ function persistNow() {
   state.dirty = false;
   platform.save(currentSaveBlob());
   return platform.flush();
+}
+
+// 11.2: js/background.js's drawBackground(theme, timeSec) has no `state`
+// parameter to call js/state.js's skinColor from, so the live skin's tier
+// colours (for the backdrop's decorative shapes) ride on the theme object
+// instead, built here where `state` is in scope. Score is forced to 0 on the
+// menu the same way showScreen's own applyPageTheme call is: state.score
+// stays at the previous run's value until the NEXT startRun (see endRun),
+// so using it unconditionally here would show the backdrop's ground and
+// halo in the last run's palette while the DOM/CSS are already back to the
+// menu's -- a visible seam between the canvas and everything around it.
+function backgroundTheme() {
+  const score = state.screen === SCREEN.MENU ? 0 : state.score;
+  return { ...themeForScore(score), skinColors: TIERS.map((_, i) => skinColor(state, i)) };
 }
 
 function showScreen() {
@@ -346,6 +366,14 @@ function loop(now) {
     applyPageTheme(themeForScore(state.score));
   }
 
+  // 11.2 landmine (docs/phase11brief.md L2): deliberately OUTSIDE the branch
+  // above. That branch only runs while actively playing; the backdrop must
+  // keep animating behind the menu, the shop and the game-over screen too --
+  // exactly where a player deciding whether to play again is looking. A
+  // genuine pause (below) stops this the same way it stops everything else
+  // in loop(): by the whole function not running, not by a flag here.
+  drawBackground(backgroundTheme(), now / 1000);
+
   // Checked regardless of screen: most persisted-field changes (buying,
   // picking a skin, toggling sound) happen on the menu/game-over overlays,
   // not mid-run. Cheap when clean -- one boolean read most frames.
@@ -458,6 +486,8 @@ function backToMenuFromPause() {
 // screen is visible -- there is none here, so it fires as soon as the first
 // showScreen() has actually reached the screen.
 async function boot() {
+  initBackground();
+
   // MUST run before createInitialState(): dev mode inflates inventory and
   // highScore in memory, and if a fresh save's starter-Remover grant sets
   // state.dirty (see createInitialState), the loop's first persist() would
@@ -535,6 +565,9 @@ async function boot() {
   window.addEventListener('pointerdown', unlockAudio, { once: true });
 
   applyPageTheme(themeForScore(0));
+  // So the menu is never shown against a bare --page-bg before the loop's
+  // own recurring call (in loop(), outside the PLAYING branch) gets there.
+  drawBackground(backgroundTheme(), performance.now() / 1000);
 
   // ctx.font silently falls back when the face has not loaded -- canvas has no
   // equivalent of font-display -- so starting the loop immediately would paint

@@ -166,6 +166,7 @@ function buildIndexHtml() {
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+<canvas id="bg-canvas" aria-hidden="true"></canvas>
 <div id="app">
   <canvas id="game-canvas" hidden></canvas>
   <div id="overlay"></div>

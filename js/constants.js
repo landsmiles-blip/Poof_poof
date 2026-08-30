@@ -6,23 +6,28 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-12';
+export const BUILD_VERSION = '2026.08.28-13';
 
 export const COLS = 6;
-// 10.2: was 7. Every gameplay screenshot reviewed showed stacks two or three
-// fruit tall in a seven-row board -- the top half permanently empty, the
-// danger state (render.js) never triggering, runs ending long before the
-// later palette milestones. A shorter board is the direct fix: it puts the
-// spawn column within real reach of the top during ordinary play instead of
-// only after an unusually careless run. 5 was the brief's own starting
-// point; simulated against a merge-seeking (not pure-random) bot across
-// rows 4-7, the fraction of a run spent within DANGER_ROWS_REMAINING of the
-// top rose smoothly (18% at 7, 26% at 6, 37% at 5, 55% at 4) -- 5 is a real,
-// noticeable step toward tension without 4's near-constant pressure, which
-// read as punishing rather than tense. Runs getting shorter is intended, not
-// compensated for elsewhere (the gravity ramp is untouched) -- a tense short
-// run gets replayed, a slack long one gets abandoned.
-export const ROWS = 5;
+// 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
+// often -- the observation behind that (a seven-row board's top half sits
+// empty in ordinary play) was correct, and the fix was not.
+//
+// Two things a simulation of danger-state frequency could not see. The fall
+// from spawn to an empty floor is ~(ROWS - 0.5) * CELL + radius; at 5 rows
+// that is ~310px / ~1.19s against 7 rows' ~438px / ~1.68s. That fall is not
+// dead time -- it is the entire steering interaction, and 10.2 removed 29%
+// of it. And css/style.css sizes the canvas from 384 / (HUD_HEIGHT + ROWS *
+// CELL); on a phone the width term always wins, so FEWER rows makes the game
+// physically SHORTER on screen: 51% of a 390x844 phone at 5 rows against 65%
+// at 7. That file's own 9.9 comment says so in as many words.
+//
+// The original complaint stands and is NOT addressed here. If the board
+// should feel tighter, the levers are the gravity ramp and SPAWN_POOL, not
+// the ceiling -- lowering the ceiling punishes the player for merging well,
+// which is the one thing the game is asking them to do. Do not re-shrink
+// this to fix difficulty.
+export const ROWS = 7;
 export const CELL = 64; // px, size of one grid cell
 
 export const BOARD_WIDTH = COLS * CELL;
@@ -225,13 +230,7 @@ export const POWERUPS = [
     usage: 'tap',
   },
   {
-    // 10.2: cost was 50 when ROWS was 7, where the extra row was a 1/7 (14%)
-    // headroom increase. ROWS is now 5, making the same one row a 1/5 (20%)
-    // increase -- a deliberate reprice, not drift: 65 keeps its cost roughly
-    // proportional to the stronger effect (50 * 20/14 ~= 71, rounded down to
-    // stay under Rainbow's 80) rather than silently getting more powerful for
-    // the same price.
-    id: 'extraRow', name: 'Extra Row', cost: 65, unlockScore: 0, icon: 'extraRow',
+    id: 'extraRow', name: 'Extra Row', cost: 50, unlockScore: 0, icon: 'extraRow',
     desc: 'One extra row of headroom for one run.',
     usage: 'run',
   },
@@ -468,3 +467,43 @@ export const LEGACY_STORAGE_KEYS = {
   muted: 'poofpoof.muted',
   musicOn: 'poofpoof.musicOn',
 };
+
+// --- Board panel (11.2) -----------------------------------------------------
+// js/render.js's drawFrame gives the play area a defined top edge: a shadow
+// cast onto the board below the HUD, and a highlight along the seam. §4.1 of
+// docs/phase11brief.md also specified a tint across the HUD strip itself,
+// but the crossing segment's text/board contrast (unit-tests/theme-contrast.js)
+// sits only 0.06 above the 4.5:1 floor with NO tint at all, and any tint
+// strength greater than zero can only move a board colour further from its
+// own ink (never closer -- the tint always pushes toward whichever colour
+// is NOT the current ink). No strength could reach the brief's required 0.3
+// margin; confirmed by sweeping alpha down to 0.01 and finding the worst
+// case still below 4.65:1. Per the brief's own §5.2 decision tree, the tint
+// was dropped entirely -- this section intentionally holds no tint alpha
+// constants.
+
+// --- Backdrop (11.2) ---------------------------------------------------------
+// js/background.js: a lit ground, a halo behind the board, drifting
+// decorative fruit silhouettes, and a page-level vignette, all on a
+// full-viewport canvas behind #app. See docs/phase11brief.md section 3.
+export const BG_SHAPE_COUNT = 16;
+export const BG_SHAPE_MIN_RADIUS = 16; // px
+export const BG_SHAPE_MAX_RADIUS = 62; // px
+export const BG_SHAPE_MIN_ALPHA = 0.05;
+export const BG_SHAPE_MAX_ALPHA = 0.10;
+export const BG_SHAPE_MAX_DRIFT_PX_PER_SEC = 8; // sideways and upward combined
+export const BG_HALO_PEAK_ALPHA = 0.13; // brief: "keep it under 0.15"
+export const BG_HALO_MID_ALPHA = 0.05; // at 55% of the halo's radius
+export const BG_HALO_RADIUS_SCALE = 0.9; // x hypot(boardWidth, boardHeight)
+export const BG_GROUND_LIGHTEN = 0.10; // top of the ground gradient, from theme.page
+export const BG_GROUND_DARKEN = 0.30; // bottom of the ground gradient, from theme.page
+export const BG_VIGNETTE_INNER_SCALE = 0.30; // x outer radius, transparent inside this
+export const BG_VIGNETTE_OUTER_SCALE = 0.78; // x max(viewport width, height)
+export const BG_VIGNETTE_EDGE_ALPHA = 0.45;
+// ~15fps: redraw only if this much time has passed since the last frame.
+// Nothing on this canvas moves faster than BG_SHAPE_MAX_DRIFT_PX_PER_SEC, so
+// there is nothing to gain from matching the board's own 60fps loop.
+export const BG_MIN_REDRAW_INTERVAL_SEC = 0.066;
+// Fixed, not time-seeded: the decorative layout must be identical on every
+// load so a screenshot diff against it means something.
+export const BG_SHAPE_SEED = 0x9E3779B9;

@@ -39,7 +39,23 @@ html, body {
   transition: background-color 400ms linear;
 }
 
+/* 11.2: a full-viewport canvas behind #app -- js/background.js -- so the area
+   around the board is a lit, decorated ground instead of a flat --page-bg
+   fill. pointer-events: none keeps it fully inert; #app's z-index keeps the
+   real game above it despite coming first in source order (#pause-overlay is
+   already z-index: 10 and is unaffected either way). */
+#bg-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
 #app {
+  position: relative;
+  z-index: 1;
   min-height: 100%;
   display: flex;
   align-items: center;
