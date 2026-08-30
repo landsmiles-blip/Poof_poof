@@ -16,6 +16,13 @@
   <canvas id="game-canvas" hidden></canvas>
   <div id="overlay"></div>
 </div>
+<!-- 9.3: the in-run pause panel. Deliberately NOT inside #app or reusing
+     #overlay -- #overlay is mutually exclusive with the canvas by design
+     (js/shop.js's own comment), but this has to sit on top of the canvas
+     WHILE it is still showing (frozen) behind it. A fixed, full-viewport
+     scrim, shown/hidden by js/main.js, filled by js/shop.js's
+     renderPausePanel. -->
+<div id="pause-overlay" hidden></div>
 <!-- YouTube Playables SDK -- must load before js/main.js, since js/platform.js
      reads window.ytgame.IN_PLAYABLES_ENV at import time to choose an
      implementation. Deliberately left uninserted here rather than guessed:

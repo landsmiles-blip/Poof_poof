@@ -91,7 +91,7 @@ html, body {
    --canvas-css-width is set by js/main.js from the canvas's own actual
    measured width -- not recomputed here from viewport units -- because the
    canvas can be either height- or width-constrained depending on the
-   viewport's aspect ratio (aspect-ratio + max-width below), and a formula
+   viewport's aspect ratio (see that rule's own width formula), and a formula
    derived only from vh (as this used to be) silently goes wrong the moment
    the canvas becomes the width-constrained one, e.g. on an ultra-wide
    viewport: the shop panel stays a size the board is no longer actually
@@ -103,6 +103,30 @@ html, body {
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 24px);
   overflow-y: auto;
+}
+
+/* 9.3: a fixed, full-viewport scrim -- deliberately not sized to match the
+   canvas's own box (unlike #overlay above), since a pause modal is a
+   familiar enough pattern on its own that it does not need to align with
+   the frozen board underneath it, and this sidesteps needing --canvas-css-
+   width math just for a dialog. */
+#pause-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  z-index: 10;
+}
+
+#pause-overlay[hidden] {
+  display: none;
+}
+
+.pause-card {
+  width: min(320px, calc(100vw - 48px));
 }
 
 .screen {

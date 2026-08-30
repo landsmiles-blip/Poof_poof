@@ -13,7 +13,7 @@ import * as platform from './platform.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
 import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
-import { renderMenu, renderGameOver } from './shop.js';
+import { renderMenu, renderGameOver, renderPausePanel } from './shop.js';
 import {
   playMerge, playCelebration, playGameOver, playUiTick, playChargeEarned,
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
@@ -33,11 +33,21 @@ import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
+const pausePanelRoot = document.getElementById('pause-overlay');
 
 // Assigned once, in boot(), once platform.load() resolves -- everything below
 // that references `state` is only ever called after that has happened.
 let state;
 const fx = createEffects();
+
+// 9.3: true only while the in-game pause PANEL is on screen -- a purely
+// local presentation flag, the same way input.js's own `dragging` never
+// needed to live on state. Distinct from state.paused (which covers a
+// host-driven pause too, and gates input/the loop): this one exists so a
+// host resume that happens to fire while the player has the panel open does
+// not silently un-freeze gameplay out from under it -- see platform.onResume
+// below.
+let pausePanelOpen = false;
 
 // The canvas has two sizes that must not be confused:
 //   - the BACKING STORE (canvas.width/height), in device pixels -- sized to
@@ -306,6 +316,11 @@ function drainEvents() {
       // set by grantEarnedCharge (state.js); this is just the sound/haptic.
       playChargeEarned();
       vibrate(HAPTIC_CHARGE_EARNED_MS);
+    } else if (event.type === 'pauseRequested') {
+      // 9.3: routed through state.events (not a callback) so input.js's
+      // attachInput can stay exactly (canvas, state) -- see its own comment
+      // at the push site.
+      openPauseMenu();
     }
   }
   state.events.length = 0;
@@ -325,7 +340,7 @@ function loop(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (state.screen === SCREEN.PLAYING) {
+  if (state.screen === SCREEN.PLAYING && !state.paused) {
     update(dt);
     drawFrame(ctx, state, fx);
     applyPageTheme(themeForScore(state.score));
@@ -336,7 +351,14 @@ function loop(now) {
   // not mid-run. Cheap when clean -- one boolean read most frames.
   if (state.dirty) persist();
 
-  startLoop();
+  // 9.3: openPauseMenu (via drainEvents, inside update() above) can set
+  // state.paused mid-frame, cancelling rafHandle as part of pauseRun() --
+  // without this guard, this unconditional call would immediately re-arm it
+  // again before the function even returns, undoing that cancellation in the
+  // SAME frame. A host-driven pause never hits this: it fires from an event
+  // listener between frames, with no trailing startLoop() call of its own to
+  // undo.
+  if (!state.paused) startLoop();
 }
 
 function update(dt) {
@@ -374,6 +396,70 @@ function update(dt) {
   }
 
   drainEvents();
+}
+
+// 9.3: the ONLY two functions that ever stop or restart the run -- a
+// host-driven pause (platform.onPause/onResume) and the in-game pause panel
+// both call exactly these, never a second, parallel mechanism. Extracted
+// from what used to be platform.onPause/onResume's own callback bodies
+// unchanged; openPauseMenu/closePauseMenu below are what's new.
+function pauseRun() {
+  if (rafHandle !== null) {
+    cancelAnimationFrame(rafHandle);
+    rafHandle = null;
+  }
+  suspendAudio();
+  pauseMusicScheduler();
+  state.paused = true;
+  persistNow();
+}
+function resumeRun() {
+  lastTime = performance.now(); // avoid a huge dt spike on the first frame back
+  state.paused = false;
+  resumeAudio();
+  resumeMusicScheduler();
+  if (rafHandle === null) startLoop();
+}
+
+// Triggered by input.js's pauseRequested event (the HUD button), never
+// called while already open or off the PLAYING screen.
+function openPauseMenu() {
+  if (state.screen !== SCREEN.PLAYING || pausePanelOpen) return;
+  pausePanelOpen = true;
+  pauseRun();
+  pausePanelRoot.hidden = false;
+  renderPausePanel(pausePanelRoot, state, {
+    onResume: closePauseMenu,
+    onBackToMenu: backToMenuFromPause,
+  });
+}
+
+function closePauseMenu() {
+  if (!pausePanelOpen) return;
+  pausePanelOpen = false;
+  pausePanelRoot.hidden = true;
+  pausePanelRoot.innerHTML = '';
+  resumeRun();
+}
+
+// "Back to menu" means the game's OWN menu (a Playables hard requirement --
+// no exit/quit control of any kind may leave the Playable itself), not the
+// results screen endRun normally leads to next. The score/coins/unlock
+// tallying endRun does still has to run -- leaving voluntarily should not
+// erase progress this run already earned -- only the SCREEN it chose is
+// overridden here, straight to the menu instead of showScreen()'s GAMEOVER
+// branch. closePauseMenu runs first so the loop/audio are back in their
+// normal always-on state before this screen transition -- otherwise the
+// NEXT run would start with a permanently cancelled rAF loop.
+function backToMenuFromPause() {
+  closePauseMenu();
+  endRun(state, 'quit-to-menu');
+  persistNow();
+  platform.submitScore(state.highScore);
+  stopMusic();
+  state.screen = SCREEN.MENU;
+  clearEffects(fx);
+  showScreen();
 }
 
 // Order: SDK script tag (index.html, before this module) -> platform.init()
@@ -446,20 +532,14 @@ async function boot() {
     });
   });
 
-  platform.onPause(() => {
-    if (rafHandle !== null) {
-      cancelAnimationFrame(rafHandle);
-      rafHandle = null;
-    }
-    suspendAudio();
-    pauseMusicScheduler();
-    persistNow();
-  });
+  platform.onPause(pauseRun);
+  // Guarded: a host resume (e.g. the tab regaining visibility) firing while
+  // the player has the in-game pause panel open must not silently un-freeze
+  // gameplay out from under a screen that still says "Paused" -- the player
+  // resumes it themselves, via the panel's own Resume button.
   platform.onResume(() => {
-    lastTime = performance.now(); // avoid a huge dt spike on the first frame back
-    resumeAudio();
-    resumeMusicScheduler();
-    if (rafHandle === null) startLoop();
+    if (pausePanelOpen) return;
+    resumeRun();
   });
 
   // Any first interaction anywhere is a valid moment to start audio.

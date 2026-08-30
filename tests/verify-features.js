@@ -948,6 +948,109 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // ------------------------------------------------------------ pause menu
+  // 9.3: a real in-HUD pause control -- Resume, Sound, Music, Back to menu.
+  // No master mute (Playables requirement, phase 3) and no exit/quit control
+  // of any kind: "Back to menu" only ever returns to this game's own menu.
+  {
+    const { context, page } = await freshPage(browser, 'pause-menu', { hasTouch: true });
+    await page.goto(`${BASE}/index.html?dev=1`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(200);
+
+    const pauseBtn = await page.evaluate(async () => {
+      const C = await import('./js/constants.js');
+      const rect = document.getElementById('game-canvas').getBoundingClientRect();
+      const r = C.pauseButtonRect();
+      const scale = rect.width / C.CANVAS_WIDTH;
+      return { x: rect.left + (r.x + r.w / 2) * scale, y: rect.top + (r.y + r.h / 2) * scale };
+    });
+
+    // Real touch tap opens it, freezes the run the same way a host pause
+    // does (rAF actually cancelled, not just gated -- reuses the exact check
+    // the "Pause actually stops the game" block above uses).
+    await page.touchscreen.tap(pauseBtn.x, pauseBtn.y);
+    await page.waitForTimeout(100);
+    const openedState = await page.evaluate(() => ({
+      paused: window.__poofDebugState.paused,
+      panelVisible: !document.getElementById('pause-overlay').hidden,
+    }));
+    const canvas = page.locator('#game-canvas');
+    const frozenEarly = await canvas.screenshot();
+    await page.waitForTimeout(400);
+    const frozenLate = await canvas.screenshot();
+    const genuinelyFrozen = frozenEarly.equals(frozenLate);
+    record('Pause button opens the panel via a real touch tap and genuinely freezes the run',
+      openedState.paused && openedState.panelVisible && genuinelyFrozen,
+      openedState.paused && openedState.panelVisible && genuinelyFrozen,
+      `paused: ${openedState.paused}; panel visible: ${openedState.panelVisible}; board unchanged across 400ms: ${genuinelyFrozen}`);
+
+    // Escape closes it -- and takes priority over cancelling an armed
+    // power-up, per the brief: arm the remover BEFORE opening the panel,
+    // confirm Escape only closes the panel and leaves removerArmed alone
+    // (input.js's own Escape handler must not also fire this same keypress).
+    await page.evaluate(() => { window.__poofDebugState.removerArmed = true; });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    const afterEscape = await page.evaluate(() => ({
+      paused: window.__poofDebugState.paused,
+      panelVisible: !document.getElementById('pause-overlay').hidden,
+      removerStillArmed: window.__poofDebugState.removerArmed,
+    }));
+    record('Escape closes the pause panel and takes priority over cancelling an armed power-up',
+      !afterEscape.paused && !afterEscape.panelVisible && afterEscape.removerStillArmed,
+      !afterEscape.paused && !afterEscape.panelVisible,
+      `after Escape -- paused: ${afterEscape.paused}, panel visible: ${afterEscape.panelVisible}, remover still armed (untouched by input.js's own handler): ${afterEscape.removerStillArmed}`);
+    await page.evaluate(() => { window.__poofDebugState.removerArmed = false; });
+
+    // Resume button closes it too, the ordinary way.
+    await page.touchscreen.tap(pauseBtn.x, pauseBtn.y);
+    await page.waitForTimeout(100);
+    await page.click('#pause-resume-btn');
+    await page.waitForTimeout(100);
+    const afterResume = await page.evaluate(() => ({
+      paused: window.__poofDebugState.paused,
+      panelVisible: !document.getElementById('pause-overlay').hidden,
+    }));
+    record('Resume button closes the pause panel and un-freezes the run',
+      !afterResume.paused && !afterResume.panelVisible, !afterResume.paused && !afterResume.panelVisible,
+      `after Resume -- paused: ${afterResume.paused}, panel visible: ${afterResume.panelVisible}`);
+
+    // Sound/Music toggles inside the panel are the same granular controls
+    // the Gear menu already offers -- no second implementation, no master
+    // mute button anywhere in this panel's markup.
+    await page.touchscreen.tap(pauseBtn.x, pauseBtn.y);
+    await page.waitForTimeout(100);
+    const panelHTML = await page.evaluate(() => document.getElementById('pause-overlay').innerHTML.toLowerCase());
+    const noMasterMute = !panelHTML.includes('mute');
+    const soundBefore = await page.evaluate(() => document.getElementById('sound-btn').textContent);
+    await page.click('#sound-btn');
+    await page.waitForTimeout(80);
+    const soundAfter = await page.evaluate(() => document.getElementById('sound-btn')?.textContent);
+    const toggleWorked = soundAfter !== undefined && soundAfter !== soundBefore;
+    record('Pause panel\'s Sound toggle works, and offers no master mute of any kind',
+      toggleWorked && noMasterMute, toggleWorked && noMasterMute,
+      `Sound label: "${soundBefore}" -> "${soundAfter}"; panel markup contains "mute": ${!noMasterMute}`);
+
+    // Back to menu: lands on the actual home menu, not the results screen
+    // endRun normally leads to, and never on any kind of exit/quit control.
+    await page.click('#pause-menu-btn');
+    await page.waitForTimeout(200);
+    const afterBackToMenu = await page.evaluate(() => ({
+      screen: window.__poofDebugState.screen,
+      onHome: !!document.querySelector('.screen-home'),
+      onGameOver: document.body.textContent.includes('Game Over'),
+      canvasHidden: document.getElementById('game-canvas').hidden,
+    }));
+    record('Pause panel\'s "Back to menu" lands on the game\'s own menu, not a results screen',
+      afterBackToMenu.screen === 'menu' && afterBackToMenu.onHome && !afterBackToMenu.onGameOver,
+      afterBackToMenu.screen === 'menu' && afterBackToMenu.onHome,
+      `screen: ${afterBackToMenu.screen}; home screen shown: ${afterBackToMenu.onHome}; game-over screen shown: ${afterBackToMenu.onGameOver}; canvas hidden: ${afterBackToMenu.canvasHidden}`);
+
+    await context.close();
+  }
+
   // ---------------------------------------------------------------- theme
   {
     const { context, page } = await freshPage(browser, 'theme');

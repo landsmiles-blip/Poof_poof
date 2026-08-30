@@ -49,6 +49,59 @@ export function renderGameOver(root, state, onPlayAgain) {
   });
 }
 
+// 9.3: the in-run pause panel -- Resume, Music, Sound, Back to menu. No
+// master mute (removed in phase 3, host owns it) and no quit/exit control of
+// any kind (Playables requirement) -- "Back to menu" only ever returns to
+// this game's OWN menu screen, never closes the Playable itself.
+//
+// Deliberately NOT built on renderShopScreen: that screen is mutually
+// exclusive with the canvas by design (its own Escape-handler comment says
+// so), whereas this one has to render WHILE a run is live and the canvas is
+// still showing -- frozen -- behind it. It reuses the same Sound/Music
+// toggle markup and wiring the Gear panel uses (soundButtonHTML/
+// wireSoundButton, musicButtonHTML/wireMusicButton below) rather than a
+// second copy of that logic.
+//
+// main.js owns actually stopping/resuming the run (the same
+// pauseRun/resumeRun platform.onPause/onResume use) and hiding/showing this
+// panel's root -- this function only ever manages its OWN DOM content and
+// its OWN Escape listener, mirroring renderShopScreen's own division of
+// responsibility with its caller.
+export function renderPausePanel(root, state, { onResume, onBackToMenu }) {
+  function onKeyDown(evt) {
+    if (evt.key !== 'Escape') return;
+    window.removeEventListener('keydown', onKeyDown);
+    onResume();
+  }
+  window.addEventListener('keydown', onKeyDown);
+
+  function draw() {
+    root.innerHTML = `
+      <div class="screen pause-card">
+        <h1>Paused</h1>
+        <button class="primary" id="pause-resume-btn">Resume</button>
+        <div class="toggle-row">
+          ${soundButtonHTML()}
+          ${musicButtonHTML()}
+        </div>
+        <button class="sound-btn" id="pause-menu-btn">Back to menu</button>
+      </div>
+    `;
+    root.querySelector('#pause-resume-btn').addEventListener('click', () => {
+      window.removeEventListener('keydown', onKeyDown);
+      onResume();
+    });
+    root.querySelector('#pause-menu-btn').addEventListener('click', () => {
+      window.removeEventListener('keydown', onKeyDown);
+      onBackToMenu();
+    });
+    wireSoundButton(root, draw, state);
+    wireMusicButton(root, draw, state);
+  }
+
+  draw();
+}
+
 // 7.1: the menu used to put everything on one page -- title, stats, six shop
 // cards, five skin cards, three run toggles, Play, three audio buttons, a
 // build stamp -- eleven cards deep before the button that starts the game.

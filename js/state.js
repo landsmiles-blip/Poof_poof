@@ -100,6 +100,13 @@ export function createInitialState(save) {
     // Every later mutator below sets this the same way; main.js's loop is the
     // only place that ever reads and clears it.
     dirty: freshGrant,
+    // 9.3: true while the run is frozen for ANY reason -- a host-driven pause
+    // (platform.onPause) or the in-game pause panel, both funnelled through
+    // main.js's shared pauseRun()/resumeRun() so there is exactly one place
+    // that ever sets this. js/input.js gates all keyboard/pointer handling
+    // on it; main.js's loop() gates re-arming its own requestAnimationFrame
+    // on it. Never persisted -- a save always resumes unpaused.
+    paused: false,
 
     unlockedSkins,
     selectedSkin,
@@ -444,6 +451,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.magnetCol = Math.floor(COLS / 2);
   state.magnetX = state.magnetCol * CELL + CELL / 2;
   state.lockedFlash = null;
+  state.paused = false;
 
   // 8.1: a fresh run starts with an empty meter and no earned charges,
   // regardless of what the previous run left behind -- see endRun, which

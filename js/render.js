@@ -3,7 +3,7 @@
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
-  powerSlotRect, POWER_SLOT, MAGNET_ENERGY_MAX, MAGNET_RAIL_HEIGHT, BUILD_VERSION,
+  powerSlotRect, POWER_SLOT, pauseButtonRect, MAGNET_ENERGY_MAX, MAGNET_RAIL_HEIGHT, BUILD_VERSION,
   FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
 } from './constants.js';
@@ -127,6 +127,7 @@ function drawHUD(ctx, state, width, theme) {
 
   drawPowerBar(ctx, state, theme);
   drawMergeMeter(ctx, state, theme);
+  drawPauseButton(ctx, theme);
 
   // Build stamp: low-contrast, but the fastest way to confirm which code a
   // browser is actually running when a deploy appears not to have landed.
@@ -292,6 +293,22 @@ function drawMergeMeter(ctx, state, theme) {
   ctx.fillRect(barX, barY, barW, 3);
   ctx.fillStyle = theme.accent;
   ctx.fillRect(barX, barY, barW * pct, 3);
+  ctx.restore();
+}
+
+// 9.3: the pause control -- same pill shape and theme.grid fill as a power-up
+// chip, so it visually belongs to the same HUD row without being mistaken for
+// one (no count label beneath it, no locked/armed states).
+function drawPauseButton(ctx, theme) {
+  const rect = pauseButtonRect();
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  ctx.save();
+  ctx.beginPath();
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 6);
+  ctx.fillStyle = theme.grid;
+  ctx.fill();
+  drawIcon(ctx, 'pause', cx, cy, rect.w * 0.72, theme.text);
   ctx.restore();
 }
 

@@ -446,6 +446,20 @@ export function powerSlotRect(index) {
   };
 }
 
+// 9.3: the pause control. Same size and vertical band as the power-up chips
+// (POWER_SLOT.y), right-aligned instead of left -- the whole y:80-106 strip
+// on the right side of the HUD is otherwise empty (the chips occupy the
+// left, "Next" and its preview fruit sit well above at y:6-68), verified
+// against the actual drawHUD layout rather than assumed.
+export function pauseButtonRect() {
+  return {
+    x: CANVAS_WIDTH - POWER_SLOT.x0 - POWER_SLOT.size,
+    y: POWER_SLOT.y,
+    w: POWER_SLOT.size,
+    h: POWER_SLOT.size,
+  };
+}
+
 // The versioned save blob's shape version (js/platform.js). Bump when the
 // blob's fields change shape in a way old saves can't just merge-default
 // into; a version bump plus a branch in platform.js's load() is a non-event.
