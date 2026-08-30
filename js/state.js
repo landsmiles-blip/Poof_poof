@@ -40,18 +40,30 @@ export function currentGravityPxPerSec(state) {
 // Time for a fruit to fall the full board height at a given gravity -- the
 // "empty-board fall" the combo-window comment in constants.js refers to.
 // The +TIERS[0].radius term is the same one the pre-existing "Combo
-// multiplier" e2e test used: a fruit's centre travels to ROWS-1 cells plus
+// multiplier" e2e test used: a fruit's centre travels to rows-1 cells plus
 // half a cell plus its own radius before its bottom edge reaches the floor.
-function emptyBoardFallSec(gravityPxPerSec) {
-  const distance = (ROWS - 1) * CELL + CELL / 2 + TIERS[0].radius;
+//
+// 10.2 LANDMINE, found by the phase's own required grep sweep before
+// touching ROWS: this used to read the ROWS *constant* directly instead of
+// effectiveRows(state) -- correct for a normal run, silently wrong for one
+// with Extra Row active, where the board is genuinely ROWS+1 tall. The
+// combo window would then be derived from a fall one row SHORTER than the
+// one actually happening, undermining the exact "window > one real fall"
+// invariant this function exists to guarantee. Takes rows as a parameter
+// (not effectiveRows(state) directly) so this stays a pure function of its
+// inputs, callable from a test with any row count without needing a full
+// state object.
+function emptyBoardFallSec(gravityPxPerSec, rows) {
+  const distance = (rows - 1) * CELL + CELL / 2 + TIERS[0].radius;
   return distance / gravityPxPerSec;
 }
 
 // See the extended COMBO_WINDOW_FALL_MULTIPLIER comment in constants.js: the
 // window must track the CURRENT (ramped) gravity, not a fixed one, or the
-// early, slower part of the ramp falls outside it again.
+// early, slower part of the ramp falls outside it again -- and now also the
+// CURRENT board height, for the same reason (see emptyBoardFallSec above).
 export function comboWindowSecFor(state) {
-  return emptyBoardFallSec(currentGravityPxPerSec(state)) * COMBO_WINDOW_FALL_MULTIPLIER;
+  return emptyBoardFallSec(currentGravityPxPerSec(state), effectiveRows(state)) * COMBO_WINDOW_FALL_MULTIPLIER;
 }
 
 const DEFAULT_INVENTORY = {

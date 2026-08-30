@@ -9,7 +9,20 @@
 export const BUILD_VERSION = '2026.08.28-5';
 
 export const COLS = 6;
-export const ROWS = 7;
+// 10.2: was 7. Every gameplay screenshot reviewed showed stacks two or three
+// fruit tall in a seven-row board -- the top half permanently empty, the
+// danger state (render.js) never triggering, runs ending long before the
+// later palette milestones. A shorter board is the direct fix: it puts the
+// spawn column within real reach of the top during ordinary play instead of
+// only after an unusually careless run. 5 was the brief's own starting
+// point; simulated against a merge-seeking (not pure-random) bot across
+// rows 4-7, the fraction of a run spent within DANGER_ROWS_REMAINING of the
+// top rose smoothly (18% at 7, 26% at 6, 37% at 5, 55% at 4) -- 5 is a real,
+// noticeable step toward tension without 4's near-constant pressure, which
+// read as punishing rather than tense. Runs getting shorter is intended, not
+// compensated for elsewhere (the gravity ramp is untouched) -- a tense short
+// run gets replayed, a slack long one gets abandoned.
+export const ROWS = 5;
 export const CELL = 64; // px, size of one grid cell
 
 export const BOARD_WIDTH = COLS * CELL;
@@ -212,7 +225,13 @@ export const POWERUPS = [
     usage: 'tap',
   },
   {
-    id: 'extraRow', name: 'Extra Row', cost: 50, unlockScore: 0, icon: 'extraRow',
+    // 10.2: cost was 50 when ROWS was 7, where the extra row was a 1/7 (14%)
+    // headroom increase. ROWS is now 5, making the same one row a 1/5 (20%)
+    // increase -- a deliberate reprice, not drift: 65 keeps its cost roughly
+    // proportional to the stronger effect (50 * 20/14 ~= 71, rounded down to
+    // stay under Rainbow's 80) rather than silently getting more powerful for
+    // the same price.
+    id: 'extraRow', name: 'Extra Row', cost: 65, unlockScore: 0, icon: 'extraRow',
     desc: 'One extra row of headroom for one run.',
     usage: 'run',
   },

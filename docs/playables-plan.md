@@ -1037,6 +1037,75 @@ the fix and reproducing the original crash exactly.
 
 ---
 
+## Phase 10 — Swap replaces the Magnet, tighter board
+
+Done per `docs/phase10brief.md`. All 22 `unit-tests/` pass, all 44
+`tests/verify-features.js` checks pass (including the CSP re-run), and
+`tools/check-prohibited-apis.js` is clean against the rebuilt bundle.
+Bundle: 248977 bytes, 17 files.
+
+### [x] 10.1 Swap replaces the Magnet — done — commit `8458013`
+
+The Magnet did what dragging already does (steer a falling fruit toward a
+match) with extra mechanism (energy, a rail, a companion puck) for little
+extra decision-making. Swap asks a different question instead: trade two
+*already-settled* adjacent fruit. Removed the Magnet completely — constants,
+state fields, `stepMagnet`/`magnetPullFor`/`magnetTargets`, rail rendering,
+icon, shop entry, its tests — no flag, no dead code. Swap takes its exact
+milestone slot (1,000).
+
+First tap on an occupied cell selects it (sticky across gestures, unlike the
+per-gesture `armPreviewCell` pattern Remover established); a second tap on
+an orthogonally-adjacent occupied cell swaps them and consumes the charge;
+the same fruit deselects; a non-adjacent fruit moves the selection; a bomb
+on either side is rejected before any other check, same danger family as
+the bomb-vs-rainbow ordering in `pairTier`. Swap-caused merges feed the
+combo normally (documented in `swapFruits`' own comment). Because it only
+ever trades two occupied cells, the invariant phase 9.5 protects (no empty
+cell under a filled one) holds by construction, not by care — no bug class
+to write a regression test against, only coverage that it stays true. Found
+and fixed one bug of my own: Remover and Swap share the same
+arm-then-commit-on-release mechanism, and nothing stopped both being armed
+at once, which would resolve a single tap as both actions — fixed with
+mutual cross-disarm in `armRemover`/`armSwap`, covered by a new test.
+
+### [x] 10.2 Tighten the board — done — commit `9a22c1f`
+
+Every gameplay screenshot showed a board two-to-three fruit tall on a
+seven-row board — the top half dead space, the danger state never firing in
+ordinary play. `ROWS` 7 → 5. Did the brief's required grep sweep before
+touching the constant and found two real landmines: `comboWindowSecFor`
+read the bare `ROWS` constant instead of `effectiveRows(state)`, silently
+mismeasuring the combo window against the wrong board height for any Extra
+Row run (fixed, `emptyBoardFallSec` now takes `rows` as an explicit
+parameter; `unit-tests/difficulty-ramp.js` gained a second invariant sweep
+with Extra Row active, verified by reverting the fix and watching it fail);
+and `unit-tests/difficulty-ramp.js` itself hardcoded the old board-height
+arithmetic as bare numbers, which would have silently stopped meaning
+anything the moment `ROWS` changed (replaced with a helper built from the
+live `ROWS`/`CELL`/`TIERS[0].radius` constants — still an independent
+re-derivation, not a call into the function under test).
+
+`unit-tests/merge-effect-position.js`'s fixture (a specific two-pair
+merge-cascade shift, sized to fill one column exactly) re-derived for
+5 rows rather than 7, preserving the same shift it exists to prove.
+
+Chose 5 (the brief's own suggested starting point) over 4 or 6 using a
+throwaway, uncommitted simulation comparing a merge-seeking bot's
+danger-zone time across candidate row counts (4/5/6/7): roughly 55%/37%/26%/
+18% of a run spent within `DANGER_ROWS_REMAINING` of the top. 4 read as
+constant pressure rather than earned tension; 5 was a real, non-extreme
+step up. Confirmed empirically (seeding the spawn column directly to skip
+the RNG) that the danger outline now fires at 3-of-5 filled — an ordinary
+stacking mistake, not a contrived one — and still uses `theme.danger`, per
+7.2, not `theme.accent`. Extra Row's headroom bonus grew from 14% (1/7) to
+20% (1/5) of the board at the same cost; repriced deliberately (50 → 65,
+documented in `constants.js`) rather than letting it drift. `GRAVITY_RAMP_*`
+constants are untouched — shorter runs are the intended effect of a shorter
+board, not something to compensate for.
+
+---
+
 ## Out of scope for certification
 
 Do not start these until the phases above are green: the desktop canvas scale-up,
