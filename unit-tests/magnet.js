@@ -1,58 +1,111 @@
-// Regression test for 1.1: stepMagnet() must reposition fruit toward the held
-// column without ever resolving the merge itself -- that used to happen via a
-// resolveMerges() call at the end of stepMagnet, cashing in a merge (and any
-// chain behind it) with no further player input.
-//
-// 8.3: targeting comes from state.magnetCol (dragged along the companion's
-// rail), not automatically from state.active.col -- the fixture parks the
-// companion over column 3 explicitly, independent of the held fruit's own
-// column, to prove the two are genuinely decoupled.
-//
-// Fixture: cherries sit one column away from the magnet's column on both
-// sides (columns 2 and 4, magnet parked at column 3). In one magnet step both
-// slide toward column 3 and land there stacked -- a genuine same-tier
-// adjacency that must be left for the player's next drop to resolve.
+// Regression tests for 9.2's magnet redesign: the companion no longer moves
+// settled fruit (deleted entirely, not disabled -- see physics.js's own
+// header comment on the old design's board-corruption bug). It now curves
+// the CURRENTLY FALLING fruit's targetX toward its own column, falls off
+// with distance, has a hard range cutoff, and steps aside completely once
+// the player has steered that fruit.
 import assert from 'node:assert/strict';
-import { COLS, CELL, MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC } from '../js/constants.js';
-import { stepMagnet } from '../js/physics.js';
+import { COLS, CELL, MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_PULL_RANGE_PX } from '../js/constants.js';
+import { stepMagnet, magnetPullFor, setDragTarget } from '../js/physics.js';
 
-const rows = 3;
-const grid = Array.from({ length: rows }, () => new Array(COLS).fill(null));
-grid[rows - 1][2] = 0; // cherry, column 2
-grid[rows - 1][4] = 0; // cherry, column 4
+function baseState(overrides = {}) {
+  return {
+    grid: [[null, null, null, null, null, null]],
+    stackHeight: new Array(COLS).fill(0),
+    magnetActive: true,
+    magnetEnergy: MAGNET_ENERGY_MAX,
+    magnetCol: 3,
+    magnetX: 3 * CELL + CELL / 2,
+    active: null,
+    score: 0,
+    events: [],
+    suppressCombo: false,
+    comboCount: 0,
+    comboTimer: 0,
+    bestComboThisRun: 0,
+    ...overrides,
+  };
+}
 
-const state = {
-  grid,
-  stackHeight: [0, 0, 1, 0, 1, 0],
-  magnetActive: true,
-  magnetEnergy: MAGNET_ENERGY_MAX,
-  magnetCol: 3,
-  magnetX: 3 * CELL + CELL / 2,
-  magnetStepTimer: 0.001, // small enough that this tick fires the step
-  active: { tier: 0, col: 3 },
-  score: 0,
-  events: [],
-  suppressCombo: false,
-  comboCount: 0,
-  comboTimer: 0,
-  bestComboThisRun: 0,
-};
+function activeAtX(targetX) {
+  return { tier: 0, col: 0, x: targetX, targetX, y: 0, playerSteered: false };
+}
 
-const dt = 0.016;
-const moves = stepMagnet(state, dt); // one 16ms tick
+const magnetCenterX = 3 * CELL + CELL / 2; // magnetCol: 3, matching baseState's default
 
-assert.equal(moves.length, 2, 'both matching cherries should move one column toward the magnet');
-assert.equal(state.grid[1][3], 0, 'a cherry should now sit in the magnet\'s column');
-assert.equal(state.grid[2][3], 0, 'a second, adjacent cherry should sit in the magnet\'s column');
-assert.equal(state.stackHeight[3], 2, 'the column should hold two un-merged cherries, not one merged grape');
-assert.equal(state.score, 0, 'the magnet must not score -- it repositions, it does not merge');
-assert.equal(state.events.length, 0, 'the magnet must not emit merge events');
+// --- Within range, targetX drifts toward the magnet's column ---------------
+{
+  const state = baseState({ active: activeAtX(magnetCenterX - 100) });
+  const before = state.active.targetX;
+  stepMagnet(state, 0.1);
+  assert.ok(state.active.targetX > before, 'targetX should drift toward the magnet (rightward here)');
+  assert.ok(state.active.targetX < magnetCenterX, 'one small tick must not overshoot the magnet\'s own column');
+}
 
-// 8.3: energy drains while actually pulling (two real targets existed this
-// tick), by exactly the documented per-second rate scaled by dt.
-const expectedEnergy = MAGNET_ENERGY_MAX - MAGNET_DRAIN_PER_SEC * dt;
-assert.ok(Math.abs(state.magnetEnergy - expectedEnergy) < 1e-9,
-  `energy should drain by MAGNET_DRAIN_PER_SEC * dt while pulling (expected ${expectedEnergy}, got ${state.magnetEnergy})`);
-assert.equal(state.magnetActive, true, 'draining a little energy must not retract the companion');
+// --- It never resolves a merge, scores, or touches the grid -----------------
+{
+  const state = baseState({ active: activeAtX(magnetCenterX - 100) });
+  stepMagnet(state, 0.1);
+  assert.equal(state.score, 0, 'the magnet must not score -- it repositions, it does not merge');
+  assert.equal(state.events.length, 0, 'the magnet must not emit merge events');
+  assert.deepEqual(state.grid, [[null, null, null, null, null, null]], 'stepMagnet must never touch the grid at all');
+}
 
-console.log('magnet: adjacency created by a magnet step is left for the next drop, and energy drains only while actually pulling');
+// --- 9.6: a hard range cutoff -- no pull at all beyond MAGNET_PULL_RANGE_PX
+{
+  const justInside = activeAtX(magnetCenterX - MAGNET_PULL_RANGE_PX + 1);
+  const justOutside = activeAtX(magnetCenterX - MAGNET_PULL_RANGE_PX - 1);
+  const state = baseState();
+  assert.ok(magnetPullFor(state, justInside) !== null, 'just inside the range boundary, there should be a pull');
+  assert.equal(magnetPullFor(state, justOutside), null, 'just outside the range boundary, there must be no pull at all');
+
+  const outState = baseState({ active: justOutside });
+  const before = outState.active.targetX;
+  stepMagnet(outState, 1); // a full second -- if any pull leaked through, this would move it a lot
+  assert.equal(outState.active.targetX, before, 'out of range, targetX must not move even over a full second');
+}
+
+// --- Pull strength falls off with distance ----------------------------------
+{
+  const state = baseState();
+  const near = magnetPullFor(state, activeAtX(magnetCenterX - CELL)); // 1 column away
+  const far = magnetPullFor(state, activeAtX(magnetCenterX - MAGNET_PULL_RANGE_PX * 0.9)); // near the edge of range
+  assert.ok(near && far, 'sanity: both fixtures should be in range');
+  assert.ok(near.strength > far.strength, 'a closer fruit should feel a stronger pull than a farther one');
+}
+
+// --- Dragging always overrides: once steered, the magnet leaves it alone ---
+{
+  const state = baseState({ active: activeAtX(magnetCenterX - 100) });
+  setDragTarget(state, state.active.targetX); // the player steers it, even to the same spot
+  assert.equal(state.active.playerSteered, true, 'setDragTarget should mark the fruit as player-steered');
+  const before = state.active.targetX;
+  stepMagnet(state, 1); // a full second -- if the magnet were still active this would move it a lot
+  assert.equal(state.active.targetX, before, 'once player-steered, the magnet must not move this fruit at all, ever again this drop');
+}
+
+// --- Energy drains only while actually pulling, by the documented rate -----
+{
+  const state = baseState({ active: activeAtX(magnetCenterX - 100) });
+  const dt = 0.1;
+  stepMagnet(state, dt);
+  const expected = MAGNET_ENERGY_MAX - MAGNET_DRAIN_PER_SEC * dt;
+  assert.ok(Math.abs(state.magnetEnergy - expected) < 1e-9,
+    `energy should drain by MAGNET_DRAIN_PER_SEC * dt while pulling (expected ${expected}, got ${state.magnetEnergy})`);
+}
+
+// --- Energy regenerates once out of range or nothing is falling ------------
+{
+  const state = baseState({ magnetEnergy: 10, active: null });
+  stepMagnet(state, 0.1);
+  assert.ok(state.magnetEnergy > 10, 'idle (nothing falling) should regenerate energy, not drain it');
+}
+
+// --- It never overshoots past the magnet's own column in one tick ----------
+{
+  const state = baseState({ active: activeAtX(magnetCenterX - 100) });
+  stepMagnet(state, 100); // an absurdly large dt -- must clamp, not fly past
+  assert.equal(state.active.targetX, magnetCenterX, 'a huge dt must land exactly on the magnet\'s column, never past it');
+}
+
+console.log('magnet: the falling fruit curves toward the magnet\'s column, falls off with distance, has a hard range cutoff, never overshoots, never touches the grid, and steps aside for good once the player steers');

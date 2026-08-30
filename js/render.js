@@ -8,9 +8,9 @@ import {
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
-import { magnetTargets } from './physics.js';
+import { magnetPullFor } from './physics.js';
 import {
-  squashScaleAt, shakeOffset, drawParticles, magnetSlideOffsetAt, drawBombRings,
+  squashScaleAt, shakeOffset, drawParticles, drawBombRings,
 } from './effects.js';
 import { themeForScore, themePosition } from './theme.js';
 import { drawIcon } from './icons.js';
@@ -346,22 +346,32 @@ function drawContactShadow(ctx, cx, cy, radius) {
 // Magnet, bomb and remover each got a HUD chip in earlier phases and nothing
 // else -- these three draw the actual effect where it happens.
 
-// Magnet glyph above the held column, field arcs pulsing toward each fruit
-// currently qualifying to be pulled, and a ring on each of those fruits.
-// magnetTargets() (physics.js) is read-only and re-evaluated every frame, so
-// this tracks what the magnet is CURRENTLY interested in even between the
-// actual stepMagnet ticks.
 // 8.3: a companion riding a rail across the top of the board, dragged to a
 // column rather than automatically following the falling fruit. The rail,
 // puck and energy ring show whenever it is out, whether or not anything
-// happens to be falling right now ("always present"); the field arcs and
-// target rings only make sense once there is a held fruit to match against.
+// happens to be falling right now ("always present").
+//
+// 9.2: the column highlight and the pull arc are new -- the magnet now acts
+// on the falling fruit, not the board, so "what is it about to do" needs a
+// different answer than the old per-target rings gave. magnetPullFor()
+// (physics.js) is read-only and re-evaluated every frame, so this tracks the
+// SAME pull stepMagnet's own tick would compute, not a stale snapshot.
 function drawMagnetOverlay(ctx, state, theme) {
   if (!state.magnetActive) return;
 
   const railY = MAGNET_RAIL_HEIGHT / 2;
 
   ctx.save();
+
+  // The magnet's own column, softly tinted top to bottom -- "a highlight on
+  // the target column" per the redesign brief, always visible while the
+  // companion is out, independent of whether anything is currently falling.
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+  ctx.globalAlpha = 0.08 + 0.05 * pulse;
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(state.magnetCol * CELL, 0, CELL, state.grid.length * CELL);
+  ctx.globalAlpha = 1;
+
   ctx.strokeStyle = theme.grid;
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -381,29 +391,21 @@ function drawMagnetOverlay(ctx, state, theme) {
 
   drawIcon(ctx, 'magnet', state.magnetX, railY, CELL * 0.52, theme.text);
 
-  if (state.active) {
-    const targets = magnetTargets(state);
-    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
-
-    for (const target of targets) {
-      const tx = target.col * CELL + CELL / 2;
-      const ty = target.row * CELL + CELL / 2;
-
-      ctx.globalAlpha = 0.35 + 0.35 * pulse;
-      ctx.strokeStyle = theme.accent;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(tx, ty);
-      ctx.lineTo(state.magnetX, railY);
-      ctx.stroke();
-
-      ctx.globalAlpha = 0.55 + 0.35 * pulse;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(tx, ty, CELL * 0.34 + CELL * 0.06 * pulse, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+  // Pull arc from the puck to wherever the falling fruit is actually DRAWN
+  // (active.x/y, not the targetX the physics pull is computed against) --
+  // this is a visual detail, so it should point at what the player sees,
+  // while the pull decision itself stays anchored to the commanded position.
+  const pull = state.active ? magnetPullFor(state, state.active) : null;
+  if (pull) {
+    ctx.globalAlpha = 0.4 + 0.35 * pulse;
+    ctx.strokeStyle = theme.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(state.active.x, state.active.y);
+    ctx.lineTo(state.magnetX, railY);
+    ctx.stroke();
   }
+
   ctx.restore();
 }
 
@@ -439,6 +441,19 @@ function drawBoard(ctx, state, fx, theme) {
   ctx.translate(0, HUD_HEIGHT);
 
   const rows = state.grid.length;
+
+  // 9.7: a fruit spawns above row 0 by design (state.active.y starts
+  // negative) and the magnet's puck icon can slightly overhang a boundary
+  // column at its own radius -- both used to draw straight through into the
+  // HUD or past the board's side edges since nothing here ever clipped.
+  // Everything drawn below (grid, fruit, magnet overlay, the falling fruit
+  // itself, the vignette) is now confined to exactly the board's own
+  // rectangle, so a fruit is revealed as it enters the board rather than
+  // floating over the score readout.
+  ctx.beginPath();
+  ctx.rect(0, 0, COLS * CELL, rows * CELL);
+  ctx.clip();
+
   ctx.strokeStyle = theme.grid;
   ctx.lineWidth = 1;
   for (let c = 1; c < COLS; c++) {
@@ -457,12 +472,7 @@ function drawBoard(ctx, state, fx, theme) {
       const cy = r * CELL + CELL / 2;
       const def = tierDefFor(tierIndex);
       const color = colorFor(state, tierIndex);
-
-      // Grid stays authoritative -- this only nudges where the fruit is
-      // DRAWN, easing back to its true column over MAGNET_SLIDE_DURATION_SEC
-      // (7.3) rather than jumping a full cell between two frames.
-      const slideDx = fx ? magnetSlideOffsetAt(fx, r, c, tierIndex) : null;
-      const cx = c * CELL + CELL / 2 + (slideDx || 0);
+      const cx = c * CELL + CELL / 2;
 
       drawContactShadow(ctx, cx, cy, def.radius);
 

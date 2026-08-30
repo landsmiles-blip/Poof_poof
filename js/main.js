@@ -26,7 +26,7 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn, spawnMagnetSlides, spawnBombRing,
+  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 
@@ -349,10 +349,11 @@ function update(dt) {
   // regenerates and its puck keeps gliding toward wherever it was dragged
   // even in the brief gap between one fruit landing and the next spawning,
   // matching "always present" rather than pausing whenever nothing happens
-  // to be falling.
+  // to be falling. 9.2: called before stepPhysics so a pull it applies to
+  // active.targetX this tick is already in effect for the SAME tick's
+  // x-toward-targetX ease and landing check, not one frame behind.
   if (state.magnetActive) {
-    const moves = stepMagnet(state, dt);
-    if (moves.length > 0) spawnMagnetSlides(fx, state, moves);
+    stepMagnet(state, dt);
   }
 
   if (state.active) {

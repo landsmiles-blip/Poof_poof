@@ -5,7 +5,8 @@ import {
   COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
-  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_REGEN_PER_SEC,
+  MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_REGEN_PER_SEC,
+  MAGNET_PULL_RANGE_PX, MAGNET_PULL_PX_PER_SEC,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter,
@@ -88,6 +89,14 @@ export function spawnFruit(state) {
     x: startCol * CELL + CELL / 2,
     targetX: startCol * CELL + CELL / 2,
     y: -tierDef(tier).radius,
+    // 9.2: once the player has steered THIS fruit (a drag or a keyboard
+    // nudge -- see setDragTarget, the single place both go through), the
+    // magnet backs off it entirely for the rest of its fall. "Dragging
+    // always overrides. The magnet assists aim; it never takes control" --
+    // a permanent hand-off per drop, not a moment-to-moment tug of war that
+    // could still yank the fruit sideways in the instant right after a
+    // release. Resets to false for free on every new spawn.
+    playerSteered: false,
   };
   return { blocked: false };
 }
@@ -97,6 +106,7 @@ export function setDragTarget(state, pixelX) {
   const radius = tierDef(state.active.tier).radius;
   const clamped = Math.min(BOARD_WIDTH - radius, Math.max(radius, pixelX));
   state.active.targetX = clamped;
+  state.active.playerSteered = true;
 }
 
 // Advances the falling fruit by dt seconds. Returns true if the fruit landed this tick.
@@ -323,29 +333,24 @@ export function detonateBomb(state, row, col) {
   return cleared;
 }
 
-// Magnet: one gentle step of attraction. The exposed (top-of-column) fruit
-// matching the held fruit's tier slides ONE column toward the column the
-// companion is currently parked over (8.3: state.magnetCol, set by dragging
-// it along its rail -- not automatically wherever the falling fruit is), and
-// only if the destination has room.
+// Magnet (9.2 redesign): it never touches settled fruit any more. The old
+// design slid the exposed top-of-column fruit toward the companion's column,
+// which read as "moving things I already placed" -- it fought the player's
+// built stack instead of serving their aim, and it was the direct cause of a
+// board-corruption bug: when one column was both a move's source and another
+// move's destination in the SAME step, a fruit could be left floating over a
+// hole the settle pass hadn't caught up to yet. Deleted entirely, not fixed
+// in place: stepMagnet's grid mutation, its settleColumns call, and the
+// slide-tween effect that existed only to hide that mutation's jump
+// (js/effects.js's spawnMagnetSlides/magnetSlideOffsetAt, now gone too).
 //
-// Deliberately narrow: it never moves a fruit more than one column per step,
-// and it never resolves the merge itself. It nudges the board, it does not
-// solve it -- repositioning only. Any adjacency it creates sits there until the
-// player's next drop lands and lockFruit() resolves it through the normal path,
-// so the merge still costs the player a placement.
-//
-// (An earlier version called resolveMerges() here, which cashed in the merge --
-// and any chain cascade behind it -- with no further player input, contradicting
-// this very comment. A compliance review caught it.)
-//
-// Decision (1.2): a magnet-assisted merge still feeds the combo multiplier,
-// unlike a Bomb's collapse (see suppressCombo in detonateBomb/mergeCells). The
-// two are not the same kind of merge: the Magnet only repositions, so the
-// merge still requires the player to drop a fruit to actually happen -- a real
-// merge, worth the streak. The Bomb clears the board wholesale with no drop at
-// all; letting its cascade build a multiplier would make detonating the
-// cheapest way to run the streak up. Deliberate asymmetry -- do not "fix" it.
+// New design: the companion never leaves its rail, but now it influences the
+// CURRENTLY FALLING fruit instead of the board -- see magnetPullFor. It
+// never resolves a merge itself (same invariant as before: a compliance
+// review already caught one version of this power-up doing that), because it
+// only ever nudges state.active.targetX, and a merge still only ever happens
+// through the normal lockFruit -> resolveMerges path once the player's own
+// drop lands.
 
 // Moves the companion's target column (8.3) -- called continuously while the
 // player drags it along the rail, the same shape as setDragTarget above.
@@ -353,104 +358,63 @@ export function setMagnetColumn(state, col) {
   state.magnetCol = Math.min(COLS - 1, Math.max(0, Math.round(col)));
 }
 
-// Read-only: which exposed (top-of-column) fruits currently qualify to be
-// pulled toward the companion's column, without moving anything. Shared by
-// stepMagnet's own planning phase below and by render.js, which calls this
-// every frame (not just on the ~magnetStepTimer cadence an actual move
-// fires on) to draw the field arcs and target rings (7.3) -- those need to
-// track what the magnet is CURRENTLY interested in, not just the instant a
-// step happens to land.
-export function magnetTargets(state) {
-  if (!state.magnetActive || !state.active) return [];
-  const heldTier = state.active.tier;
-  const targetCol = state.magnetCol;
-  const rows = state.grid.length;
-  const targets = [];
-  for (let c = 0; c < COLS; c++) {
-    if (c === targetCol) continue;
-    if (state.stackHeight[c] === 0) continue;
-    const topRow = rows - state.stackHeight[c];
-    const tier = state.grid[topRow][c];
-    // A held rainbow attracts everything; a rainbow on the board answers to any hold.
-    if (pairTier(tier, heldTier) === null) continue;
-    targets.push({ col: c, row: topRow, tier });
-  }
-  return targets;
+// Read-only: how strongly, and in which direction, the magnet is currently
+// pulling the given falling fruit toward its column -- null when there is
+// nothing to pull (out of range, or the player has already steered this
+// fruit). Shared by stepMagnet's own tick and by render.js, which calls this
+// every frame to draw the pull arc, so the visual and the actual physics can
+// never show different answers.
+//
+// distance is measured against active.targetX, not active.x -- the same
+// "commanded position, not the smoothed visual follower" distinction
+// setDragTarget and keyboard steering already respect (both write targetX
+// only). Measuring against x instead would let a pull computed this tick
+// disagree with whatever the PREVIOUS tick's nudge already committed to.
+//
+// 9.6: MAGNET_PULL_RANGE_PX is a hard cutoff, not just a gentler taper -- a
+// magnet parked anywhere on the board must not influence every single drop
+// regardless of where the player is aiming. Strength then falls off
+// linearly inside that range, so a fruit far from the magnet (but still in
+// range) gets a nudge, not a yank.
+export function magnetPullFor(state, active) {
+  if (!active || active.playerSteered) return null;
+  const magnetCenterX = state.magnetCol * CELL + CELL / 2;
+  const dx = magnetCenterX - active.targetX;
+  const distance = Math.abs(dx);
+  if (distance === 0 || distance > MAGNET_PULL_RANGE_PX) return null;
+  return { dx, distance, strength: 1 - distance / MAGNET_PULL_RANGE_PX };
 }
 
 export function stepMagnet(state, dt) {
-  if (!state.magnetActive) return [];
+  if (!state.magnetActive) return;
 
-  // The puck's DRAWN position eases toward wherever it was last dragged,
-  // exactly the same lerp setDragTarget already uses for the falling fruit --
+  // The puck's DRAWN position eases toward wherever it was last dragged --
   // magnetCol (the logical, authoritative column) never itself moves except
   // by an explicit setMagnetColumn call.
   const targetX = state.magnetCol * CELL + CELL / 2;
   state.magnetX += (targetX - state.magnetX) * Math.min(1, DRAG_LERP * (dt * 60));
 
-  // 8.3: energy, not a fixed timer. "Pulling" means there is currently a
-  // falling fruit AND at least one exposed match for it -- both conditions
-  // are required, same as the actual move logic below, so energy only drains
-  // when a real attraction is happening, not just because the companion is
-  // parked somewhere.
-  const targets = state.active ? magnetTargets(state) : [];
-  const pulling = targets.length > 0;
-  if (pulling) {
+  // 8.3's energy-not-a-fixed-timer design carries over unchanged: "pulling"
+  // now means there is a falling fruit within range and not yet steered by
+  // the player, instead of a matching exposed grid fruit -- the condition
+  // changed, the drain/regen mechanics did not.
+  const pull = state.active ? magnetPullFor(state, state.active) : null;
+  if (pull) {
     state.magnetEnergy = Math.max(0, state.magnetEnergy - MAGNET_DRAIN_PER_SEC * dt);
+    // A curve, not a snap: this nudges targetX a bounded amount per tick
+    // (scaled by dt and the range falloff) rather than relocating it, so the
+    // falling fruit's existing x-toward-targetX lerp (stepPhysics) is what
+    // actually draws the curve. Clamped to never overshoot past the magnet's
+    // own centre in one tick, so it settles rather than oscillating past it.
+    const step = pull.strength * MAGNET_PULL_PX_PER_SEC * dt;
+    state.active.targetX += step >= pull.distance ? pull.dx : Math.sign(pull.dx) * step;
   } else {
     state.magnetEnergy = Math.min(MAGNET_ENERGY_MAX, state.magnetEnergy + MAGNET_REGEN_PER_SEC * dt);
   }
+
   if (state.magnetEnergy <= 0) {
     state.magnetActive = false;
-    return [];
   }
-
-  if (!pulling) return [];
-
-  state.magnetStepTimer -= dt;
-  if (state.magnetStepTimer > 0) return [];
-  state.magnetStepTimer = MAGNET_STEP_SEC;
-
-  const targetCol = state.magnetCol;
-  const rows = state.grid.length;
-
-  // Two phases on purpose. Scanning and moving in one pass lets a fruit that
-  // just landed in column c+1 be picked up again when the loop reaches c+1,
-  // so a single fruit could cross several columns in one step and drop
-  // straight into the merge -- exactly the "solves it for you" behaviour this
-  // power-up must not have. Planning against an unmutated snapshot caps every
-  // fruit at one column per step.
-  const planned = [];
-  for (const { col: c, row: topRow, tier } of targets) {
-    const dest = c + (targetCol > c ? 1 : -1);
-    if (dest < 0 || dest >= COLS) continue;
-    planned.push({ from: c, to: dest, tier, fromRow: topRow });
-  }
-
-  const moves = [];
-  for (const move of planned) {
-    // Re-check against live state: an earlier move this step may have filled
-    // the destination or emptied the source.
-    if (state.stackHeight[move.to] >= rows) continue;
-    if (state.grid[move.fromRow][move.from] !== move.tier) continue;
-
-    state.grid[move.fromRow][move.from] = null;
-    state.stackHeight[move.from] -= 1;
-    const destRow = rows - 1 - state.stackHeight[move.to];
-    state.grid[destRow][move.to] = move.tier;
-    state.stackHeight[move.to] += 1;
-    moves.push({ from: move.from, to: move.to, tier: move.tier });
-  }
-
-  // settleColumns is required, not cosmetic. When one column is both a source
-  // and a destination in the same step, the second move uses the snapshot's
-  // fromRow and so nulls a cell that the first move has just buried, leaving a
-  // hole with a fruit floating above it. Each fruit still travels only one
-  // column; this repairs the transient gap and recomputes stackHeight.
-  //
-  // Note there is NO resolveMerges() here on purpose -- see the header comment.
-  if (moves.length > 0) settleColumns(state);
-  return moves;
 }
 
 export function isGameOver(state) {

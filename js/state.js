@@ -5,7 +5,7 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_STEP_SEC, MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
+  MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
@@ -140,7 +140,6 @@ export function createInitialState(save) {
     magnetEnergy: 0,
     magnetCol: Math.floor(COLS / 2),
     magnetX: Math.floor(COLS / 2) * CELL + CELL / 2,
-    magnetStepTimer: 0,
     rainbowSchedule: [],
     rainbowChargeSpent: false,
     rainbowDelivered: 0,
@@ -444,7 +443,6 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.magnetEnergy = 0;
   state.magnetCol = Math.floor(COLS / 2);
   state.magnetX = state.magnetCol * CELL + CELL / 2;
-  state.magnetStepTimer = 0;
   state.lockedFlash = null;
 
   // 8.1: a fresh run starts with an empty meter and no earned charges,
@@ -553,7 +551,6 @@ export function activateMagnet(state) {
   state.magnetEnergy = MAGNET_ENERGY_MAX;
   state.magnetCol = state.active ? state.active.col : Math.floor(COLS / 2);
   state.magnetX = state.magnetCol * CELL + CELL / 2;
-  state.magnetStepTimer = MAGNET_STEP_SEC;
   return true;
 }
 

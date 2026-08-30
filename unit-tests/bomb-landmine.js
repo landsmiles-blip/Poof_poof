@@ -4,11 +4,13 @@
 // matching anything, so if the bomb were not rejected FIRST, a rainbow
 // touching a bomb would merge the wildcard into it, or worse, produce a real
 // tier from a sentinel value. One test per point, especially the rainbow one.
+// (Point 2, the magnet exclusion, was retired by 9.2 -- see its own comment
+// below for why the mechanism it protected against no longer exists.)
 import assert from 'node:assert/strict';
 import { COLS, CELL, BOMB_TIER, BOMB_FUSE_DROPS, RAINBOW_TIER } from '../js/constants.js';
 import { createInitialState, startRun } from '../js/state.js';
 import {
-  resolveMerges, magnetTargets, stepMagnet, tierDef, hardDrop, isGameOver, spawnFruit,
+  resolveMerges, tierDef, hardDrop, isGameOver, spawnFruit,
 } from '../js/physics.js';
 
 function freshRun() {
@@ -51,25 +53,13 @@ function freshRun() {
   assert.equal(state.grid[rows - 1][1], BOMB_TIER, 'two adjacent bombs must not merge with each other');
 }
 
-// --- 2. Exclude the bomb in stepMagnet -- a held rainbow must not target it
-{
-  const state = freshRun();
-  const rows = state.grid.length;
-  state.grid[rows - 1][0] = BOMB_TIER;
-  state.stackHeight[0] = 1;
-  state.magnetActive = true;
-  state.magnetEnergy = 100;
-  state.magnetCol = 3;
-  state.magnetStepTimer = 0;
-  state.active = { tier: RAINBOW_TIER, col: 3, x: 3 * CELL + CELL / 2, targetX: 3 * CELL + CELL / 2, y: 0 };
-
-  const targets = magnetTargets(state);
-  assert.equal(targets.some((t) => t.col === 0), false, 'a bomb must never appear as a magnet target, even for a held rainbow');
-
-  const moves = stepMagnet(state, 0.016);
-  assert.equal(moves.some((m) => m.from === 0), false, 'stepMagnet must never move a bomb, even toward a held rainbow');
-  assert.equal(state.grid[rows - 1][0], BOMB_TIER, 'the bomb must stay exactly where it was');
-}
+// Point 2 used to be "exclude the bomb in stepMagnet, even for a held
+// rainbow" -- moot since 9.2: the magnet no longer looks at grid contents or
+// tiers at all, settled or falling. It curves the falling fruit's own
+// position, tier-agnostically, and a real merge (including a falling bomb
+// landing) still only ever happens through lockFruit -> resolveMerges, which
+// point 1 above already covers. Nothing left here to test that isn't
+// already covered by magnet.js's own tier-agnostic pull tests.
 
 // --- 3. tierDef gives it a radius, so anything asking for one works -------
 {
@@ -163,4 +153,4 @@ function freshRun() {
   void rows;
 }
 
-console.log('bomb-landmine: pairTier rejects the bomb before the rainbow wildcard (both directions), stepMagnet never targets it even for a held rainbow, tierDef gives it a radius, it falls/settles/counts toward game-over, and its fuse-triggered detonation keeps suppressCombo and awards no score');
+console.log('bomb-landmine: pairTier rejects the bomb before the rainbow wildcard (both directions), tierDef gives it a radius, it falls/settles/counts toward game-over, and its fuse-triggered detonation keeps suppressCombo and awards no score');

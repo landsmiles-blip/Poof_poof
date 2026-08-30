@@ -483,26 +483,50 @@ async function shot(page, name, full = false) {
       const R = (s) => s.grid.length - 1;
       const out = {};
 
-      // Magnet: one column per step, buried/non-matching untouched.
+      // Magnet (9.2 redesign): curves the FALLING fruit toward its column,
+      // tier-agnostically, and never touches the grid -- also respects a
+      // hard range cutoff and steps aside once the player has steered the
+      // fruit. unit-tests/magnet.js covers the falloff/range/steering math
+      // in full; this just confirms the real module wiring produces the
+      // same shape of result through actual page code.
       const s = st.createInitialState();
       st.startRun(s, {});
-      const rows = s.grid.length;
-      s.grid[rows - 1][0] = 2; s.stackHeight[0] = 1;
-      s.grid[rows - 1][5] = 2; s.stackHeight[5] = 1;
-      s.grid[rows - 1][1] = 7; s.stackHeight[1] = 1;
-      s.active = { tier: 2, col: 3, x: 0, targetX: 0, y: 0 };
-      // 8.3: targeting comes from magnetCol (dragged along the rail), not
-      // automatically from active.col -- startRun's default (board centre)
-      // already happens to be column 3, matching this fixture's intent, but
-      // set it explicitly so the test does not depend on that coincidence.
+      const magnetCenterX = 3 * C.CELL + C.CELL / 2;
       ph.setMagnetColumn(s, 3);
-      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX; s.magnetStepTimer = 0;
-      const moves = ph.stepMagnet(s, 0.016);
-      out.magnet = {
-        moves,
-        oneColumnEach: moves.every((m) => Math.abs(m.to - m.from) === 1),
-        nonMatchingStayed: s.grid[rows - 1][1] === 7,
+      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX;
+      s.active = {
+        tier: 2, col: 0, x: magnetCenterX - 100, targetX: magnetCenterX - 100, y: 0, playerSteered: false,
       };
+      const beforeTargetX = s.active.targetX;
+      const gridBefore = JSON.stringify(s.grid);
+      ph.stepMagnet(s, 0.1);
+      out.magnet = {
+        movedToward: s.active.targetX > beforeTargetX && s.active.targetX < magnetCenterX,
+        gridUntouched: JSON.stringify(s.grid) === gridBefore,
+      };
+
+      const sFar = st.createInitialState();
+      st.startRun(sFar, {});
+      ph.setMagnetColumn(sFar, 0);
+      sFar.magnetActive = true; sFar.magnetEnergy = C.MAGNET_ENERGY_MAX;
+      sFar.active = {
+        tier: 2, col: 5, x: 5 * C.CELL + C.CELL / 2, targetX: 5 * C.CELL + C.CELL / 2, y: 0, playerSteered: false,
+      };
+      const farBefore = sFar.active.targetX;
+      ph.stepMagnet(sFar, 1);
+      out.magnetOutOfRange = sFar.active.targetX === farBefore;
+
+      const sSteered = st.createInitialState();
+      st.startRun(sSteered, {});
+      ph.setMagnetColumn(sSteered, 3);
+      sSteered.magnetActive = true; sSteered.magnetEnergy = C.MAGNET_ENERGY_MAX;
+      sSteered.active = {
+        tier: 2, col: 0, x: magnetCenterX - 100, targetX: magnetCenterX - 100, y: 0, playerSteered: false,
+      };
+      ph.setDragTarget(sSteered, sSteered.active.targetX); // the player steers it
+      const steeredBefore = sSteered.active.targetX;
+      ph.stepMagnet(sSteered, 1);
+      out.magnetIgnoresSteered = sSteered.active.targetX === steeredBefore;
 
       // Magnet chip must survive being spent (it used to vanish on use).
       const s2 = st.createInitialState();
@@ -545,8 +569,9 @@ async function shot(page, name, full = false) {
       return out;
     });
 
-    record('Magnet', pu.magnet.moves.length > 0, false,
-      `moves ${JSON.stringify(pu.magnet.moves)}; one column each: ${pu.magnet.oneColumnEach}; non-matching untouched: ${pu.magnet.nonMatchingStayed}. Gated at 1000.`);
+    record('Magnet', pu.magnet.movedToward && pu.magnet.gridUntouched, false,
+      `falling fruit's targetX moved toward the magnet's column: ${pu.magnet.movedToward}; grid never touched: ${pu.magnet.gridUntouched}; `
+      + `out-of-range ignored: ${pu.magnetOutOfRange}; player-steered fruit ignored: ${pu.magnetIgnoresSteered}. Gated at 1000.`);
     record('Magnet chip persists while active', pu.magnetChipSurvives, pu.magnetChipSurvives,
       'chip stays on the bar after stock hits 0, so its duration bar has an anchor');
     record('Bomb', pu.bomb.cleared > 0, false,
