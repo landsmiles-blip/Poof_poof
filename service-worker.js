@@ -24,7 +24,7 @@
 
 // Derived from BUILD_VERSION so the cache name can never be forgotten again.
 // Keep in sync with js/constants.js BUILD_VERSION.
-const BUILD_VERSION = '2026.08.28-5';
+const BUILD_VERSION = '2026.08.28-13';
 const CACHE_NAME = `poofpoof-${BUILD_VERSION}`;
 
 const ASSETS = [

@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-5';
+export const BUILD_VERSION = '2026.08.28-13';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -467,3 +467,43 @@ export const LEGACY_STORAGE_KEYS = {
   muted: 'poofpoof.muted',
   musicOn: 'poofpoof.musicOn',
 };
+
+// --- Board panel (11.2) -----------------------------------------------------
+// js/render.js's drawFrame gives the play area a defined top edge: a shadow
+// cast onto the board below the HUD, and a highlight along the seam. §4.1 of
+// docs/phase11brief.md also specified a tint across the HUD strip itself,
+// but the crossing segment's text/board contrast (unit-tests/theme-contrast.js)
+// sits only 0.06 above the 4.5:1 floor with NO tint at all, and any tint
+// strength greater than zero can only move a board colour further from its
+// own ink (never closer -- the tint always pushes toward whichever colour
+// is NOT the current ink). No strength could reach the brief's required 0.3
+// margin; confirmed by sweeping alpha down to 0.01 and finding the worst
+// case still below 4.65:1. Per the brief's own §5.2 decision tree, the tint
+// was dropped entirely -- this section intentionally holds no tint alpha
+// constants.
+
+// --- Backdrop (11.2) ---------------------------------------------------------
+// js/background.js: a lit ground, a halo behind the board, drifting
+// decorative fruit silhouettes, and a page-level vignette, all on a
+// full-viewport canvas behind #app. See docs/phase11brief.md section 3.
+export const BG_SHAPE_COUNT = 16;
+export const BG_SHAPE_MIN_RADIUS = 16; // px
+export const BG_SHAPE_MAX_RADIUS = 62; // px
+export const BG_SHAPE_MIN_ALPHA = 0.05;
+export const BG_SHAPE_MAX_ALPHA = 0.10;
+export const BG_SHAPE_MAX_DRIFT_PX_PER_SEC = 8; // sideways and upward combined
+export const BG_HALO_PEAK_ALPHA = 0.13; // brief: "keep it under 0.15"
+export const BG_HALO_MID_ALPHA = 0.05; // at 55% of the halo's radius
+export const BG_HALO_RADIUS_SCALE = 0.9; // x hypot(boardWidth, boardHeight)
+export const BG_GROUND_LIGHTEN = 0.10; // top of the ground gradient, from theme.page
+export const BG_GROUND_DARKEN = 0.30; // bottom of the ground gradient, from theme.page
+export const BG_VIGNETTE_INNER_SCALE = 0.30; // x outer radius, transparent inside this
+export const BG_VIGNETTE_OUTER_SCALE = 0.78; // x max(viewport width, height)
+export const BG_VIGNETTE_EDGE_ALPHA = 0.45;
+// ~15fps: redraw only if this much time has passed since the last frame.
+// Nothing on this canvas moves faster than BG_SHAPE_MAX_DRIFT_PX_PER_SEC, so
+// there is nothing to gain from matching the board's own 60fps loop.
+export const BG_MIN_REDRAW_INTERVAL_SEC = 0.066;
+// Fixed, not time-seeded: the decorative layout must be identical on every
+// load so a screenshot diff against it means something.
+export const BG_SHAPE_SEED = 0x9E3779B9;

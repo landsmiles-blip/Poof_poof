@@ -19,6 +19,19 @@ for (let score = 0; score <= 10000; score += 5) {
   const theme = themeForScore(score);
   // Text sits on the board's top stop in the HUD (js/render.js draws the HUD
   // text before translating into the board), so that is what must contrast.
+  //
+  // 11.2 considered tinting this strip (docs/phase11brief.md 4.1) but the
+  // brief's own §5.2 required checking against the TINTED colour first --
+  // and the baseline (untinted) worst case here is only 4.56:1, a 0.06
+  // margin over the 4.5 floor. Any tint strength greater than zero can only
+  // move a board colour further from its own text colour (never closer, by
+  // construction: the tint always pushes toward whichever ink colour is NOT
+  // being used), so no strength could ever reach the required 0.3 margin --
+  // confirmed by sweeping alpha down to 0.01. Per the brief's own decision
+  // tree, the tint was dropped entirely; drawFrame keeps only the shadow and
+  // highlight, which do not touch the board's own colour. This test is
+  // therefore still checking exactly what is drawn -- unchanged from before
+  // 11.2 -- and needs no tinted variant.
   const ratio = contrastRatio(theme.text, theme.boardTop);
   if (ratio < worst) {
     worst = ratio;
