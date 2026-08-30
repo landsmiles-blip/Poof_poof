@@ -9,20 +9,25 @@
 export const BUILD_VERSION = '2026.08.28-5';
 
 export const COLS = 6;
-// 10.2: was 7. Every gameplay screenshot reviewed showed stacks two or three
-// fruit tall in a seven-row board -- the top half permanently empty, the
-// danger state (render.js) never triggering, runs ending long before the
-// later palette milestones. A shorter board is the direct fix: it puts the
-// spawn column within real reach of the top during ordinary play instead of
-// only after an unusually careless run. 5 was the brief's own starting
-// point; simulated against a merge-seeking (not pure-random) bot across
-// rows 4-7, the fraction of a run spent within DANGER_ROWS_REMAINING of the
-// top rose smoothly (18% at 7, 26% at 6, 37% at 5, 55% at 4) -- 5 is a real,
-// noticeable step toward tension without 4's near-constant pressure, which
-// read as punishing rather than tense. Runs getting shorter is intended, not
-// compensated for elsewhere (the gravity ramp is untouched) -- a tense short
-// run gets replayed, a slack long one gets abandoned.
-export const ROWS = 5;
+// 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
+// often -- the observation behind that (a seven-row board's top half sits
+// empty in ordinary play) was correct, and the fix was not.
+//
+// Two things a simulation of danger-state frequency could not see. The fall
+// from spawn to an empty floor is ~(ROWS - 0.5) * CELL + radius; at 5 rows
+// that is ~310px / ~1.19s against 7 rows' ~438px / ~1.68s. That fall is not
+// dead time -- it is the entire steering interaction, and 10.2 removed 29%
+// of it. And css/style.css sizes the canvas from 384 / (HUD_HEIGHT + ROWS *
+// CELL); on a phone the width term always wins, so FEWER rows makes the game
+// physically SHORTER on screen: 51% of a 390x844 phone at 5 rows against 65%
+// at 7. That file's own 9.9 comment says so in as many words.
+//
+// The original complaint stands and is NOT addressed here. If the board
+// should feel tighter, the levers are the gravity ramp and SPAWN_POOL, not
+// the ceiling -- lowering the ceiling punishes the player for merging well,
+// which is the one thing the game is asking them to do. Do not re-shrink
+// this to fix difficulty.
+export const ROWS = 7;
 export const CELL = 64; // px, size of one grid cell
 
 export const BOARD_WIDTH = COLS * CELL;
@@ -225,13 +230,7 @@ export const POWERUPS = [
     usage: 'tap',
   },
   {
-    // 10.2: cost was 50 when ROWS was 7, where the extra row was a 1/7 (14%)
-    // headroom increase. ROWS is now 5, making the same one row a 1/5 (20%)
-    // increase -- a deliberate reprice, not drift: 65 keeps its cost roughly
-    // proportional to the stronger effect (50 * 20/14 ~= 71, rounded down to
-    // stay under Rainbow's 80) rather than silently getting more powerful for
-    // the same price.
-    id: 'extraRow', name: 'Extra Row', cost: 65, unlockScore: 0, icon: 'extraRow',
+    id: 'extraRow', name: 'Extra Row', cost: 50, unlockScore: 0, icon: 'extraRow',
     desc: 'One extra row of headroom for one run.',
     usage: 'run',
   },
