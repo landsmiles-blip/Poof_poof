@@ -1,13 +1,10 @@
-// Regression test for 9.5: a real-device screenshot showed a fruit floating
-// with an empty cell beneath it. The old magnet design (deleted in 9.2)
-// could leave exactly this kind of hole when one column was both a move's
-// source and another move's destination in the same step. Fixed BY
-// CONSTRUCTION once 9.2 removed the mechanism that could ever create it (see
-// js/physics.js's own header comment on stepMagnet) -- but the invariant
-// itself was never actually checked anywhere. This drives real gameplay,
-// with the magnet continuously active and retargeted mid-fall the same way a
-// player dragging it would, and asserts the invariant after every single
-// landing, not just once.
+// Regression test for 9.5's invariant, re-driven for 10.1: a real-device
+// screenshot once showed a fruit floating with an empty cell beneath it,
+// caused by the Magnet design that has since been deleted entirely. Swap
+// replaces it and is invariant-safe BY CONSTRUCTION (two occupied cells
+// trade tiers; nothing is ever cleared or created, so column heights cannot
+// change) -- but the brief is explicit that Swap must be covered by this
+// same check too, not exempted because the mechanism looks safe on paper.
 //
 // "No floating fruit" means: within any one column, once you scan up from
 // the bottom (row rows-1) and hit an empty cell, every cell further up in
@@ -15,8 +12,8 @@
 // above a gap.
 import assert from 'node:assert/strict';
 import { COLS } from '../js/constants.js';
-import { createInitialState, startRun, activateMagnet } from '../js/state.js';
-import { spawnFruit, stepPhysics, stepMagnet, setMagnetColumn } from '../js/physics.js';
+import { createInitialState, startRun, armSwap } from '../js/state.js';
+import { spawnFruit, stepPhysics, swapFruits } from '../js/physics.js';
 
 function noFloatingFruit(state) {
   const rows = state.grid.length;
@@ -34,7 +31,7 @@ function noFloatingFruit(state) {
 }
 
 // Prove the detector itself actually detects the thing it claims to, before
-// trusting it to police 60 drops of real gameplay below -- a checker that
+// trusting it to police many drops of real gameplay below -- a checker that
 // silently never fires would make every assertion after it worthless.
 {
   const emptyRow = () => new Array(COLS).fill(null);
@@ -49,14 +46,10 @@ function noFloatingFruit(state) {
   assert.equal(result.col, 1, 'the detector should report which column the hole is in');
 }
 
-// Deterministic PRNG for the magnet's own retargeting -- but spawnFruit's
-// tier choice (state.js's randomSpawnTier) genuinely uses Math.random(), so
-// how many drops a single board survives before filling up is NOT
-// reproducible from this seed alone: an unlucky run of non-matching tiers
-// can fill a board in well under half of DROPS_PER_ATTEMPT. Multiple
-// independent attempts, summed, is what makes the exercise robust to that --
-// not any one board finishing.
-let seed = 42;
+// Deterministic PRNG for picking which cells to attempt a swap against.
+// spawnFruit's own tier choice is real Math.random(), same caveat as before
+// -- this only seeds the SWAP side of the drive.
+let seed = 7;
 function rand() {
   seed = (seed * 1103515245 + 12345) & 0x7fffffff;
   return seed / 0x7fffffff;
@@ -66,42 +59,38 @@ const ATTEMPTS = 8;
 const DROPS_PER_ATTEMPT = 40;
 const DT = 1 / 60;
 let totalDropsPlayed = 0;
+let totalSwapAttempts = 0;
 
 for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
   const state = createInitialState(null);
   startRun(state, {});
-  state.inventory.magnet = 1;
-  activateMagnet(state);
-  assert.equal(state.magnetActive, true, 'sanity: the magnet should be active for this drive');
+  state.inventory.swap = 1000; // effectively unlimited -- this drives the mechanism, not the economy
+  armSwap(state, true);
 
   for (let i = 0; i < DROPS_PER_ATTEMPT; i++) {
-    // Keep the magnet exercised across the whole attempt -- energy can drain
-    // to zero and retract it, and that must not stop this test from
-    // continuing to hammer the mechanism for the remaining drops.
-    if (!state.magnetActive) {
-      state.inventory.magnet = 1;
-      activateMagnet(state);
-    }
-
     const result = spawnFruit(state);
     if (result.blocked) break; // this board filled up -- move to the next attempt, not a failure
     totalDropsPlayed += 1;
 
-    // Retarget the magnet before, and occasionally during, the fall -- same
-    // as a player dragging the companion along its rail. Deliberately not on
-    // every tick: a magnet yanked to a fresh random column every 16ms
-    // scatters landings so wildly that the board fills before merges have a
-    // realistic chance to happen -- a real drag is nowhere near that erratic.
-    if (rand() < 0.5) setMagnetColumn(state, Math.floor(rand() * COLS));
-
-    // Advance exactly the way main.js's update() does -- stepMagnet before
-    // stepPhysics, every tick -- until this fruit lands.
     for (let guard = 0; guard < 1000 && state.active; guard++) {
-      if (rand() < 0.05) setMagnetColumn(state, Math.floor(rand() * COLS));
-      stepMagnet(state, DT);
       stepPhysics(state, DT);
     }
     assert.equal(state.active, null, 'sanity: the fruit should have landed well within the guard budget');
+
+    // Attempt a handful of swaps against RANDOM cell pairs -- most will be
+    // rejected (empty, non-adjacent, or occasionally a no-op against
+    // themselves), which is exactly the point: swapFruits' own guards are
+    // what this test is really exercising, the same way a real player would
+    // tap around the board rather than always picking a valid pair.
+    const rows = state.grid.length;
+    for (let s = 0; s < 3; s++) {
+      const r1 = Math.floor(rand() * rows);
+      const c1 = Math.floor(rand() * COLS);
+      const r2 = Math.floor(rand() * rows);
+      const c2 = Math.floor(rand() * COLS);
+      swapFruits(state, r1, c1, r2, c2);
+      totalSwapAttempts += 1;
+    }
 
     const check = noFloatingFruit(state);
     assert.ok(check.ok,
@@ -109,7 +98,12 @@ for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
   }
 }
 
-assert.ok(totalDropsPlayed >= 100,
+// Random (not merge-seeking) swap attempts can occasionally scatter a board
+// toward filling up faster than plain drops alone would -- observed 76-126
+// total drops across many manual runs, so the floor here sits comfortably
+// below that, not at the average.
+assert.ok(totalDropsPlayed >= 50,
   `sanity: too few drops actually played across ${ATTEMPTS} attempts to be a meaningful exercise (${totalDropsPlayed} total)`);
+assert.ok(totalSwapAttempts >= 100, 'sanity: too few swap attempts to be a meaningful exercise');
 
-console.log(`board-integrity: no floating fruit (a hole beneath a landed one) across ${totalDropsPlayed} drops total over ${ATTEMPTS} independent boards, magnet continuously active and retargeted mid-fall`);
+console.log(`board-integrity: no floating fruit (a hole beneath a landed one) across ${totalDropsPlayed} drops and ${totalSwapAttempts} swap attempts (valid and rejected) over ${ATTEMPTS} independent boards`);

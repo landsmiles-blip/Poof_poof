@@ -11,7 +11,7 @@ import { spawnFruit } from '../js/physics.js';
 function freshState() {
   return {
     inventory: {
-      slowDrop: 0, extraRow: 0, rainbow: 1, remover: 0, magnet: 0, bomb: 0,
+      slowDrop: 0, extraRow: 0, rainbow: 1, remover: 0, swap: 0, bomb: 0,
     },
     highScore: 0,
     coins: 0,

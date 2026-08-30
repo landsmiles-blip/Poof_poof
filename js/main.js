@@ -10,7 +10,7 @@ import {
   triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob,
 } from './state.js';
 import * as platform from './platform.js';
-import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
+import { spawnFruit, stepPhysics, isGameOver } from './physics.js';
 import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver, renderPausePanel } from './shop.js';
@@ -366,17 +366,6 @@ function update(dt) {
   tickLockedFlash(state, dt);
   tickChipPulse(state, dt);
   updateEffects(fx, dt);
-
-  // 8.3: unconditional, not gated on state.active -- the companion's energy
-  // regenerates and its puck keeps gliding toward wherever it was dragged
-  // even in the brief gap between one fruit landing and the next spawning,
-  // matching "always present" rather than pausing whenever nothing happens
-  // to be falling. 9.2: called before stepPhysics so a pull it applies to
-  // active.targetX this tick is already in effect for the SAME tick's
-  // x-toward-targetX ease and landing check, not one frame behind.
-  if (state.magnetActive) {
-    stepMagnet(state, dt);
-  }
 
   if (state.active) {
     stepPhysics(state, dt);

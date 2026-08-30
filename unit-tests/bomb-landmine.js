@@ -53,13 +53,14 @@ function freshRun() {
   assert.equal(state.grid[rows - 1][1], BOMB_TIER, 'two adjacent bombs must not merge with each other');
 }
 
-// Point 2 used to be "exclude the bomb in stepMagnet, even for a held
-// rainbow" -- moot since 9.2: the magnet no longer looks at grid contents or
-// tiers at all, settled or falling. It curves the falling fruit's own
-// position, tier-agnostically, and a real merge (including a falling bomb
-// landing) still only ever happens through lockFruit -> resolveMerges, which
-// point 1 above already covers. Nothing left here to test that isn't
-// already covered by magnet.js's own tier-agnostic pull tests.
+// Point 2 used to be "exclude the bomb from the Magnet's targeting, even for
+// a held rainbow" -- retired along with the Magnet itself in 10.1. The SAME
+// sentinel-collision danger family reappears in its replacement, Swap: a
+// completed swap moves a planted bomb's live fuse somewhere the player did
+// not plant it, exactly the class of bug this whole file exists to catch.
+// Covered where Swap itself lives, not here -- unit-tests/swap.js (physics)
+// and unit-tests/input-callbacks.js (the input-layer rejection, checked
+// before adjacency or occupancy, same order the brief specifies).
 
 // --- 3. tierDef gives it a radius, so anything asking for one works -------
 {

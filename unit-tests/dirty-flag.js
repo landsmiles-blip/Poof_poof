@@ -5,7 +5,7 @@
 // a no-op failure (insufficient coins, nothing to remove, etc).
 import assert from 'node:assert/strict';
 import {
-  createInitialState, startRun, endRun, buyPowerUp, activateMagnet,
+  createInitialState, startRun, endRun, buyPowerUp, armSwap, consumeSwap,
   consumeRemover, selectSkin, plantBomb,
 } from '../js/state.js';
 
@@ -19,7 +19,7 @@ import {
 {
   const state = createInitialState({
     v: 1, highScore: 500, coins: 10,
-    inventory: { slowDrop: 0, remover: 0, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0 },
+    inventory: { slowDrop: 0, remover: 0, extraRow: 0, swap: 0, bomb: 0, rainbow: 0 },
     unlockedSkins: ['classic'], selectedSkin: 'classic', musicOn: true, sfxOn: true,
   });
   assert.equal(state.dirty, false, 'loading an existing save with nothing to migrate/grant should not start dirty');
@@ -46,7 +46,7 @@ console.log('dirty-flag: createInitialState only starts dirty on a genuine fresh
 function freshRunningState() {
   const state = createInitialState({
     v: 1, highScore: 0, coins: 100,
-    inventory: { slowDrop: 0, remover: 1, extraRow: 0, magnet: 1, bomb: 1, rainbow: 0 },
+    inventory: { slowDrop: 0, remover: 1, extraRow: 0, swap: 1, bomb: 1, rainbow: 0 },
     unlockedSkins: ['classic'], selectedSkin: 'classic', musicOn: true, sfxOn: true,
   });
   startRun(state, {});
@@ -64,8 +64,16 @@ function freshRunningState() {
 
 {
   const state = freshRunningState();
-  assert.equal(activateMagnet(state), true);
-  assert.equal(state.dirty, true, 'activateMagnet should mark dirty');
+  assert.equal(armSwap(state, true), true, 'sanity: arming should succeed with stock available');
+  assert.equal(state.dirty, false, 'arming Swap (transient, unpersisted) must not mark dirty');
+}
+
+{
+  const state = freshRunningState();
+  armSwap(state, true);
+  state.dirty = false; // arming is transient -- confirmed separately above
+  assert.equal(consumeSwap(state), true);
+  assert.equal(state.dirty, true, 'consumeSwap should mark dirty when it draws from purchased inventory');
 }
 
 {

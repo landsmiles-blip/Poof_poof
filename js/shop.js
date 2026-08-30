@@ -187,7 +187,7 @@ function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
       <div class="screen screen-panel">
         ${panelHeaderHTML('Cart')}
         <p class="coin-balance">Coins: <strong>${state.coins}</strong></p>
-        <p class="hint">Remover, Magnet and Bomb are tapped from the bar at the top of the screen during a run.</p>
+        <p class="hint">Remover, Swap and Bomb are tapped from the bar at the top of the screen during a run.</p>
         <div class="shop-grid">
           ${POWERUPS.map((p) => shopItemHTML(state, p)).join('')}
         </div>

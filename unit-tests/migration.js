@@ -19,7 +19,7 @@ const legacySeed = {
   'poofpoof.highScore': '4200',
   'poofpoof.coins': '37',
   'poofpoof.inventory': JSON.stringify({
-    slowDrop: 2, remover: 0, extraRow: 1, magnet: 3, bomb: 0, rainbow: 1,
+    slowDrop: 2, remover: 0, extraRow: 1, swap: 3, bomb: 0, rainbow: 1,
   }),
   'poofpoof.unlockedSkins': JSON.stringify(['classic', 'blossom', 'neon']),
   'poofpoof.selectedSkin': 'neon',
@@ -36,7 +36,7 @@ try {
   assert.equal(blob.highScore, 4200);
   assert.equal(blob.coins, 37);
   assert.deepEqual(blob.inventory, {
-    slowDrop: 2, remover: 0, extraRow: 1, magnet: 3, bomb: 0, rainbow: 1,
+    slowDrop: 2, remover: 0, extraRow: 1, swap: 3, bomb: 0, rainbow: 1,
   });
   assert.deepEqual(blob.unlockedSkins, ['classic', 'blossom', 'neon']);
   assert.equal(blob.selectedSkin, 'neon');

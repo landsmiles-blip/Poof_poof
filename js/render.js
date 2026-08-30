@@ -3,12 +3,11 @@
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
-  powerSlotRect, POWER_SLOT, pauseButtonRect, MAGNET_ENERGY_MAX, MAGNET_RAIL_HEIGHT, BUILD_VERSION,
+  powerSlotRect, POWER_SLOT, pauseButtonRect, BUILD_VERSION,
   FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
-import { magnetPullFor } from './physics.js';
 import {
   squashScaleAt, shakeOffset, drawParticles, drawBombRings,
 } from './effects.js';
@@ -191,11 +190,11 @@ function drawPowerBar(ctx, state, theme) {
     const count = (state.inventory[item.id] || 0) + earned;
     const usable = !locked && count > 0;
     // "armed" here really means "currently doing something" -- the remover's
-    // actual aiming state, the magnet's companion being out, or (8.4) a
-    // planted bomb still live somewhere on the board.
+    // or Swap's actual aiming state, or (8.4) a planted bomb still live
+    // somewhere on the board.
     const armed = (item.id === 'bomb' && state.bombInPlay)
       || (item.id === 'remover' && state.removerArmed)
-      || (item.id === 'magnet' && state.magnetActive);
+      || (item.id === 'swap' && state.swapArmed);
 
     ctx.save();
     if (!usable && !armed) ctx.globalAlpha = 0.4;
@@ -275,10 +274,6 @@ function drawPowerBar(ctx, state, theme) {
       ctx.restore();
     }
   });
-
-  // 8.3: remaining energy now shows as a ring around the companion itself
-  // (drawMagnetOverlay), which is a far more prominent, always-visible
-  // anchor than a thin bar over a HUD chip -- no duplicate bar here anymore.
 }
 
 // 8.1: the meter that fills as you merge, spanning exactly the width of the
@@ -360,69 +355,28 @@ function drawContactShadow(ctx, cx, cy, radius) {
 }
 
 // 7.3: "arming or activating a power-up must change the board, not a chip."
-// Magnet, bomb and remover each got a HUD chip in earlier phases and nothing
-// else -- these three draw the actual effect where it happens.
+// Bomb, remover and (since 10.1) Swap each got a HUD chip in earlier phases
+// and nothing else -- these three draw the actual effect where it happens.
 
-// 8.3: a companion riding a rail across the top of the board, dragged to a
-// column rather than automatically following the falling fruit. The rail,
-// puck and energy ring show whenever it is out, whether or not anything
-// happens to be falling right now ("always present").
-//
-// 9.2: the column highlight and the pull arc are new -- the magnet now acts
-// on the falling fruit, not the board, so "what is it about to do" needs a
-// different answer than the old per-target rings gave. magnetPullFor()
-// (physics.js) is read-only and re-evaluated every frame, so this tracks the
-// SAME pull stepMagnet's own tick would compute, not a stale snapshot.
-function drawMagnetOverlay(ctx, state, theme) {
-  if (!state.magnetActive) return;
-
-  const railY = MAGNET_RAIL_HEIGHT / 2;
+// Swap (10.1): a pulsing ring around the currently selected fruit, the first
+// of the pair -- nothing to draw until a selection exists, same gating shape
+// as the remover's crosshair below. No per-frame mechanics behind it, unlike
+// the Magnet overlay it replaces -- this is pure presentation of state that
+// js/input.js already set.
+function drawSwapSelection(ctx, state, theme) {
+  if (!state.swapArmed || !state.swapSelectedCell) return;
+  const { row, col } = state.swapSelectedCell;
+  const cx = col * CELL + CELL / 2;
+  const cy = row * CELL + CELL / 2;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
 
   ctx.save();
-
-  // The magnet's own column, softly tinted top to bottom -- "a highlight on
-  // the target column" per the redesign brief, always visible while the
-  // companion is out, independent of whether anything is currently falling.
-  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
-  ctx.globalAlpha = 0.08 + 0.05 * pulse;
-  ctx.fillStyle = theme.accent;
-  ctx.fillRect(state.magnetCol * CELL, 0, CELL, state.grid.length * CELL);
-  ctx.globalAlpha = 1;
-
-  ctx.strokeStyle = theme.grid;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(0, railY);
-  ctx.lineTo(COLS * CELL, railY);
-  ctx.stroke();
-
-  // Energy ring around the puck itself is the only place the companion's
-  // remaining energy shows -- "always present, never simply spent" means
-  // there is no separate countdown to watch elsewhere.
-  const energyPct = Math.max(0, Math.min(1, state.magnetEnergy / MAGNET_ENERGY_MAX));
-  ctx.beginPath();
-  ctx.arc(state.magnetX, railY, CELL * 0.3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * energyPct);
+  ctx.globalAlpha = 0.7 + 0.3 * pulse;
   ctx.strokeStyle = theme.accent;
   ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, CELL * 0.42, 0, Math.PI * 2);
   ctx.stroke();
-
-  drawIcon(ctx, 'magnet', state.magnetX, railY, CELL * 0.52, theme.text);
-
-  // Pull arc from the puck to wherever the falling fruit is actually DRAWN
-  // (active.x/y, not the targetX the physics pull is computed against) --
-  // this is a visual detail, so it should point at what the player sees,
-  // while the pull decision itself stays anchored to the commanded position.
-  const pull = state.active ? magnetPullFor(state, state.active) : null;
-  if (pull) {
-    ctx.globalAlpha = 0.4 + 0.35 * pulse;
-    ctx.strokeStyle = theme.accent;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(state.active.x, state.active.y);
-    ctx.lineTo(state.magnetX, railY);
-    ctx.stroke();
-  }
-
   ctx.restore();
 }
 
@@ -460,13 +414,11 @@ function drawBoard(ctx, state, fx, theme) {
   const rows = state.grid.length;
 
   // 9.7: a fruit spawns above row 0 by design (state.active.y starts
-  // negative) and the magnet's puck icon can slightly overhang a boundary
-  // column at its own radius -- both used to draw straight through into the
-  // HUD or past the board's side edges since nothing here ever clipped.
-  // Everything drawn below (grid, fruit, magnet overlay, the falling fruit
-  // itself, the vignette) is now confined to exactly the board's own
-  // rectangle, so a fruit is revealed as it enters the board rather than
-  // floating over the score readout.
+  // negative), which used to draw straight through into the HUD since
+  // nothing here ever clipped. Everything drawn below (grid, fruit, the
+  // swap selection ring, the falling fruit itself, the vignette) is now
+  // confined to exactly the board's own rectangle, so a fruit is revealed as
+  // it enters the board rather than floating over the score readout.
   ctx.beginPath();
   ctx.rect(0, 0, COLS * CELL, rows * CELL);
   ctx.clip();
@@ -508,7 +460,7 @@ function drawBoard(ctx, state, fx, theme) {
     }
   }
 
-  drawMagnetOverlay(ctx, state, theme);
+  drawSwapSelection(ctx, state, theme);
   drawRemoverCrosshair(ctx, state, theme);
 
   if (state.active) {

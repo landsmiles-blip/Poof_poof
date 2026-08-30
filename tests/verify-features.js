@@ -483,56 +483,37 @@ async function shot(page, name, full = false) {
       const R = (s) => s.grid.length - 1;
       const out = {};
 
-      // Magnet (9.2 redesign): curves the FALLING fruit toward its column,
-      // tier-agnostically, and never touches the grid -- also respects a
-      // hard range cutoff and steps aside once the player has steered the
-      // fruit. unit-tests/magnet.js covers the falloff/range/steering math
-      // in full; this just confirms the real module wiring produces the
-      // same shape of result through actual page code.
+      // Swap (10.1): trades two adjacent, already-settled fruit -- replaces
+      // the Magnet entirely. unit-tests/swap.js covers the mechanics (and
+      // input-callbacks.js the input layer) in full; this just confirms the
+      // real module wiring produces the same result through actual page code.
       const s = st.createInitialState();
       st.startRun(s, {});
-      const magnetCenterX = 3 * C.CELL + C.CELL / 2;
-      ph.setMagnetColumn(s, 3);
-      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX;
-      s.active = {
-        tier: 2, col: 0, x: magnetCenterX - 100, targetX: magnetCenterX - 100, y: 0, playerSteered: false,
+      s.grid[R(s)][0] = 3;
+      s.grid[R(s)][1] = 5;
+      s.stackHeight[0] = 1; s.stackHeight[1] = 1;
+      const swapped = ph.swapFruits(s, R(s), 0, R(s), 1);
+      out.swap = {
+        swapped,
+        tradedTiles: s.grid[R(s)][0] === 5 && s.grid[R(s)][1] === 3,
       };
-      const beforeTargetX = s.active.targetX;
-      const gridBefore = JSON.stringify(s.grid);
-      ph.stepMagnet(s, 0.1);
-      out.magnet = {
-        movedToward: s.active.targetX > beforeTargetX && s.active.targetX < magnetCenterX,
-        gridUntouched: JSON.stringify(s.grid) === gridBefore,
-      };
+
+      // The two things it must refuse, per the brief: a planted bomb
+      // (checked before anything else) and a non-adjacent pair.
+      const sBomb = st.createInitialState();
+      st.startRun(sBomb, {});
+      sBomb.grid[R(sBomb)][0] = C.BOMB_TIER;
+      sBomb.grid[R(sBomb)][1] = 3;
+      sBomb.stackHeight[0] = 1; sBomb.stackHeight[1] = 1;
+      out.swapRejectsBomb = ph.swapFruits(sBomb, R(sBomb), 0, R(sBomb), 1) === false
+        && sBomb.grid[R(sBomb)][0] === C.BOMB_TIER;
 
       const sFar = st.createInitialState();
       st.startRun(sFar, {});
-      ph.setMagnetColumn(sFar, 0);
-      sFar.magnetActive = true; sFar.magnetEnergy = C.MAGNET_ENERGY_MAX;
-      sFar.active = {
-        tier: 2, col: 5, x: 5 * C.CELL + C.CELL / 2, targetX: 5 * C.CELL + C.CELL / 2, y: 0, playerSteered: false,
-      };
-      const farBefore = sFar.active.targetX;
-      ph.stepMagnet(sFar, 1);
-      out.magnetOutOfRange = sFar.active.targetX === farBefore;
-
-      const sSteered = st.createInitialState();
-      st.startRun(sSteered, {});
-      ph.setMagnetColumn(sSteered, 3);
-      sSteered.magnetActive = true; sSteered.magnetEnergy = C.MAGNET_ENERGY_MAX;
-      sSteered.active = {
-        tier: 2, col: 0, x: magnetCenterX - 100, targetX: magnetCenterX - 100, y: 0, playerSteered: false,
-      };
-      ph.setDragTarget(sSteered, sSteered.active.targetX); // the player steers it
-      const steeredBefore = sSteered.active.targetX;
-      ph.stepMagnet(sSteered, 1);
-      out.magnetIgnoresSteered = sSteered.active.targetX === steeredBefore;
-
-      // Magnet chip must survive being spent (it used to vanish on use).
-      const s2 = st.createInitialState();
-      s2.highScore = 9999; s2.inventory.magnet = 1;
-      st.activateMagnet(s2);
-      out.magnetChipSurvives = st.hudPowerUps().some((p) => p.id === 'magnet') && s2.magnetActive;
+      sFar.grid[R(sFar)][0] = 3;
+      sFar.grid[R(sFar)][2] = 3;
+      sFar.stackHeight[0] = 1; sFar.stackHeight[2] = 1;
+      out.swapRejectsNonAdjacent = ph.swapFruits(sFar, R(sFar), 0, R(sFar), 2) === false;
 
       // Bomb: clears, and its collapse must not feed the combo.
       const s3 = st.createInitialState();
@@ -569,11 +550,9 @@ async function shot(page, name, full = false) {
       return out;
     });
 
-    record('Magnet', pu.magnet.movedToward && pu.magnet.gridUntouched, false,
-      `falling fruit's targetX moved toward the magnet's column: ${pu.magnet.movedToward}; grid never touched: ${pu.magnet.gridUntouched}; `
-      + `out-of-range ignored: ${pu.magnetOutOfRange}; player-steered fruit ignored: ${pu.magnetIgnoresSteered}. Gated at 1000.`);
-    record('Magnet chip persists while active', pu.magnetChipSurvives, pu.magnetChipSurvives,
-      'chip stays on the bar after stock hits 0, so its duration bar has an anchor');
+    record('Swap', pu.swap.swapped && pu.swap.tradedTiles, false,
+      `two adjacent occupied cells traded tiles: ${pu.swap.tradedTiles}; rejects a planted bomb: ${pu.swapRejectsBomb}; `
+      + `rejects a non-adjacent pair: ${pu.swapRejectsNonAdjacent}. Gated at 1000.`);
     record('Bomb', pu.bomb.cleared > 0, false,
       `cleared ${pu.bomb.cleared} cells; combo suppressed during collapse: ${pu.bomb.comboSuppressed}. Gated at 3000.`);
     record('Rainbow fruit', pu.rainbow.result[0] === pu.rainbow.expected, false,
@@ -597,7 +576,7 @@ async function shot(page, name, full = false) {
       const s = window.__poofDebugState;
       s.highScore = 8000;
       s.inventory.remover = 0;
-      s.inventory.magnet = 0;
+      s.inventory.swap = 0;
       s.inventory.bomb = 0;
       const beforeInventory = JSON.stringify(s.inventory);
 
@@ -607,14 +586,14 @@ async function shot(page, name, full = false) {
         s.stackHeight[0] = Math.max(s.stackHeight[0], 2);
         ph.resolveMerges(s);
       }
-      const earnedTotal = ['remover', 'magnet', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
-      const grantedId = ['remover', 'magnet', 'bomb'].find((id) => s.earnedCharges[id] > 0);
+      const earnedTotal = ['remover', 'swap', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
+      const grantedId = ['remover', 'swap', 'bomb'].find((id) => s.earnedCharges[id] > 0);
       const usableFromEarnedAlone = grantedId
         ? st.canUsePowerUp(s, { unlockScore: 0, id: grantedId })
         : false;
 
       st.endRun(s, 'test');
-      const afterEndRunEarned = ['remover', 'magnet', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
+      const afterEndRunEarned = ['remover', 'swap', 'bomb'].reduce((sum, id) => sum + (s.earnedCharges[id] || 0), 0);
 
       return {
         earnedTotal,
@@ -662,7 +641,7 @@ async function shot(page, name, full = false) {
       y: geom.top + ly * (geom.height / canvasHeight),
     });
     // Logical HUD chip centres: powerSlotRect(i) = { x: 10 + i*34, y: 80, size: 26 }.
-    // hudPowerUps() order is [remover, magnet, bomb].
+    // hudPowerUps() order is [remover, swap, bomb].
     const chip = (i) => toPage(10 + i * 34 + 13, 80 + 13);
     const boardCell = (col, row) => toPage(col * 64 + 32, 118 + row * 64 + 32);
 
@@ -672,49 +651,71 @@ async function shot(page, name, full = false) {
         s.bombInPlay = false;
         s.bombFuseDrops = null;
         s.removerArmed = false;
-        s.magnetActive = false;
+        s.swapArmed = false;
+        s.swapSelectedCell = null;
         s.armPreviewCell = null;
         for (const row of s.grid) row.fill(null);
         s.stackHeight.fill(0);
       });
     }
 
-    // Magnet: a single real touch tap on the chip must activate it. No board
-    // step needed -- magnet was never affected by the commit-on-release
-    // change, included for full power-up coverage per the same recipe.
-    await resetRun();
-    await page.evaluate(() => {
-      const s = window.__poofDebugState;
-      s.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
-    });
-    const magnetChip = chip(1);
-    await page.touchscreen.tap(magnetChip.x, magnetChip.y);
-    await page.waitForTimeout(80);
-    const magnetOk = await page.evaluate(() => window.__poofDebugState.magnetActive);
-    record('Magnet fires on real touch tap', magnetOk, magnetOk,
-      `magnetActive after a real touchscreen tap on its chip: ${magnetOk}`);
-
-    // 8.3: the companion's rail, dragged with ONE continuous real touch --
-    // press somewhere on the rail, slide to a different column, release --
-    // not a tap. HUD_HEIGHT=118, MAGNET_RAIL_HEIGHT=22 (js/constants.js).
+    // Swap (10.1): tap the chip to arm, then two taps on adjacent board
+    // cells trade them -- checked the same two ways the remover is, since it
+    // shares that exact commit-on-release mechanism and touch-bug class.
     {
-      const railPoint = (col) => toPage(col * 64 + 32, 118 + 11);
-      const from = railPoint(1);
-      const to = railPoint(4);
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from.x, y: from.y }] });
-      await page.waitForTimeout(40);
-      const afterPress = await page.evaluate(() => window.__poofDebugState.magnetCol);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: to.x, y: to.y }] });
-      await page.waitForTimeout(40);
-      const afterDrag = await page.evaluate(() => window.__poofDebugState.magnetCol);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      await page.waitForTimeout(40);
-      const stillActive = await page.evaluate(() => window.__poofDebugState.magnetActive);
+      const slot = chip(1);
+      const cellA = boardCell(2, 3);
+      const cellB = boardCell(3, 3); // orthogonally adjacent to cellA
 
-      const ok = afterPress === 1 && afterDrag === 4 && stillActive;
-      record('Magnet rail drags with a real continuous touch', ok, ok,
-        `press column 1 (real touch): magnetCol=${afterPress}; drag to column 4, no lift: magnetCol=${afterDrag}; still out after release: ${stillActive}`);
+      // (a) three separate taps: chip, first fruit, second (adjacent) fruit.
+      await resetRun();
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.grid[3][2] = 4;
+        s.grid[3][3] = 6;
+      });
+      await page.touchscreen.tap(slot.x, slot.y);
+      await page.waitForTimeout(80);
+      await page.touchscreen.tap(cellA.x, cellA.y);
+      await page.waitForTimeout(80);
+      await page.touchscreen.tap(cellB.x, cellB.y);
+      await page.waitForTimeout(80);
+      const tapResult = await page.evaluate(() => ({
+        armed: window.__poofDebugState.swapArmed,
+        traded: window.__poofDebugState.grid[3][2] === 6 && window.__poofDebugState.grid[3][3] === 4,
+      }));
+      record('Swap fires on real touch: three separate taps (chip, first fruit, second fruit)',
+        tapResult.traded, tapResult.traded,
+        `tap chip, tap first fruit, tap adjacent fruit (all real touch, all separate) -> armed after=${tapResult.armed}, traded=${tapResult.traded}`);
+
+      // (b) one continuous press: chip -> first fruit -> release, no lift in
+      // between -- the exact gesture that silently did nothing for the
+      // remover before 7.3, now exercised for Swap's own first tap. A
+      // second, separate real tap then completes the swap.
+      await resetRun();
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.grid[3][2] = 4;
+        s.grid[3][3] = 6;
+      });
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: slot.x, y: slot.y }] });
+      await page.waitForTimeout(40);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cellA.x, y: cellA.y }] });
+      await page.waitForTimeout(40);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(80);
+      const selectedAfterDrag = await page.evaluate(() => window.__poofDebugState.swapSelectedCell);
+      await page.touchscreen.tap(cellB.x, cellB.y);
+      await page.waitForTimeout(80);
+      const dragResult = await page.evaluate(() => ({
+        traded: window.__poofDebugState.grid[3][2] === 6 && window.__poofDebugState.grid[3][3] === 4,
+      }));
+      const dragOk = Boolean(selectedAfterDrag) && dragResult.traded;
+      record('Swap fires on real touch: continuous chip-to-board drag selects, a second tap completes it',
+        dragOk, dragOk,
+        `ONE touch: press chip, drag onto first fruit, release (no lift in between) -> selected=${JSON.stringify(selectedAfterDrag)}; `
+        + `second real tap on the adjacent fruit -> traded=${dragResult.traded}`);
     }
 
     // Remover, checked two ways: (a) two separate taps -- press the chip,
@@ -861,7 +862,8 @@ async function shot(page, name, full = false) {
       await page.evaluate(() => {
         const s = window.__poofDebugState;
         s.removerArmed = false;
-        s.magnetActive = false;
+        s.swapArmed = false;
+        s.swapSelectedCell = null;
         s.bombInPlay = false;
         s.bombFuseDrops = null;
         s.armPreviewCell = null;
@@ -908,7 +910,7 @@ async function shot(page, name, full = false) {
         };
       };
 
-      // hudPowerUps() order is [remover, magnet, bomb] (js/constants.js).
+      // hudPowerUps() order is [remover, swap, bomb] (js/constants.js).
       const chipChecks = [];
       for (let i = 0; i < 3; i++) {
         await resetPowerState();
@@ -919,8 +921,10 @@ async function shot(page, name, full = false) {
         }, i);
         const pos = screenPos(slot.cx, slot.cy);
 
-        if (i === 1 || i === 2) {
-          // Magnet and Bomb both act on the currently falling fruit.
+        if (i === 2) {
+          // Bomb acts on the currently falling fruit -- Swap needs no active
+          // fruit at all (it only ever touches settled cells), and this
+          // check only asks "did the tap arm it", not a full mechanic.
           await page.evaluate(() => {
             window.__poofDebugState.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
           });
@@ -932,7 +936,7 @@ async function shot(page, name, full = false) {
           const C = await import('./js/constants.js');
           const s = window.__poofDebugState;
           if (idx === 0) return s.removerArmed === true;
-          if (idx === 1) return s.magnetActive === true;
+          if (idx === 1) return s.swapArmed === true;
           return !!s.active && s.active.tier === C.BOMB_TIER && s.bombInPlay === true;
         }, i);
         chipChecks.push(consumed);

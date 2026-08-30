@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CANVAS_WIDTH, HUD_HEIGHT, CELL, POWER_SLOT, powerSlotRect, MAGNET_RAIL_HEIGHT, BOMB_TIER,
+  CANVAS_WIDTH, HUD_HEIGHT, CELL, POWER_SLOT, powerSlotRect, BOMB_TIER,
 } from '../js/constants.js';
 import { canvasHeightFor } from '../js/render.js';
 import { startRun } from '../js/state.js';
@@ -18,7 +18,7 @@ const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function freshState() {
   const state = {
-    inventory: { slowDrop: 0, extraRow: 0, rainbow: 0, remover: 0, magnet: 0, bomb: 0 },
+    inventory: { slowDrop: 0, extraRow: 0, rainbow: 0, remover: 0, swap: 0, bomb: 0 },
     highScore: 0,
     coins: 0,
     unlockedSkins: ['classic'],
@@ -55,7 +55,7 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   const canvas = makeFakeCanvas(state);
   attachInput(canvas, state);
 
-  const bombSlot = powerSlotRect(2); // [remover, magnet, bomb] -- see constants.POWERUPS order
+  const bombSlot = powerSlotRect(2); // [remover, swap, bomb] -- see constants.POWERUPS order
   canvas.fire('pointerdown', { clientX: bombSlot.x + bombSlot.w / 2, clientY: bombSlot.y + bombSlot.h / 2 });
 
   assert.equal(state.active.tier, BOMB_TIER, 'tapping the chip should transform the currently-falling fruit into a bomb');
@@ -167,64 +167,197 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   assert.equal(state.removerArmed, true, 'the remover should still be armed, waiting for an actual target');
 }
 
-// 8.3: dragging within the magnet's rail zone (a thin strip at the very top
-// of the board) moves state.magnetCol continuously, the same
-// press/move/release shape bomb/remover's aiming already uses.
-{
-  const state = freshState();
-  state.magnetActive = true;
-  const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state);
-
-  const railY = HUD_HEIGHT + MAGNET_RAIL_HEIGHT / 2;
-  canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: railY });
-  assert.equal(state.magnetCol, 1, 'pressing within the rail zone should move the companion to that column');
-
-  canvas.fire('pointermove', { clientX: 4 * CELL + CELL / 2, clientY: railY });
-  assert.equal(state.magnetCol, 4, 'dragging along the rail should keep updating the column');
-
-  canvas.fire('pointerup', {});
-  // A release after a rail drag must not fall through to the remover's own
-  // commit logic (the bomb no longer has an armed/commit path at all, 8.4).
-  assert.equal(state.removerArmed, false, 'a rail drag must not have armed the remover');
-}
-
-// The rail only intercepts drags while the companion is actually out --
-// otherwise this zone behaves like ordinary board space (steering the
-// falling fruit).
-{
-  const state = freshState();
-  state.magnetActive = false;
-  state.magnetCol = 3;
-  state.active = { tier: 0, col: 0, x: CELL / 2, targetX: CELL / 2 };
-  const canvas = makeFakeCanvas(state);
-  attachInput(canvas, state);
-
-  const railY = HUD_HEIGHT + MAGNET_RAIL_HEIGHT / 2;
-  canvas.fire('pointerdown', { clientX: 1 * CELL + CELL / 2, clientY: railY });
-  assert.equal(state.magnetCol, 3, 'with no companion out, a press in that same zone must not move a nonexistent rail');
-  assert.ok(state.active.targetX > CELL / 2, 'that same press should instead have steered the falling fruit, like any other board tap');
-}
-
-// Locked power-up: magnet unlocks at a score this fresh state has not reached.
-// No persisted field changes, so state.dirty must NOT be set.
+// Locked power-up: swap unlocks at a score this fresh state has not reached
+// (it takes the Magnet's old milestone slot). No persisted field changes,
+// so state.dirty must NOT be set.
 {
   const state = freshState();
   const canvas = makeFakeCanvas(state);
   attachInput(canvas, state);
-  const magnetSlotRect = powerSlotRect(1); // [remover, magnet, bomb] -- see constants.POWERUPS order
+  const swapSlotRect = powerSlotRect(1); // [remover, swap, bomb] -- see constants.POWERUPS order
   canvas.fire('pointerdown', {
-    clientX: magnetSlotRect.x + POWER_SLOT.size / 2,
-    clientY: magnetSlotRect.y + POWER_SLOT.size / 2,
+    clientX: swapSlotRect.x + POWER_SLOT.size / 2,
+    clientY: swapSlotRect.y + POWER_SLOT.size / 2,
   });
   const events = state.events.filter((e) => e.type === 'lockedPowerUp');
   assert.equal(events.length, 1, 'a lockedPowerUp event should be pushed for a locked/out-of-stock slot');
-  assert.equal(events[0].id, 'magnet');
+  assert.equal(events[0].id, 'swap');
   assert.equal(events[0].unlockScore, 1000);
   assert.equal(state.dirty, false, 'a locked-power-up tap changes no persisted field and must not mark state.dirty');
 }
 
 console.log('input.js: bomb, remover, and locked-power-up all push their event onto state.events; state.dirty set only where warranted');
+
+// --- 10.1: Swap -------------------------------------------------------------
+// Reuses the remover's exact tap-a-cell shape (arm via chip, commit on
+// release), but is a two-tap tool: the first tap on the board selects, the
+// second resolves it (swap, deselect, or move the selection), so these
+// tests exercise a full gesture-then-gesture sequence, not one gesture.
+function tapCell(canvas, row, col) {
+  const clientX = col * CELL + CELL / 2;
+  const clientY = HUD_HEIGHT + row * CELL + CELL / 2;
+  canvas.fire('pointerdown', { clientX, clientY });
+  canvas.fire('pointerup', {});
+}
+
+// Two separate taps: select, then swap an adjacent occupied cell.
+{
+  const state = freshState();
+  state.grid[0][0] = 3;
+  state.grid[0][1] = 5;
+  state.swapArmed = true;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  tapCell(canvas, 0, 0);
+  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 0 }, 'the first tap should select that fruit');
+
+  tapCell(canvas, 0, 1);
+  assert.equal(state.grid[0][0], 5, 'the two cells should have traded tiers');
+  assert.equal(state.grid[0][1], 3, 'the two cells should have traded tiers');
+  assert.equal(state.swapSelectedCell, null, 'the selection should clear once the swap completes');
+  assert.equal(state.swapArmed, false, 'a completed swap should consume the charge and un-arm, same as the remover');
+  assert.equal(state.dirty, true, 'consuming from purchased inventory should mark state.dirty');
+}
+
+// A tap on the already-selected fruit deselects, at no cost.
+{
+  const state = freshState();
+  state.grid[0][0] = 3;
+  state.swapArmed = true;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  tapCell(canvas, 0, 0);
+  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 0 });
+  tapCell(canvas, 0, 0);
+  assert.equal(state.swapSelectedCell, null, 'tapping the same fruit again should deselect');
+  assert.equal(state.swapArmed, true, 'deselecting must not consume a charge or un-arm the tool');
+  assert.equal(state.dirty, false, 'selecting and cancelling must cost nothing');
+}
+
+// A tap on a non-adjacent fruit moves the selection there instead of failing.
+{
+  const state = freshState();
+  state.grid[0][0] = 3;
+  state.grid[0][3] = 5; // three columns away -- not adjacent
+  state.swapArmed = true;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  tapCell(canvas, 0, 0);
+  tapCell(canvas, 0, 3);
+  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 3 }, 'the selection should move to the non-adjacent fruit, not fail silently');
+  assert.equal(state.grid[0][0], 3, 'nothing should have been swapped');
+  assert.equal(state.grid[0][3], 5, 'nothing should have been swapped');
+  assert.equal(state.swapArmed, true, 'moving the selection must not consume a charge');
+}
+
+// A tap on an empty cell is silently ignored -- the pending selection, if
+// any, is left exactly as it was.
+{
+  const state = freshState();
+  state.grid[0][0] = 3;
+  // grid[0][1] left empty
+  state.swapArmed = true;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  tapCell(canvas, 0, 0);
+  tapCell(canvas, 0, 1);
+  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 0 }, 'tapping an empty cell must not disturb an existing selection');
+  assert.equal(state.swapArmed, true, 'tapping an empty cell must not consume a charge');
+}
+
+// The two things it must refuse (brief, 10.1): a planted bomb, checked
+// before anything else -- rejected by swapFruits itself, but the input
+// layer must not get stuck: the selection still clears so the player is not
+// left in limbo.
+{
+  const state = freshState();
+  state.grid[0][0] = 3;
+  state.grid[0][1] = BOMB_TIER;
+  state.swapArmed = true;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  tapCell(canvas, 0, 0);
+  tapCell(canvas, 0, 1);
+  assert.equal(state.grid[0][0], 3, 'a bomb-adjacent swap must be rejected -- nothing should move');
+  assert.equal(state.grid[0][1], BOMB_TIER, 'the bomb must stay exactly where it was');
+  assert.equal(state.swapSelectedCell, null, 'the selection should still clear after a rejected attempt');
+  assert.equal(state.swapArmed, true, 'a rejected swap must not consume a charge or un-arm the tool');
+  assert.equal(state.dirty, false, 'a rejected swap must not mark state.dirty');
+}
+
+// Regression coverage for the SAME real-touch bug class 7.3 found for the
+// remover: press the chip, drag straight onto the board without lifting,
+// release -- must still register as the FIRST tap (a selection), not
+// silently do nothing.
+{
+  const state = freshState();
+  state.highScore = 1000; // Swap unlocks at MILESTONE_SCORES[1]
+  state.grid[0][2] = 5;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const swapSlot = powerSlotRect(1);
+  canvas.fire('pointerdown', { clientX: swapSlot.x + swapSlot.w / 2, clientY: swapSlot.y + swapSlot.h / 2 });
+  assert.equal(state.swapArmed, true, 'pressing the chip should arm Swap');
+
+  canvas.fire('pointermove', { clientX: 2 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
+  canvas.fire('pointerup', {});
+
+  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 2 },
+    'a continuous press-chip-then-drag-to-board-then-release must still register as a selection');
+  assert.equal(state.swapArmed, true, 'a single selection must not consume a charge or un-arm the tool');
+}
+
+// A plain chip tap alone, no drag onto the board, must select nothing.
+{
+  const state = freshState();
+  state.highScore = 1000;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const swapSlot = powerSlotRect(1);
+  canvas.fire('pointerdown', { clientX: swapSlot.x + swapSlot.w / 2, clientY: swapSlot.y + swapSlot.h / 2 });
+  canvas.fire('pointerup', {});
+
+  assert.equal(state.swapSelectedCell, null, 'arming alone, with no drag onto the board, must select nothing');
+  assert.equal(state.swapArmed, true, 'Swap should still be armed, waiting for an actual target');
+}
+
+// Arming Remover and Swap can never both be live -- a single board tap would
+// otherwise resolve as BOTH a removal and a swap attempt against the same
+// cell (js/state.js's armRemover/armSwap cross-disarm).
+{
+  const state = freshState();
+  state.highScore = 1000;
+  state.inventory.remover = 1;
+  state.inventory.swap = 1;
+  const canvas = makeFakeCanvas(state);
+  attachInput(canvas, state);
+
+  const removerSlot = powerSlotRect(0);
+  const swapSlot = powerSlotRect(1);
+  canvas.fire('pointerdown', { clientX: removerSlot.x + removerSlot.w / 2, clientY: removerSlot.y + removerSlot.h / 2 });
+  assert.equal(state.removerArmed, true);
+
+  canvas.fire('pointerup', {});
+  canvas.fire('pointerdown', { clientX: swapSlot.x + swapSlot.w / 2, clientY: swapSlot.y + swapSlot.h / 2 });
+  assert.equal(state.swapArmed, true, 'arming Swap should succeed');
+  assert.equal(state.removerArmed, false, 'arming Swap must disarm the Remover');
+}
+
+console.log('input.js: Swap selects on the first tap, swaps/deselects/moves the selection on the second, rejects a bomb without getting stuck, survives the same continuous-drag touch bug remover had, and can never be armed alongside the remover');
 
 // --- Is the shipped main.js actually wired to all three? -------------------
 

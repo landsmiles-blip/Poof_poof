@@ -217,9 +217,9 @@ export const POWERUPS = [
     usage: 'run',
   },
   {
-    id: 'magnet', name: 'Magnet', cost: 40, unlockScore: MILESTONE_SCORES[1], icon: 'magnet',
-    desc: 'Parks on a column. Falling fruit curves toward it as it drops.',
-    usage: 'activate',
+    id: 'swap', name: 'Swap', cost: 40, unlockScore: MILESTONE_SCORES[1], icon: 'swap',
+    desc: 'Tap two adjacent fruit to trade places.',
+    usage: 'tap',
   },
   {
     id: 'bomb', name: 'Bomb', cost: 60, unlockScore: MILESTONE_SCORES[2], icon: 'bomb',
@@ -236,44 +236,15 @@ export const POWERUPS = [
 // Kept as a derived lookup so existing cost references keep working.
 export const POWERUP_COSTS = Object.fromEntries(POWERUPS.map((p) => [p.id, p.cost]));
 
-// --- Magnet --------------------------------------------------------------
-// 9.2 redesign: the companion never touches settled fruit any more (that was
-// the direct cause of a board-corruption bug -- a fruit left floating over a
-// hole -- and it fought the player's own built stack besides). It now curves
-// the CURRENTLY FALLING fruit toward its column instead. See
-// js/physics.js's magnetPullFor/stepMagnet for the mechanics.
-//
-// Starting points, tuned by feel like the difficulty ramp's own constants,
-// not derived from simulation.
-//
-// 9.6: a hard range cutoff, not just a gentler taper at long distance -- a
-// magnet parked anywhere on the board must not influence every drop
-// regardless of where the player is aiming. ~2.5 columns: close enough to
-// matter for a fruit falling near it, far enough to feel like a real zone
-// rather than a single column.
-export const MAGNET_PULL_RANGE_PX = CELL * 2.5;
-// Drift speed at zero distance, easing to zero at MAGNET_PULL_RANGE_PX.
-// Crossing one full CELL at maximum strength takes CELL / this value, a bit
-// under a second -- a curve a player can see and steer against, not a snap.
-export const MAGNET_PULL_PX_PER_SEC = 90;
-
-// 8.3: stop treating it as a consumable that ticks down invisibly -- it
-// becomes a thing on the board, ridden along a rail across the top of the
-// play area and dragged to whichever column it should pull toward, with its
-// own energy instead of a fixed timer. "Always present, never simply spent":
-// energy drains only while it is actually pulling the falling fruit, and
-// regenerates whenever it is idle (out of range, or nothing currently
-// falling) -- a patient player who is not constantly using it can keep it
-// out far longer than one leaning on it every drop, rather than a hard
-// countdown that ends regardless of use.
-export const MAGNET_ENERGY_MAX = 100;
-export const MAGNET_DRAIN_PER_SEC = 12.5; // empties in 8s of continuous pulling
-export const MAGNET_REGEN_PER_SEC = 25; // refills in 4s of continuous idling
-// Height of the draggable rail strip at the top of the board, and how
-// quickly the drawn puck glides toward wherever it was last dragged --
-// reuses DRAG_LERP's own smoothing feel (see js/physics.js's setDragTarget)
-// so the two draggable things in the game move consistently.
-export const MAGNET_RAIL_HEIGHT = 22;
+// --- Swap ------------------------------------------------------------------
+// 10.1: replaces the Magnet entirely. The Magnet did what dragging already
+// does -- help a fruit reach a chosen column -- and no implementation of
+// that idea was ever going to be more than a slower duplicate of a control
+// that already exists for free. Swap acts on the board AFTER a fruit has
+// landed, which dragging fundamentally cannot do, and has no per-frame
+// behaviour at all: it is a single, instant grid mutation, gated by the same
+// adjacency rule merges already use. No tunable constants of its own -- see
+// js/physics.js's swapFruits.
 
 // 7.3: bomb footprint + detonation ring, remover crosshair, rainbow spin --
 // all drawn in js/render.js, on top of the board so arming or activating a

@@ -1,11 +1,11 @@
 // Regression test for a pre-existing crash surfaced (not caused) by 9.5's
 // board-integrity stress test: only the SPAWN column governs isGameOver, so
 // a non-spawn column can already be completely full while play continues
-// normally. Dragging (or the magnet pulling, since 9.2) a falling fruit over
-// that column crashed lockFruit outright -- landingRow went negative,
-// state.grid[-1] is undefined. Fixed at the root in columnForX: a full
-// column is never a valid landing column, redirected to the nearest one
-// (checked left/right alternately, outward) that still has room.
+// normally, and dragging a falling fruit over that column crashed lockFruit
+// outright -- landingRow went negative, state.grid[-1] is undefined. Fixed
+// at the root in columnForX: a full column is never a valid landing column,
+// redirected to the nearest one (checked left/right alternately, outward)
+// that still has room.
 //
 // Every fixture here keeps all OTHER columns strictly empty (not merely
 // "not full") so the redirected fruit has nothing adjacent to merge with --
