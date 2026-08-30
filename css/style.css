@@ -44,7 +44,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px;
+  padding: 8px;
 }
 
 /* The board fills the available space instead of sitting at its intrinsic
@@ -75,12 +75,25 @@ html, body {
    rather than blank canvas below the grid. --canvas-ratio (a plain number)
    and --canvas-aspect (a <ratio> for `aspect-ratio` itself) are both set
    together from js/main.js's syncCanvasAspect, from the same
-   canvasHeightFor(state) value, so they can never disagree with each other. */
+   canvasHeightFor(state) value, so they can never disagree with each other.
+
+   9.9: on a very tall phone this is still width-bound (100vw wins the
+   min()), so most of the reclaimable dead space above/below the board is
+   NOT a margin this file controls -- it is the gap between the board's own
+   fixed aspect ratio (384 wide, protected -- see CLAUDE.md) and a much
+   taller phone's own shape, which no amount of CSS can close without either
+   changing that protected ratio or letting the board grow wider than the
+   screen. Widening ROWS would close it for real but changes run length and
+   score potential -- a gameplay/difficulty call, not a layout one, so it was
+   deliberately left alone here. What actually IS this file's to reclaim:
+   the fixed viewport margin (12px -> 8px, #app's own padding) and the
+   height cap (1100px -> 1600px, guards against an absurdly large render on
+   a very tall desktop window, not a limit real phones were hitting). */
 #game-canvas {
   background: linear-gradient(to bottom, var(--board-top), var(--board-bottom));
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  width: min(calc(100vw - 24px), calc(min(100vh - 24px, 1100px) * var(--canvas-ratio, 0.678445)));
+  width: min(calc(100vw - 16px), calc(min(100vh - 16px, 1600px) * var(--canvas-ratio, 0.678445)));
   height: auto;
   aspect-ratio: var(--canvas-aspect, 384 / 566);
   touch-action: none;
@@ -91,18 +104,42 @@ html, body {
    --canvas-css-width is set by js/main.js from the canvas's own actual
    measured width -- not recomputed here from viewport units -- because the
    canvas can be either height- or width-constrained depending on the
-   viewport's aspect ratio (aspect-ratio + max-width below), and a formula
+   viewport's aspect ratio (see that rule's own width formula), and a formula
    derived only from vh (as this used to be) silently goes wrong the moment
    the canvas becomes the width-constrained one, e.g. on an ultra-wide
    viewport: the shop panel stays a size the board is no longer actually
    using. Height is intentionally NOT tied to the board's aspect ratio -- the
    shop's content is scrollable and needs its own height, not the board's. */
 #overlay {
-  width: min(var(--canvas-css-width, 384px), calc(100vw - 24px));
+  width: min(var(--canvas-css-width, 384px), calc(100vw - 16px));
   min-width: 320px;
-  max-width: calc(100vw - 24px);
-  max-height: calc(100vh - 24px);
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   overflow-y: auto;
+}
+
+/* 9.3: a fixed, full-viewport scrim -- deliberately not sized to match the
+   canvas's own box (unlike #overlay above), since a pause modal is a
+   familiar enough pattern on its own that it does not need to align with
+   the frozen board underneath it, and this sidesteps needing --canvas-css-
+   width math just for a dialog. */
+#pause-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  z-index: 10;
+}
+
+#pause-overlay[hidden] {
+  display: none;
+}
+
+.pause-card {
+  width: min(320px, calc(100vw - 48px));
 }
 
 .screen {

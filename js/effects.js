@@ -13,7 +13,7 @@ import {
   SHAKE_MIN_TIER, SHAKE_DURATION_SEC, SHAKE_MAX_PX,
   HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS, REDUCED_MOTION_SQUASH_SCALE,
   PARTICLE_BRIGHT_VIBRANCE_BOOST, PARTICLE_BRIGHT_LIFE_SCALE,
-  MAGNET_SLIDE_DURATION_SEC, BOMB_RING_DURATION_SEC,
+  BOMB_RING_DURATION_SEC,
 } from './constants.js';
 
 // Crude vibrance boost: pushes each channel away from the colour's own grey
@@ -37,43 +37,8 @@ export function createEffects() {
     squashes: [], // { row, col, t, duration, amount }
     particles: [], // { x, y, vx, vy, t, life, color, size }
     shake: { t: 0, duration: 0, magnitude: 0 },
-    magnetSlides: [], // { row, col, tier, fromX, toX, t, duration } -- 7.3
     bombRings: [], // { x, y, t, duration } -- 7.3
   };
-}
-
-// 7.3: a magnet-moved fruit's GRID position updates instantly (stepMagnet is
-// unchanged) but its DRAW position eases from the old column to the new one
-// over MAGNET_SLIDE_DURATION_SEC, the same lag-behind-the-grid trick squash
-// already uses for a merge pop. `state` is read here (not passed values) so
-// the destination row reflects wherever settleColumns actually left the fruit.
-export function spawnMagnetSlides(fx, state, moves) {
-  const rows = state.grid.length;
-  for (const move of moves) {
-    fx.magnetSlides.push({
-      row: rows - state.stackHeight[move.to],
-      col: move.to,
-      tier: move.tier,
-      fromX: move.from * CELL + CELL / 2,
-      toX: move.to * CELL + CELL / 2,
-      t: 0,
-      duration: MAGNET_SLIDE_DURATION_SEC,
-    });
-  }
-}
-
-// Draw-time x offset for the fruit at (row, col, tier), if it is mid-slide --
-// null when there is nothing to apply. Same position+tier guard as
-// squashScaleAt, for the same reason: a later magnet step or a settle can
-// leave a DIFFERENT fruit at this exact cell before the slide finishes.
-export function magnetSlideOffsetAt(fx, row, col, tier) {
-  for (const s of fx.magnetSlides) {
-    if (s.row !== row || s.col !== col || s.tier !== tier) continue;
-    const p = Math.min(1, s.t / s.duration);
-    const eased = 1 - (1 - p) ** 3; // ease-out cubic
-    return (s.fromX - s.toX) * (1 - eased);
-  }
-  return null;
 }
 
 // Expanding ring on a bomb detonation -- the loudest action in the game
@@ -245,12 +210,6 @@ export function updateEffects(fx, dt) {
     if (fx.shake.t >= fx.shake.duration) fx.shake.magnitude = 0;
   }
 
-  for (let i = fx.magnetSlides.length - 1; i >= 0; i--) {
-    const s = fx.magnetSlides[i];
-    s.t += dt;
-    if (s.t >= s.duration) fx.magnetSlides.splice(i, 1);
-  }
-
   for (let i = fx.bombRings.length - 1; i >= 0; i--) {
     const r = fx.bombRings[i];
     r.t += dt;
@@ -322,6 +281,5 @@ export function clearEffects(fx) {
   fx.shake.t = 0;
   fx.shake.duration = 0;
   fx.shake.magnitude = 0;
-  fx.magnetSlides.length = 0;
   fx.bombRings.length = 0;
 }

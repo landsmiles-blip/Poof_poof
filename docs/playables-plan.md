@@ -931,6 +931,112 @@ assumed before starting this phase.
 
 ---
 
+## Phase 9 — magnet redesign, a pause menu, and outstanding fixes
+
+Done per `docs/phase9brief.md` and `docs/phase9addendum.md` (25 device
+screenshots on `-10`, appended as findings 9.5-9.9). All 23 `unit-tests/`
+pass, all 45 `tests/verify-features.js` checks pass (including a re-run of
+the phase 5 CSP check), and `tools/check-prohibited-apis.js` is clean
+against the rebuilt bundle. Bundle: 254774 bytes, 17 files.
+
+### [x] 9.1 The letterbox coordinate bug — done — commit `12e64dc`
+
+Two independent bugs, not one. `css/style.css`'s `#game-canvas` rect could
+end up taller than the logical aspect on a very tall viewport (`max-width`
+binding while `height` stayed at its own separate viewport-derived value —
+`aspect-ratio` only ever recomputes the dimension marked `auto`), which both
+letterboxed the board inside a mismatched box AND, separately,
+`js/input.js`'s `toCanvasPoint` derived `scaleY` from `rect.height`, correct
+only if that box happened to be on-ratio. Fixed both: `width` is now
+computed as the smaller of what the viewport's width and height each
+independently allow, with `height` derived FROM that via `aspect-ratio`
+(never the reverse); `toCanvasPoint` derives both axes from `rect.width`
+alone, matching `drawFrame`'s own transform, correct regardless of whether
+the CSS box is ever off-ratio again. New e2e test taps the visual centre of
+every power-up chip, independently of `toCanvasPoint`'s own formula, across
+five viewport ratios including 9:20 and 9:22 — confirmed by temporarily
+reinstating both old formulas and watching it fail hard on every tall ratio
+while a height-bound 4:3 control still passed.
+
+### [x] 9.2 / 9.6 / 9.8 Redesign the magnet — done — commit `8f0b731`
+
+The magnet no longer touches settled fruit — deleted entirely (grid
+mutation, `settleColumns` call, `magnetTargets`, the slide-tween effect),
+not disabled behind a flag. It now curves the falling fruit's `targetX`
+toward its own column (a curve, not a snap, reusing `stepPhysics`'s existing
+x-toward-targetX lerp), with a hard range cutoff and linear falloff inside
+it (9.6), and steps aside completely once the player has steered that fruit
+(`active.playerSteered`, set once inside `setDragTarget` so drag and
+keyboard steering both count). Shop copy rewritten to match (9.8), plus a
+standing comment on `POWERUPS` to keep `desc` honest going forward — audited
+all six entries, only the Magnet's was stale. `unit-tests/magnet.js` and
+`magnet-companion.js` rewritten for the new mechanic.
+
+### [x] 9.3 A pause menu — done — commit `fece1d5`
+
+A canvas-drawn HUD button opens a DOM panel over the frozen board: Resume,
+Sound, Music, Back to menu — no master mute, no exit/quit control of any
+kind. Opening it runs through the exact same `pauseRun`/`resumeRun` a
+host-driven pause already used (extracted from `platform.onPause`/
+`onResume`'s own callback bodies), never a second mechanism; a host resume
+is a deliberate no-op while the panel is open, so the tab regaining focus
+can't silently un-freeze a screen that still says "Paused". Escape closes
+the panel and now takes priority over cancelling an armed power-up —
+`input.js`'s keyboard/pointer handling does nothing at all while
+`state.paused`. Five new real-touch e2e checks, including Escape's priority
+verified by temporarily removing the guard and watching the check fail.
+
+### [x] 9.5 Board-integrity regression test — done — commit `752b5ae`
+
+The invariant the letterbox addendum asked for (no fruit resting above an
+empty cell in the same column) is fixed by construction once 9.2 removed
+the mechanism that could ever create it, but nothing had ever actually
+checked it. New test drives real gameplay across multiple independent
+boards with the magnet continuously active and retargeted mid-fall,
+self-checks its own detector against a synthetic holed grid first, and sums
+drops across several short games rather than trusting one long one to
+survive far enough — `spawnFruit`'s tier choice is real `Math.random()`, not
+the seeded PRNG this file also uses for magnet retargeting.
+
+### [x] 9.7 The board clips its contents — done — bundled into commit `8f0b731`
+
+A fruit spawns above row 0 by design, and the magnet's puck can slightly
+overhang a boundary column at its own icon radius — both drew straight
+through into the HUD or past the board's side edges since nothing ever
+clipped. One `ctx.clip()` in `drawBoard`, confined to exactly the board's
+own rectangle, fixes both at once. Verified visually, not just by
+inspection: a fruit frozen just above the board and a puck frozen at column
+0 both screenshot cleanly clipped, no overlap with the HUD or the board's
+edge.
+
+### [x] 9.9 Reclaim the screen — done — commit `3289359`
+
+Asked first: the aspect-ratio mismatch between the board's protected
+384-wide shape and a very tall phone's own shape is the dominant source of
+the dead space above/below the board, and closing it for real would mean
+widening `ROWS` — a gameplay/difficulty change (run length, score
+potential), not a layout one. Confirmed CSS-only in scope. Trimmed the
+fixed viewport margin (`#app`'s padding, 12px → 8px) and raised the
+`#game-canvas` height cap (1100px → 1600px, which was guarding against an
+oversized render on a tall DESKTOP window, not a limit real phones were
+hitting). Measured, not just visually inspected: a real 9:20 viewport
+(414×920) grew from 390×575 to 398×587.
+
+### Also
+
+9.5's stress test surfaced a pre-existing crash unrelated to the magnet
+(confirmed with a repro that doesn't involve it at all): only the spawn
+column governs `isGameOver`, so a different column can already be
+completely full while play continues, and dragging a falling fruit over it
+made `landingRow` go negative. Asked first (redirect to the nearest open
+column vs. treat it as game over vs. a minimal crash-only clamp); fixed at
+the root in `columnForX`, used by both `stepPhysics` and `hardDrop` — commit
+`294589f`, with its own deterministic regression test
+(`unit-tests/full-column-redirect.js`), confirmed by temporarily reverting
+the fix and reproducing the original crash exactly.
+
+---
+
 ## Out of scope for certification
 
 Do not start these until the phases above are green: the desktop canvas scale-up,

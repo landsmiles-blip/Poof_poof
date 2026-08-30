@@ -483,26 +483,50 @@ async function shot(page, name, full = false) {
       const R = (s) => s.grid.length - 1;
       const out = {};
 
-      // Magnet: one column per step, buried/non-matching untouched.
+      // Magnet (9.2 redesign): curves the FALLING fruit toward its column,
+      // tier-agnostically, and never touches the grid -- also respects a
+      // hard range cutoff and steps aside once the player has steered the
+      // fruit. unit-tests/magnet.js covers the falloff/range/steering math
+      // in full; this just confirms the real module wiring produces the
+      // same shape of result through actual page code.
       const s = st.createInitialState();
       st.startRun(s, {});
-      const rows = s.grid.length;
-      s.grid[rows - 1][0] = 2; s.stackHeight[0] = 1;
-      s.grid[rows - 1][5] = 2; s.stackHeight[5] = 1;
-      s.grid[rows - 1][1] = 7; s.stackHeight[1] = 1;
-      s.active = { tier: 2, col: 3, x: 0, targetX: 0, y: 0 };
-      // 8.3: targeting comes from magnetCol (dragged along the rail), not
-      // automatically from active.col -- startRun's default (board centre)
-      // already happens to be column 3, matching this fixture's intent, but
-      // set it explicitly so the test does not depend on that coincidence.
+      const magnetCenterX = 3 * C.CELL + C.CELL / 2;
       ph.setMagnetColumn(s, 3);
-      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX; s.magnetStepTimer = 0;
-      const moves = ph.stepMagnet(s, 0.016);
-      out.magnet = {
-        moves,
-        oneColumnEach: moves.every((m) => Math.abs(m.to - m.from) === 1),
-        nonMatchingStayed: s.grid[rows - 1][1] === 7,
+      s.magnetActive = true; s.magnetEnergy = C.MAGNET_ENERGY_MAX;
+      s.active = {
+        tier: 2, col: 0, x: magnetCenterX - 100, targetX: magnetCenterX - 100, y: 0, playerSteered: false,
       };
+      const beforeTargetX = s.active.targetX;
+      const gridBefore = JSON.stringify(s.grid);
+      ph.stepMagnet(s, 0.1);
+      out.magnet = {
+        movedToward: s.active.targetX > beforeTargetX && s.active.targetX < magnetCenterX,
+        gridUntouched: JSON.stringify(s.grid) === gridBefore,
+      };
+
+      const sFar = st.createInitialState();
+      st.startRun(sFar, {});
+      ph.setMagnetColumn(sFar, 0);
+      sFar.magnetActive = true; sFar.magnetEnergy = C.MAGNET_ENERGY_MAX;
+      sFar.active = {
+        tier: 2, col: 5, x: 5 * C.CELL + C.CELL / 2, targetX: 5 * C.CELL + C.CELL / 2, y: 0, playerSteered: false,
+      };
+      const farBefore = sFar.active.targetX;
+      ph.stepMagnet(sFar, 1);
+      out.magnetOutOfRange = sFar.active.targetX === farBefore;
+
+      const sSteered = st.createInitialState();
+      st.startRun(sSteered, {});
+      ph.setMagnetColumn(sSteered, 3);
+      sSteered.magnetActive = true; sSteered.magnetEnergy = C.MAGNET_ENERGY_MAX;
+      sSteered.active = {
+        tier: 2, col: 0, x: magnetCenterX - 100, targetX: magnetCenterX - 100, y: 0, playerSteered: false,
+      };
+      ph.setDragTarget(sSteered, sSteered.active.targetX); // the player steers it
+      const steeredBefore = sSteered.active.targetX;
+      ph.stepMagnet(sSteered, 1);
+      out.magnetIgnoresSteered = sSteered.active.targetX === steeredBefore;
 
       // Magnet chip must survive being spent (it used to vanish on use).
       const s2 = st.createInitialState();
@@ -545,8 +569,9 @@ async function shot(page, name, full = false) {
       return out;
     });
 
-    record('Magnet', pu.magnet.moves.length > 0, false,
-      `moves ${JSON.stringify(pu.magnet.moves)}; one column each: ${pu.magnet.oneColumnEach}; non-matching untouched: ${pu.magnet.nonMatchingStayed}. Gated at 1000.`);
+    record('Magnet', pu.magnet.movedToward && pu.magnet.gridUntouched, false,
+      `falling fruit's targetX moved toward the magnet's column: ${pu.magnet.movedToward}; grid never touched: ${pu.magnet.gridUntouched}; `
+      + `out-of-range ignored: ${pu.magnetOutOfRange}; player-steered fruit ignored: ${pu.magnetIgnoresSteered}. Gated at 1000.`);
     record('Magnet chip persists while active', pu.magnetChipSurvives, pu.magnetChipSurvives,
       'chip stays on the bar after stock hits 0, so its duration bar has an anchor');
     record('Bomb', pu.bomb.cleared > 0, false,
@@ -920,6 +945,109 @@ async function shot(page, name, full = false) {
     const ok = allAspectOk && allChipsOk;
     record('Power-up chips register a real touch tap at their true screen position, across viewport aspect ratios incl. 9:20/9:22',
       ok, ok, notes.join('; '));
+    await context.close();
+  }
+
+  // ------------------------------------------------------------ pause menu
+  // 9.3: a real in-HUD pause control -- Resume, Sound, Music, Back to menu.
+  // No master mute (Playables requirement, phase 3) and no exit/quit control
+  // of any kind: "Back to menu" only ever returns to this game's own menu.
+  {
+    const { context, page } = await freshPage(browser, 'pause-menu', { hasTouch: true });
+    await page.goto(`${BASE}/index.html?dev=1`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(200);
+
+    const pauseBtn = await page.evaluate(async () => {
+      const C = await import('./js/constants.js');
+      const rect = document.getElementById('game-canvas').getBoundingClientRect();
+      const r = C.pauseButtonRect();
+      const scale = rect.width / C.CANVAS_WIDTH;
+      return { x: rect.left + (r.x + r.w / 2) * scale, y: rect.top + (r.y + r.h / 2) * scale };
+    });
+
+    // Real touch tap opens it, freezes the run the same way a host pause
+    // does (rAF actually cancelled, not just gated -- reuses the exact check
+    // the "Pause actually stops the game" block above uses).
+    await page.touchscreen.tap(pauseBtn.x, pauseBtn.y);
+    await page.waitForTimeout(100);
+    const openedState = await page.evaluate(() => ({
+      paused: window.__poofDebugState.paused,
+      panelVisible: !document.getElementById('pause-overlay').hidden,
+    }));
+    const canvas = page.locator('#game-canvas');
+    const frozenEarly = await canvas.screenshot();
+    await page.waitForTimeout(400);
+    const frozenLate = await canvas.screenshot();
+    const genuinelyFrozen = frozenEarly.equals(frozenLate);
+    record('Pause button opens the panel via a real touch tap and genuinely freezes the run',
+      openedState.paused && openedState.panelVisible && genuinelyFrozen,
+      openedState.paused && openedState.panelVisible && genuinelyFrozen,
+      `paused: ${openedState.paused}; panel visible: ${openedState.panelVisible}; board unchanged across 400ms: ${genuinelyFrozen}`);
+
+    // Escape closes it -- and takes priority over cancelling an armed
+    // power-up, per the brief: arm the remover BEFORE opening the panel,
+    // confirm Escape only closes the panel and leaves removerArmed alone
+    // (input.js's own Escape handler must not also fire this same keypress).
+    await page.evaluate(() => { window.__poofDebugState.removerArmed = true; });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(100);
+    const afterEscape = await page.evaluate(() => ({
+      paused: window.__poofDebugState.paused,
+      panelVisible: !document.getElementById('pause-overlay').hidden,
+      removerStillArmed: window.__poofDebugState.removerArmed,
+    }));
+    record('Escape closes the pause panel and takes priority over cancelling an armed power-up',
+      !afterEscape.paused && !afterEscape.panelVisible && afterEscape.removerStillArmed,
+      !afterEscape.paused && !afterEscape.panelVisible,
+      `after Escape -- paused: ${afterEscape.paused}, panel visible: ${afterEscape.panelVisible}, remover still armed (untouched by input.js's own handler): ${afterEscape.removerStillArmed}`);
+    await page.evaluate(() => { window.__poofDebugState.removerArmed = false; });
+
+    // Resume button closes it too, the ordinary way.
+    await page.touchscreen.tap(pauseBtn.x, pauseBtn.y);
+    await page.waitForTimeout(100);
+    await page.click('#pause-resume-btn');
+    await page.waitForTimeout(100);
+    const afterResume = await page.evaluate(() => ({
+      paused: window.__poofDebugState.paused,
+      panelVisible: !document.getElementById('pause-overlay').hidden,
+    }));
+    record('Resume button closes the pause panel and un-freezes the run',
+      !afterResume.paused && !afterResume.panelVisible, !afterResume.paused && !afterResume.panelVisible,
+      `after Resume -- paused: ${afterResume.paused}, panel visible: ${afterResume.panelVisible}`);
+
+    // Sound/Music toggles inside the panel are the same granular controls
+    // the Gear menu already offers -- no second implementation, no master
+    // mute button anywhere in this panel's markup.
+    await page.touchscreen.tap(pauseBtn.x, pauseBtn.y);
+    await page.waitForTimeout(100);
+    const panelHTML = await page.evaluate(() => document.getElementById('pause-overlay').innerHTML.toLowerCase());
+    const noMasterMute = !panelHTML.includes('mute');
+    const soundBefore = await page.evaluate(() => document.getElementById('sound-btn').textContent);
+    await page.click('#sound-btn');
+    await page.waitForTimeout(80);
+    const soundAfter = await page.evaluate(() => document.getElementById('sound-btn')?.textContent);
+    const toggleWorked = soundAfter !== undefined && soundAfter !== soundBefore;
+    record('Pause panel\'s Sound toggle works, and offers no master mute of any kind',
+      toggleWorked && noMasterMute, toggleWorked && noMasterMute,
+      `Sound label: "${soundBefore}" -> "${soundAfter}"; panel markup contains "mute": ${!noMasterMute}`);
+
+    // Back to menu: lands on the actual home menu, not the results screen
+    // endRun normally leads to, and never on any kind of exit/quit control.
+    await page.click('#pause-menu-btn');
+    await page.waitForTimeout(200);
+    const afterBackToMenu = await page.evaluate(() => ({
+      screen: window.__poofDebugState.screen,
+      onHome: !!document.querySelector('.screen-home'),
+      onGameOver: document.body.textContent.includes('Game Over'),
+      canvasHidden: document.getElementById('game-canvas').hidden,
+    }));
+    record('Pause panel\'s "Back to menu" lands on the game\'s own menu, not a results screen',
+      afterBackToMenu.screen === 'menu' && afterBackToMenu.onHome && !afterBackToMenu.onGameOver,
+      afterBackToMenu.screen === 'menu' && afterBackToMenu.onHome,
+      `screen: ${afterBackToMenu.screen}; home screen shown: ${afterBackToMenu.onHome}; game-over screen shown: ${afterBackToMenu.onGameOver}; canvas hidden: ${afterBackToMenu.canvasHidden}`);
+
     await context.close();
   }
 

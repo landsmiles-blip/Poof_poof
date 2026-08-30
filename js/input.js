@@ -3,7 +3,9 @@
 // in-game master mute button; see js/shop.js for the granular Sound/Music
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
-import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT } from './constants.js';
+import {
+  CELL, HUD_HEIGHT, COLS, powerSlotRect, pauseButtonRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT,
+} from './constants.js';
 import { removeFruitAt, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
 import {
   hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb,
@@ -130,12 +132,25 @@ export function attachInput(canvas, state) {
   // below), so a plain tap that never touches the board still commits
   // nothing -- there's no gap where a stale cell from a previous aim could.
   function onPointerDown(evt) {
+    // 9.3: the run is frozen while paused (host-driven or the in-game panel)
+    // -- nothing on the canvas should react, including a stray gesture that
+    // technically still reaches it underneath the panel.
+    if (state.paused) return;
+
     // Browsers only allow audio to start from a user gesture.
     unlockAudio();
 
     const point = toCanvasPoint(evt);
 
     if (point.y <= HUD_HEIGHT) {
+      if (inRect(point, pauseButtonRect())) {
+        // Routed through state.events, not a direct callback -- attachInput
+        // stays (canvas, state) only (see input-callbacks.js's own
+        // regression test for why a third argument was rejected before).
+        // main.js's drainEvents is what actually opens the panel.
+        state.events.push({ type: 'pauseRequested' });
+        return;
+      }
       handlePowerSlot(point);
       return;
     }
@@ -161,6 +176,7 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerMove(evt) {
+    if (state.paused) return;
     const point = toCanvasPoint(evt);
     if (draggingMagnet) {
       setMagnetColumn(state, columnAt(point));
@@ -212,6 +228,20 @@ export function attachInput(canvas, state) {
   // power-up, an open panel -- cannot coexist: one requires a run in
   // progress, the other requires the overlay that only shows when no run is.
   function onKeyDown(evt) {
+    // 9.3: while paused, Escape belongs entirely to the pause panel's own
+    // listener (js/shop.js's renderPausePanel) -- closing the panel, not
+    // cancelling an armed power-up, takes priority. Simplest way to
+    // guarantee that priority is for this handler to do nothing at all
+    // while paused, Escape included; every other key is meaningless mid-
+    // freeze anyway (nothing is ticking to steer).
+    // 9.3: while paused, Escape belongs entirely to the pause panel's own
+    // listener (js/shop.js's renderPausePanel) -- closing the panel, not
+    // cancelling an armed power-up, takes priority. Simplest way to
+    // guarantee that priority is for this handler to do nothing at all
+    // while paused, Escape included; every other key is meaningless mid-
+    // freeze anyway (nothing is ticking to steer).
+    if (state.paused) return;
+
     if (evt.key === 'Escape') {
       if (state.removerArmed) armRemover(state, false);
       state.armPreviewCell = null;

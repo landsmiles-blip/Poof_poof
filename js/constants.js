@@ -195,6 +195,11 @@ export const DEFAULT_SKIN_ID = 'classic';
 // unchanged; the three new ones unlock on the same milestones as the skins.
 // `icon` names a vector drawn in icons.js -- no image files, matching how the
 // fruit shapes are done.
+//
+// `desc` must describe the power-up's ACTUAL current behaviour. A redesign
+// that changes what a power-up does has to update this in the SAME commit --
+// found stale once already (9.8: the Magnet's copy still described a
+// design two redesigns gone). Copy that lies is worse than no copy.
 export const POWERUPS = [
   {
     id: 'slowDrop', name: 'Slow Drop', cost: 30, unlockScore: 0, icon: 'slowDrop',
@@ -213,7 +218,7 @@ export const POWERUPS = [
   },
   {
     id: 'magnet', name: 'Magnet', cost: 40, unlockScore: MILESTONE_SCORES[1], icon: 'magnet',
-    desc: 'Briefly draws matching fruit toward the one you are holding.',
+    desc: 'Parks on a column. Falling fruit curves toward it as it drops.',
     usage: 'activate',
   },
   {
@@ -232,20 +237,35 @@ export const POWERUPS = [
 export const POWERUP_COSTS = Object.fromEntries(POWERUPS.map((p) => [p.id, p.cost]));
 
 // --- Magnet --------------------------------------------------------------
-// Grid-coherent pull: while active, the exposed (top-of-column) fruit matching
-// the held fruit's tier slides ONE column closer, one step at a time. It never
-// teleports fruit into a merge and never touches buried fruit.
-export const MAGNET_STEP_SEC = 0.45;
+// 9.2 redesign: the companion never touches settled fruit any more (that was
+// the direct cause of a board-corruption bug -- a fruit left floating over a
+// hole -- and it fought the player's own built stack besides). It now curves
+// the CURRENTLY FALLING fruit toward its column instead. See
+// js/physics.js's magnetPullFor/stepMagnet for the mechanics.
+//
+// Starting points, tuned by feel like the difficulty ramp's own constants,
+// not derived from simulation.
+//
+// 9.6: a hard range cutoff, not just a gentler taper at long distance -- a
+// magnet parked anywhere on the board must not influence every drop
+// regardless of where the player is aiming. ~2.5 columns: close enough to
+// matter for a fruit falling near it, far enough to feel like a real zone
+// rather than a single column.
+export const MAGNET_PULL_RANGE_PX = CELL * 2.5;
+// Drift speed at zero distance, easing to zero at MAGNET_PULL_RANGE_PX.
+// Crossing one full CELL at maximum strength takes CELL / this value, a bit
+// under a second -- a curve a player can see and steer against, not a snap.
+export const MAGNET_PULL_PX_PER_SEC = 90;
 
 // 8.3: stop treating it as a consumable that ticks down invisibly -- it
 // becomes a thing on the board, ridden along a rail across the top of the
 // play area and dragged to whichever column it should pull toward, with its
 // own energy instead of a fixed timer. "Always present, never simply spent":
-// energy drains only while it is actually pulling a matching fruit, and
-// regenerates whenever it is idle (no match in reach, or nothing currently
-// falling to match against) -- a patient player who is not constantly
-// finding a match can keep it out far longer than one spamming it into
-// every column, rather than a hard countdown that ends regardless of use.
+// energy drains only while it is actually pulling the falling fruit, and
+// regenerates whenever it is idle (out of range, or nothing currently
+// falling) -- a patient player who is not constantly using it can keep it
+// out far longer than one leaning on it every drop, rather than a hard
+// countdown that ends regardless of use.
 export const MAGNET_ENERGY_MAX = 100;
 export const MAGNET_DRAIN_PER_SEC = 12.5; // empties in 8s of continuous pulling
 export const MAGNET_REGEN_PER_SEC = 25; // refills in 4s of continuous idling
@@ -254,14 +274,6 @@ export const MAGNET_REGEN_PER_SEC = 25; // refills in 4s of continuous idling
 // reuses DRAG_LERP's own smoothing feel (see js/physics.js's setDragTarget)
 // so the two draggable things in the game move consistently.
 export const MAGNET_RAIL_HEIGHT = 22;
-// 7.3: a magnet-moved fruit used to snap a full 64px cell between two frames,
-// which read as a rendering glitch rather than attraction -- the grid stays
-// authoritative (this never changes stepMagnet's actual mechanics), only the
-// DRAW position eases from the old column to the new one, the same way
-// squash already lags the grid for a merge pop. Comfortably shorter than
-// MAGNET_STEP_SEC so one slide always finishes before the same fruit could
-// plausibly be picked up again.
-export const MAGNET_SLIDE_DURATION_SEC = 0.22;
 
 // 7.3: bomb footprint + detonation ring, remover crosshair, rainbow spin --
 // all drawn in js/render.js, on top of the board so arming or activating a
@@ -428,6 +440,20 @@ export const POWER_SLOT = { y: 80, size: 26, gap: 8, x0: 10 };
 export function powerSlotRect(index) {
   return {
     x: POWER_SLOT.x0 + index * (POWER_SLOT.size + POWER_SLOT.gap),
+    y: POWER_SLOT.y,
+    w: POWER_SLOT.size,
+    h: POWER_SLOT.size,
+  };
+}
+
+// 9.3: the pause control. Same size and vertical band as the power-up chips
+// (POWER_SLOT.y), right-aligned instead of left -- the whole y:80-106 strip
+// on the right side of the HUD is otherwise empty (the chips occupy the
+// left, "Next" and its preview fruit sit well above at y:6-68), verified
+// against the actual drawHUD layout rather than assumed.
+export function pauseButtonRect() {
+  return {
+    x: CANVAS_WIDTH - POWER_SLOT.x0 - POWER_SLOT.size,
     y: POWER_SLOT.y,
     w: POWER_SLOT.size,
     h: POWER_SLOT.size,

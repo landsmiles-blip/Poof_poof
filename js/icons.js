@@ -227,6 +227,16 @@ ICONS.back = (ctx, x, y, s, color) => {
   ctx.stroke();
 };
 
+// Two vertical bars: the universal pause glyph. 9.3's in-HUD pause control.
+ICONS.pause = (ctx, x, y, s, color) => {
+  const u = s / 2;
+  withStyle(ctx, color, s * 0.1);
+  const barW = u * 0.42;
+  const barH = u * 1.3;
+  ctx.fillRect(x - u * 0.55, y - barH / 2, barW, barH);
+  ctx.fillRect(x + u * 0.13, y - barH / 2, barW, barH);
+};
+
 export function drawIcon(ctx, name, x, y, size, color = '#3a2b20') {
   const fn = ICONS[name];
   if (!fn) return false;

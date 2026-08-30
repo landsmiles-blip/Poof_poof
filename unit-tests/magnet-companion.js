@@ -1,27 +1,21 @@
-// Regression tests for 8.3: the magnet becomes a companion with its own
-// energy instead of a fixed timer -- "always present, never simply spent".
-// Energy drains only while actively pulling a matching fruit and regenerates
-// whenever idle; the companion auto-retracts only once energy actually
-// reaches zero, not on a countdown independent of use.
+// Regression tests for 8.3's companion energy model, carried over by 9.2's
+// redesign of what "pulling" actually means: energy drains only while
+// actively curving the falling fruit toward the magnet's column, and
+// regenerates whenever idle -- no falling fruit, or one already out of range
+// or already player-steered. The companion auto-retracts only once energy
+// actually reaches zero, not on a countdown independent of use.
 import assert from 'node:assert/strict';
-import {
-  COLS, CELL, MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_REGEN_PER_SEC, MAGNET_STEP_SEC,
-} from '../js/constants.js';
+import { COLS, CELL, MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_REGEN_PER_SEC, MAGNET_PULL_RANGE_PX } from '../js/constants.js';
 import { stepMagnet, setMagnetColumn } from '../js/physics.js';
-
-function emptyGrid(rows = 3) {
-  return Array.from({ length: rows }, () => new Array(COLS).fill(null));
-}
 
 function baseState(overrides = {}) {
   return {
-    grid: emptyGrid(),
+    grid: [[null, null, null, null, null, null]],
     stackHeight: new Array(COLS).fill(0),
     magnetActive: true,
     magnetEnergy: MAGNET_ENERGY_MAX,
     magnetCol: 3,
     magnetX: 3 * CELL + CELL / 2,
-    magnetStepTimer: MAGNET_STEP_SEC,
     active: null,
     score: 0,
     events: [],
@@ -33,6 +27,12 @@ function baseState(overrides = {}) {
   };
 }
 
+function activeAtX(targetX) {
+  return { tier: 0, col: 0, x: targetX, targetX, y: 0, playerSteered: false };
+}
+
+const magnetCenterX = 3 * CELL + CELL / 2;
+
 // --- Idle regenerates, at the documented rate -------------------------------
 {
   const state = baseState({ magnetEnergy: 10, active: null }); // nothing falling -> idle by construction
@@ -43,18 +43,23 @@ function baseState(overrides = {}) {
     `idle energy should regenerate at MAGNET_REGEN_PER_SEC (expected ${expected}, got ${state.magnetEnergy})`);
 }
 
-// --- Idle even WITH a held fruit, if nothing matches it ---------------------
+// --- Idle even WITH a held fruit, if it is out of the magnet's range --------
 {
-  const grid = emptyGrid();
-  grid[2][0] = 5; // present, but does not match the held tier below
   const state = baseState({
-    grid,
-    stackHeight: [1, 0, 0, 0, 0, 0],
     magnetEnergy: 10,
-    active: { tier: 0, col: 3 },
+    active: activeAtX(magnetCenterX - MAGNET_PULL_RANGE_PX - 20),
   });
   stepMagnet(state, 0.1);
-  assert.ok(state.magnetEnergy > 10, 'a held fruit with no matching exposed fruit anywhere is still idle -- energy should regenerate, not drain');
+  assert.ok(state.magnetEnergy > 10, 'a held fruit outside range is still idle -- energy should regenerate, not drain');
+}
+
+// --- Idle once the player has steered the falling fruit ---------------------
+{
+  const active = activeAtX(magnetCenterX - 50);
+  active.playerSteered = true;
+  const state = baseState({ magnetEnergy: 10, active });
+  stepMagnet(state, 0.1);
+  assert.ok(state.magnetEnergy > 10, 'a player-steered fruit is not being pulled -- energy should regenerate, not drain');
 }
 
 // --- Energy never regenerates past the cap ----------------------------------
@@ -66,13 +71,9 @@ function baseState(overrides = {}) {
 
 // --- Draining to zero retracts the companion --------------------------------
 {
-  const grid = emptyGrid();
-  grid[2][2] = 0; // matches the held tier, so this is a real, continuous pull
   const state = baseState({
-    grid,
-    stackHeight: [0, 0, 1, 0, 0, 0],
     magnetEnergy: MAGNET_DRAIN_PER_SEC * 0.05, // just barely enough for one more small tick
-    active: { tier: 0, col: 3 },
+    active: activeAtX(magnetCenterX - 50), // in range -> a real, continuous pull
   });
   stepMagnet(state, 1); // a full second of continuous pulling -- far more than remains
   assert.equal(state.magnetEnergy, 0, 'energy must clamp at zero, never go negative');
@@ -100,4 +101,4 @@ function baseState(overrides = {}) {
     'after one 16ms tick the drawn position should have moved partway toward the new column, not landed on it instantly');
 }
 
-console.log('magnet-companion: energy drains only while actually pulling, regenerates (capped) while idle, retracts at zero, setMagnetColumn clamps, and the puck tweens rather than jumping');
+console.log('magnet-companion: energy drains only while actually pulling the falling fruit, regenerates (capped) while idle -- including out-of-range or player-steered -- retracts at zero, setMagnetColumn clamps, and the puck tweens rather than jumping');
