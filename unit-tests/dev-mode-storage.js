@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import * as platform from '../js/platform.js';
 import {
   devModeEnabled, createInitialState, toSaveBlob, startRun, endRun, buyPowerUp,
-  activateMagnet, plantBomb, consumeRemover, selectSkin,
+  armSwap, plantBomb, consumeRemover, selectSkin,
 } from '../js/state.js';
 
 function makeFakeLocalStorage(seed) {
@@ -30,7 +30,7 @@ const realSave = {
   v: 1,
   highScore: 500,
   coins: 20,
-  inventory: { slowDrop: 0, remover: 1, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0 },
+  inventory: { slowDrop: 0, remover: 1, extraRow: 0, swap: 0, bomb: 0, rainbow: 0 },
   unlockedSkins: ['classic'],
   selectedSkin: 'classic',
   musicOn: true,
@@ -59,7 +59,7 @@ try {
   // persisted exactly the way main.js's persist()/persistNow() would.
   startRun(state, {});
   buyPowerUp(state, 'bomb', 0);
-  activateMagnet(state);
+  armSwap(state, true);
   plantBomb(state);
   consumeRemover(state);
   selectSkin(state, 'classic');

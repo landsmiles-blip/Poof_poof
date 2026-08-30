@@ -5,8 +5,6 @@ import {
   COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
-  MAGNET_ENERGY_MAX, MAGNET_DRAIN_PER_SEC, MAGNET_REGEN_PER_SEC,
-  MAGNET_PULL_RANGE_PX, MAGNET_PULL_PX_PER_SEC,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter,
@@ -89,14 +87,6 @@ export function spawnFruit(state) {
     x: startCol * CELL + CELL / 2,
     targetX: startCol * CELL + CELL / 2,
     y: -tierDef(tier).radius,
-    // 9.2: once the player has steered THIS fruit (a drag or a keyboard
-    // nudge -- see setDragTarget, the single place both go through), the
-    // magnet backs off it entirely for the rest of its fall. "Dragging
-    // always overrides. The magnet assists aim; it never takes control" --
-    // a permanent hand-off per drop, not a moment-to-moment tug of war that
-    // could still yank the fruit sideways in the instant right after a
-    // release. Resets to false for free on every new spawn.
-    playerSteered: false,
   };
   return { blocked: false };
 }
@@ -106,7 +96,6 @@ export function setDragTarget(state, pixelX) {
   const radius = tierDef(state.active.tier).radius;
   const clamped = Math.min(BOARD_WIDTH - radius, Math.max(radius, pixelX));
   state.active.targetX = clamped;
-  state.active.playerSteered = true;
 }
 
 // Advances the falling fruit by dt seconds. Returns true if the fruit landed this tick.
@@ -151,18 +140,14 @@ export function hardDrop(state) {
   return true;
 }
 
-// Pre-existing bug surfaced by 9.5's board-integrity stress test, unrelated
-// to the magnet itself: only the SPAWN column governs isGameOver, so a
-// non-spawn column can already be completely full while play continues
-// normally, and dragging (or, since 9.2, the magnet pulling) a falling fruit
-// over that column crashed lockFruit outright -- landingRow going negative,
-// state.grid[-1] being undefined. Fixed at the root, here, rather than at
-// each landing call site: a full column is simply never a valid answer,
-// redirected to the nearest column (checked left/right alternately, outward)
-// that still has room. Both stepPhysics and hardDrop call this, and the
-// magnet's own pull needs no separate awareness of full columns at all --
-// it only ever nudges targetX, and this is what turns that into an actual
-// landing column.
+// Pre-existing bug surfaced by 9.5's board-integrity stress test: only the
+// SPAWN column governs isGameOver, so a non-spawn column can already be
+// completely full while play continues normally, and dragging a falling
+// fruit over that column crashed lockFruit outright -- landingRow going
+// negative, state.grid[-1] being undefined. Fixed at the root, here, rather
+// than at each landing call site: a full column is simply never a valid
+// answer, redirected to the nearest column (checked left/right alternately,
+// outward) that still has room. Both stepPhysics and hardDrop call this.
 function columnForX(state, x) {
   const col = Math.min(COLS - 1, Math.max(0, Math.floor(x / CELL)));
   const rows = effectiveRows(state);
@@ -356,88 +341,37 @@ export function detonateBomb(state, row, col) {
   return cleared;
 }
 
-// Magnet (9.2 redesign): it never touches settled fruit any more. The old
-// design slid the exposed top-of-column fruit toward the companion's column,
-// which read as "moving things I already placed" -- it fought the player's
-// built stack instead of serving their aim, and it was the direct cause of a
-// board-corruption bug: when one column was both a move's source and another
-// move's destination in the SAME step, a fruit could be left floating over a
-// hole the settle pass hadn't caught up to yet. Deleted entirely, not fixed
-// in place: stepMagnet's grid mutation, its settleColumns call, and the
-// slide-tween effect that existed only to hide that mutation's jump
-// (js/effects.js's spawnMagnetSlides/magnetSlideOffsetAt, now gone too).
+// Swap (10.1): trades two adjacent, already-settled fruit. Replaces the
+// Magnet entirely -- the Magnet did what dragging already does (help a fruit
+// reach a chosen column); this does the one thing dragging fundamentally
+// cannot: act on the board once fruit has landed.
 //
-// New design: the companion never leaves its rail, but now it influences the
-// CURRENTLY FALLING fruit instead of the board -- see magnetPullFor. It
-// never resolves a merge itself (same invariant as before: a compliance
-// review already caught one version of this power-up doing that), because it
-// only ever nudges state.active.targetX, and a merge still only ever happens
-// through the normal lockFruit -> resolveMerges path once the player's own
-// drop lands.
-
-// Moves the companion's target column (8.3) -- called continuously while the
-// player drags it along the rail, the same shape as setDragTarget above.
-export function setMagnetColumn(state, col) {
-  state.magnetCol = Math.min(COLS - 1, Math.max(0, Math.round(col)));
-}
-
-// Read-only: how strongly, and in which direction, the magnet is currently
-// pulling the given falling fruit toward its column -- null when there is
-// nothing to pull (out of range, or the player has already steered this
-// fruit). Shared by stepMagnet's own tick and by render.js, which calls this
-// every frame to draw the pull arc, so the visual and the actual physics can
-// never show different answers.
+// Rejects everything that could break an invariant, bomb check FIRST per the
+// brief: BOMB_TIER is a grid sentinel like the rainbow (see pairTier's own
+// LANDMINE comment for the same danger family), and swapping it would move a
+// live fuse somewhere the player did not plant it. Column heights are then
+// preserved exactly no matter what -- two occupied cells trade tiers,
+// nothing is ever cleared or created, so this cannot leave a hole beneath a
+// fruit the way the old Magnet design once did. The invariant holds by
+// construction, not by care, and there is no per-frame behaviour at all.
 //
-// distance is measured against active.targetX, not active.x -- the same
-// "commanded position, not the smoothed visual follower" distinction
-// setDragTarget and keyboard steering already respect (both write targetX
-// only). Measuring against x instead would let a pull computed this tick
-// disagree with whatever the PREVIOUS tick's nudge already committed to.
-//
-// 9.6: MAGNET_PULL_RANGE_PX is a hard cutoff, not just a gentler taper -- a
-// magnet parked anywhere on the board must not influence every single drop
-// regardless of where the player is aiming. Strength then falls off
-// linearly inside that range, so a fruit far from the magnet (but still in
-// range) gets a nudge, not a yank.
-export function magnetPullFor(state, active) {
-  if (!active || active.playerSteered) return null;
-  const magnetCenterX = state.magnetCol * CELL + CELL / 2;
-  const dx = magnetCenterX - active.targetX;
-  const distance = Math.abs(dx);
-  if (distance === 0 || distance > MAGNET_PULL_RANGE_PX) return null;
-  return { dx, distance, strength: 1 - distance / MAGNET_PULL_RANGE_PX };
-}
+// Combo: a swap-caused merge feeds the combo streak normally, unlike a
+// Bomb's collapse (see suppressCombo in detonateBomb/mergeCells). The player
+// found and executed this merge themselves -- that is skill, the same
+// reasoning phase 1.2 already established for the old Magnet's own (very
+// different) merges. Deliberate asymmetry -- do not wrap this in
+// suppressCombo.
+export function swapFruits(state, r1, c1, r2, c2) {
+  const tierA = state.grid[r1][c1];
+  const tierB = state.grid[r2][c2];
+  if (tierA === BOMB_TIER || tierB === BOMB_TIER) return false;
+  if (tierA === null || tierB === null) return false;
+  if (Math.abs(r1 - r2) + Math.abs(c1 - c2) !== 1) return false;
 
-export function stepMagnet(state, dt) {
-  if (!state.magnetActive) return;
-
-  // The puck's DRAWN position eases toward wherever it was last dragged --
-  // magnetCol (the logical, authoritative column) never itself moves except
-  // by an explicit setMagnetColumn call.
-  const targetX = state.magnetCol * CELL + CELL / 2;
-  state.magnetX += (targetX - state.magnetX) * Math.min(1, DRAG_LERP * (dt * 60));
-
-  // 8.3's energy-not-a-fixed-timer design carries over unchanged: "pulling"
-  // now means there is a falling fruit within range and not yet steered by
-  // the player, instead of a matching exposed grid fruit -- the condition
-  // changed, the drain/regen mechanics did not.
-  const pull = state.active ? magnetPullFor(state, state.active) : null;
-  if (pull) {
-    state.magnetEnergy = Math.max(0, state.magnetEnergy - MAGNET_DRAIN_PER_SEC * dt);
-    // A curve, not a snap: this nudges targetX a bounded amount per tick
-    // (scaled by dt and the range falloff) rather than relocating it, so the
-    // falling fruit's existing x-toward-targetX lerp (stepPhysics) is what
-    // actually draws the curve. Clamped to never overshoot past the magnet's
-    // own centre in one tick, so it settles rather than oscillating past it.
-    const step = pull.strength * MAGNET_PULL_PX_PER_SEC * dt;
-    state.active.targetX += step >= pull.distance ? pull.dx : Math.sign(pull.dx) * step;
-  } else {
-    state.magnetEnergy = Math.min(MAGNET_ENERGY_MAX, state.magnetEnergy + MAGNET_REGEN_PER_SEC * dt);
-  }
-
-  if (state.magnetEnergy <= 0) {
-    state.magnetActive = false;
-  }
+  state.grid[r1][c1] = tierB;
+  state.grid[r2][c2] = tierA;
+  resolveMerges(state);
+  return true;
 }
 
 export function isGameOver(state) {

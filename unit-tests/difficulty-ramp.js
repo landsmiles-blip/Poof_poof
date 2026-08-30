@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_CAP_MULTIPLIER,
-  GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
+  GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP, ROWS, CELL, TIERS,
 } from '../js/constants.js';
 import {
   gravityRampMultiplier, currentGravityPxPerSec, comboWindowSecFor, startRun, createInitialState,
@@ -39,17 +39,47 @@ import {
 // explicitly (0 through 150, not a range derived from the constants) is the
 // point: this must keep catching a regression even if DROPS_TO_CAP itself
 // changes again later.
+//
+// 10.2 LANDMINE: this used to hardcode the fall-distance formula's inputs as
+// bare numbers (7, 64, 15) -- exactly the kind of hardcoded board height the
+// phase brief warned would silently stop tracking ROWS the moment it
+// changed. Reading the live constants instead means this keeps meaning the
+// same thing (an INDEPENDENT re-derivation, not a call to the
+// implementation's own emptyBoardFallSec) regardless of what ROWS becomes
+// later -- independence here is about not calling the function under test,
+// not about avoiding the constants it's built from.
+function independentFallSec(gravityPxPerSec, rows) {
+  return ((rows - 1) * CELL + CELL / 2 + TIERS[0].radius) / gravityPxPerSec;
+}
+
 {
   for (let drop = 0; drop <= 150; drop += 1) {
     const state = { spawnIndex: drop };
     const gravity = currentGravityPxPerSec(state);
     const window = comboWindowSecFor(state);
-    // Same distance formula the window itself is derived from, computed
-    // independently here so the test can't pass merely by mirroring the
-    // implementation's own arithmetic back at itself.
-    const fallSec = ((7 - 1) * 64 + 64 / 2 + 15) / gravity;
+    const fallSec = independentFallSec(gravity, ROWS);
     assert.ok(window > fallSec, `drop ${drop}: window (${window.toFixed(3)}) must be longer than one empty-board fall (${fallSec.toFixed(3)})`);
     assert.ok(window < 2 * fallSec, `drop ${drop}: window (${window.toFixed(3)}) must be shorter than two empty-board falls (${(2 * fallSec).toFixed(3)})`);
+  }
+}
+
+// --- The SAME invariant, with Extra Row active (board is ROWS+1 tall) ------
+// The actual bug this landmine check found: comboWindowSecFor used to read
+// the ROWS constant directly instead of the board's live height, so an
+// Extra Row run's genuinely taller (and thus longer) empty-board fall was
+// silently measured against the SHORTER base-board window -- undermining
+// the exact invariant this whole file exists to protect, only in the one
+// mode nothing here had ever swept.
+{
+  for (let drop = 0; drop <= 150; drop += 10) {
+    const state = { spawnIndex: drop, extraRowActive: true };
+    const gravity = currentGravityPxPerSec(state);
+    const window = comboWindowSecFor(state);
+    const fallSec = independentFallSec(gravity, ROWS + 1);
+    assert.ok(window > fallSec,
+      `Extra Row, drop ${drop}: window (${window.toFixed(3)}) must be longer than one empty-board fall (${fallSec.toFixed(3)})`);
+    assert.ok(window < 2 * fallSec,
+      `Extra Row, drop ${drop}: window (${window.toFixed(3)}) must be shorter than two empty-board falls (${(2 * fallSec).toFixed(3)})`);
   }
 }
 

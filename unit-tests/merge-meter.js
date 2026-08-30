@@ -7,7 +7,7 @@ import { MERGE_METER_MAX, POWERUPS } from '../js/constants.js';
 import { createInitialState, startRun, endRun, canUsePowerUp } from '../js/state.js';
 import { resolveMerges } from '../js/physics.js';
 
-const HUD_IDS = ['remover', 'magnet', 'bomb']; // usable mid-run -- see hudPowerUps()
+const HUD_IDS = ['remover', 'swap', 'bomb']; // usable mid-run -- see hudPowerUps()
 
 function itemFor(id) {
   return POWERUPS.find((p) => p.id === id);
@@ -40,7 +40,7 @@ function forceMerges(state, count) {
   // "usable" below can only be explained by the earned charge, not stock
   // that was already there.
   state.inventory.remover = 0;
-  state.inventory.magnet = 0;
+  state.inventory.swap = 0;
   state.inventory.bomb = 0;
   assert.equal(state.mergeMeter, 0, 'a fresh run should start with an empty meter');
 
@@ -60,7 +60,7 @@ function forceMerges(state, count) {
 {
   const state = createInitialState(null);
   state.highScore = 8000;
-  state.inventory = { slowDrop: 2, remover: 1, extraRow: 0, magnet: 3, bomb: 0, rainbow: 1 };
+  state.inventory = { slowDrop: 2, remover: 1, extraRow: 0, swap: 3, bomb: 0, rainbow: 1 };
   const before = JSON.stringify(state.inventory);
   startRun(state, {});
 
@@ -80,12 +80,12 @@ function forceMerges(state, count) {
 // --- A locked power-up is never granted -------------------------------------
 {
   const state = createInitialState(null);
-  state.highScore = 0; // magnet (1000) and bomb (3000) are locked; only remover (0) is not
+  state.highScore = 0; // swap (1000) and bomb (3000) are locked; only remover (0) is not
   startRun(state, {});
 
   forceMerges(state, 100); // many grants over the course of this loop
 
-  assert.equal(state.earnedCharges.magnet, 0, 'a locked power-up (magnet) must never be granted');
+  assert.equal(state.earnedCharges.swap, 0, 'a locked power-up (swap) must never be granted');
   assert.equal(state.earnedCharges.bomb, 0, 'a locked power-up (bomb) must never be granted');
   assert.ok(state.earnedCharges.remover > 0, 'fixture check: something must have been granted, and remover is the only eligible one');
 }

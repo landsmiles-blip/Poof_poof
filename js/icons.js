@@ -64,41 +64,36 @@ ICONS.extraRow = (ctx, x, y, s, color) => {
   ctx.stroke();
 };
 
-// Classic horseshoe magnet: one thick U, drawn entirely in the passed colour.
-//
-// An earlier version marked the pole tips in hardcoded red/white. That reads
-// on a neutral chip but vanishes the moment the slot is drawn on the theme
-// accent (which is itself red-ish), so the whole icon must take its colour
-// from the caller. The tips are distinguished by a gap instead of a hue.
-ICONS.magnet = (ctx, x, y, s, color) => {
+// Two opposing arrows -- the universal "exchange" glyph. 10.1.
+ICONS.swap = (ctx, x, y, s, color) => {
   const u = s / 2;
-  const r = u * 0.52;
-  const armW = u * 0.4;
-  withStyle(ctx, color, armW);
-  ctx.lineWidth = armW;
-  ctx.lineCap = 'butt';
+  withStyle(ctx, color, s * 0.11);
+  ctx.lineCap = 'round';
 
-  // Arch across the top.
+  // Top arrow: shaft pointing right, arrowhead at the right end.
+  const topY = y - u * 0.32;
   ctx.beginPath();
-  ctx.arc(x, y - u * 0.12, r, Math.PI, 0);
+  ctx.moveTo(x - u * 0.62, topY);
+  ctx.lineTo(x + u * 0.5, topY);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x + u * 0.5, topY);
+  ctx.lineTo(x + u * 0.22, topY - u * 0.28);
+  ctx.moveTo(x + u * 0.5, topY);
+  ctx.lineTo(x + u * 0.22, topY + u * 0.28);
   ctx.stroke();
 
-  // Legs, stopping short of the baseline to leave open poles.
+  // Bottom arrow: shaft pointing left, mirrored.
+  const botY = y + u * 0.32;
   ctx.beginPath();
-  ctx.moveTo(x - r, y - u * 0.12);
-  ctx.lineTo(x - r, y + u * 0.46);
-  ctx.moveTo(x + r, y - u * 0.12);
-  ctx.lineTo(x + r, y + u * 0.46);
+  ctx.moveTo(x + u * 0.62, botY);
+  ctx.lineTo(x - u * 0.5, botY);
   ctx.stroke();
-
-  // Pole faces: short thick caps set off by a gap, so the "open ends" of the
-  // horseshoe read without relying on a second colour.
-  ctx.lineWidth = armW * 0.9;
   ctx.beginPath();
-  ctx.moveTo(x - r, y + u * 0.66);
-  ctx.lineTo(x - r, y + u * 0.82);
-  ctx.moveTo(x + r, y + u * 0.66);
-  ctx.lineTo(x + r, y + u * 0.82);
+  ctx.moveTo(x - u * 0.5, botY);
+  ctx.lineTo(x - u * 0.22, botY - u * 0.28);
+  ctx.moveTo(x - u * 0.5, botY);
+  ctx.lineTo(x - u * 0.22, botY + u * 0.28);
   ctx.stroke();
 };
 

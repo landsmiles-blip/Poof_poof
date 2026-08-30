@@ -4,11 +4,11 @@
 // (and, since phase 3.4, Haptics) toggles the requirements do permit.
 
 import {
-  CELL, HUD_HEIGHT, COLS, powerSlotRect, pauseButtonRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT,
+  CELL, HUD_HEIGHT, COLS, powerSlotRect, pauseButtonRect, CANVAS_WIDTH,
 } from './constants.js';
-import { removeFruitAt, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
+import { removeFruitAt, setDragTarget, hardDrop, swapFruits } from './physics.js';
 import {
-  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb,
+  hudPowerUps, canUsePowerUp, armRemover, consumeRemover, plantBomb, armSwap, consumeSwap,
 } from './state.js';
 import { unlockAudio, playUiTick } from './audio.js';
 
@@ -19,7 +19,6 @@ function inRect(point, rect) {
 
 export function attachInput(canvas, state) {
   let dragging = false;
-  let draggingMagnet = false;
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
   //
@@ -61,16 +60,11 @@ export function attachInput(canvas, state) {
     return inBounds ? { row, col } : null;
   }
 
-  // 8.3: the magnet companion's rail sits in a thin strip at the very top of
-  // the board, only reachable while it is actually out. Narrower and more
-  // specific than the bomb/remover aiming area below it, so it takes
-  // priority over those if both happen to be armed/active at once.
-  function inRailZone(point) {
-    return state.magnetActive && point.y > HUD_HEIGHT && point.y <= HUD_HEIGHT + MAGNET_RAIL_HEIGHT;
-  }
-
-  function columnAt(point) {
-    return Math.floor(point.x / CELL);
+  // Orthogonal adjacency only -- the same rule merges already use. A cell is
+  // adjacent to itself at distance 0, which this deliberately excludes (a
+  // tap on the already-selected cell is handled as "deselect", not "swap").
+  function isAdjacent(a, b) {
+    return Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
   }
 
   // Returns true if the tap was consumed by a power-up slot.
@@ -90,16 +84,19 @@ export function attachInput(canvas, state) {
         state.events.push({ type: 'lockedPowerUp', id: item.id, unlockScore: item.unlockScore || 0 });
         return true;
       }
-      if (item.id === 'magnet') {
-        if (activateMagnet(state)) playUiTick(); // activateMagnet marks state.dirty
-      } else if (item.id === 'bomb') {
+      if (item.id === 'bomb') {
         // 8.4: plants as the next drop instead of arming a tap-target -- see
-        // js/state.js's plantBomb. No-ops (silently, same as activateMagnet
-        // while already active) if one is already in play.
+        // js/state.js's plantBomb. No-ops (silently) if one is already in play.
         if (plantBomb(state)) playUiTick();
       } else if (item.id === 'remover') {
         armRemover(state, !state.removerArmed);
         state.armPreviewCell = null;
+        playUiTick();
+      } else if (item.id === 'swap') {
+        // 10.1: armSwap already clears swapSelectedCell on every toggle, so
+        // tapping the chip while a selection is pending cleanly cancels it,
+        // same as re-tapping the remover's own chip.
+        armSwap(state, !state.swapArmed);
         playUiTick();
       }
       return true;
@@ -155,13 +152,7 @@ export function attachInput(canvas, state) {
       return;
     }
 
-    if (inRailZone(point)) {
-      draggingMagnet = true;
-      setMagnetColumn(state, columnAt(point));
-      return;
-    }
-
-    if (state.removerArmed) {
+    if (state.removerArmed || state.swapArmed) {
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -178,14 +169,11 @@ export function attachInput(canvas, state) {
   function onPointerMove(evt) {
     if (state.paused) return;
     const point = toCanvasPoint(evt);
-    if (draggingMagnet) {
-      setMagnetColumn(state, columnAt(point));
-      return;
-    }
-    if (state.removerArmed) {
+    if (state.removerArmed || state.swapArmed) {
       // Updated on every move so a mouse hovering before it ever clicks also
-      // sees the crosshair, and so a touch that presses the chip and slides
-      // straight onto the board without lifting tracks correctly too.
+      // sees the crosshair/selection, and so a touch that presses the chip
+      // and slides straight onto the board without lifting tracks correctly
+      // too.
       state.armPreviewCell = cellAt(point);
       return;
     }
@@ -194,8 +182,6 @@ export function attachInput(canvas, state) {
   }
 
   function onPointerUp() {
-    draggingMagnet = false;
-
     // armPreviewCell alone decides whether this release commits -- see the
     // long comment above onPointerDown for why an `aiming` flag keyed to
     // where THIS gesture's own pointerdown landed was wrong. It is null
@@ -210,6 +196,39 @@ export function attachInput(canvas, state) {
         playUiTick();
       }
     }
+
+    // 10.1: Swap. cell is wherever the finger was released (same
+    // commit-on-release shape as the remover above), but unlike the remover
+    // this is a TWO-tap tool -- a tap on an empty cell is silently ignored
+    // (nothing to select there), a tap on the already-selected fruit
+    // deselects, a tap on a non-adjacent fruit moves the selection there
+    // instead of failing, and only a tap on an adjacent occupied fruit
+    // actually swaps. swapSelectedCell persists ACROSS separate gestures on
+    // purpose -- the player lifts their finger between the two taps.
+    if (state.swapArmed) {
+      const cell = state.armPreviewCell;
+      state.armPreviewCell = null;
+      if (cell && state.grid[cell.row][cell.col] !== null) {
+        const selected = state.swapSelectedCell;
+        if (!selected) {
+          state.swapSelectedCell = cell;
+          playUiTick();
+        } else if (selected.row === cell.row && selected.col === cell.col) {
+          state.swapSelectedCell = null;
+          playUiTick();
+        } else if (isAdjacent(selected, cell)) {
+          if (swapFruits(state, selected.row, selected.col, cell.row, cell.col)) {
+            consumeSwap(state); // marks state.dirty
+            playUiTick();
+          }
+          state.swapSelectedCell = null;
+        } else {
+          state.swapSelectedCell = cell;
+          playUiTick();
+        }
+      }
+    }
+
     dragging = false;
   }
 
@@ -234,16 +253,11 @@ export function attachInput(canvas, state) {
     // guarantee that priority is for this handler to do nothing at all
     // while paused, Escape included; every other key is meaningless mid-
     // freeze anyway (nothing is ticking to steer).
-    // 9.3: while paused, Escape belongs entirely to the pause panel's own
-    // listener (js/shop.js's renderPausePanel) -- closing the panel, not
-    // cancelling an armed power-up, takes priority. Simplest way to
-    // guarantee that priority is for this handler to do nothing at all
-    // while paused, Escape included; every other key is meaningless mid-
-    // freeze anyway (nothing is ticking to steer).
     if (state.paused) return;
 
     if (evt.key === 'Escape') {
       if (state.removerArmed) armRemover(state, false);
+      if (state.swapArmed) armSwap(state, false);
       state.armPreviewCell = null;
       return;
     }

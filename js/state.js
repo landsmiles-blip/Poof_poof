@@ -5,7 +5,7 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  MAGNET_ENERGY_MAX, RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
+  RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
@@ -40,22 +40,34 @@ export function currentGravityPxPerSec(state) {
 // Time for a fruit to fall the full board height at a given gravity -- the
 // "empty-board fall" the combo-window comment in constants.js refers to.
 // The +TIERS[0].radius term is the same one the pre-existing "Combo
-// multiplier" e2e test used: a fruit's centre travels to ROWS-1 cells plus
+// multiplier" e2e test used: a fruit's centre travels to rows-1 cells plus
 // half a cell plus its own radius before its bottom edge reaches the floor.
-function emptyBoardFallSec(gravityPxPerSec) {
-  const distance = (ROWS - 1) * CELL + CELL / 2 + TIERS[0].radius;
+//
+// 10.2 LANDMINE, found by the phase's own required grep sweep before
+// touching ROWS: this used to read the ROWS *constant* directly instead of
+// effectiveRows(state) -- correct for a normal run, silently wrong for one
+// with Extra Row active, where the board is genuinely ROWS+1 tall. The
+// combo window would then be derived from a fall one row SHORTER than the
+// one actually happening, undermining the exact "window > one real fall"
+// invariant this function exists to guarantee. Takes rows as a parameter
+// (not effectiveRows(state) directly) so this stays a pure function of its
+// inputs, callable from a test with any row count without needing a full
+// state object.
+function emptyBoardFallSec(gravityPxPerSec, rows) {
+  const distance = (rows - 1) * CELL + CELL / 2 + TIERS[0].radius;
   return distance / gravityPxPerSec;
 }
 
 // See the extended COMBO_WINDOW_FALL_MULTIPLIER comment in constants.js: the
 // window must track the CURRENT (ramped) gravity, not a fixed one, or the
-// early, slower part of the ramp falls outside it again.
+// early, slower part of the ramp falls outside it again -- and now also the
+// CURRENT board height, for the same reason (see emptyBoardFallSec above).
 export function comboWindowSecFor(state) {
-  return emptyBoardFallSec(currentGravityPxPerSec(state)) * COMBO_WINDOW_FALL_MULTIPLIER;
+  return emptyBoardFallSec(currentGravityPxPerSec(state), effectiveRows(state)) * COMBO_WINDOW_FALL_MULTIPLIER;
 }
 
 const DEFAULT_INVENTORY = {
-  slowDrop: 0, remover: 0, extraRow: 0, magnet: 0, bomb: 0, rainbow: 0,
+  slowDrop: 0, remover: 0, extraRow: 0, swap: 0, bomb: 0, rainbow: 0,
 };
 
 export const SCREEN = {
@@ -124,12 +136,13 @@ export function createInitialState(save) {
     slowDropActive: false,
     removerArmed: false,
 
-    // Cell the pointer is currently over while the remover is armed (7.3) --
-    // purely a render hint for the crosshair; never persisted. Written
-    // directly by js/input.js, not through a state.js mutator: it carries no
-    // game-state meaning of its own, the same way `dragging` in input.js's
-    // own closure never needed one either. The bomb stopped using this in
-    // 8.4 -- it plants as a falling fruit instead of an armed tap-target.
+    // Cell the pointer is currently over while the remover (or, since 10.1,
+    // Swap) is armed -- purely a render/input hint for whichever gesture is
+    // currently in progress; never persisted. Written directly by
+    // js/input.js, not through a state.js mutator: it carries no game-state
+    // meaning of its own, the same way `dragging` in input.js's own closure
+    // never needed one either. The bomb stopped using this in 8.4 -- it
+    // plants as a falling fruit instead of an armed tap-target.
     armPreviewCell: null,
     // 8.4: true from the moment a bomb is planted until it actually
     // detonates (or is defused early -- see spawnFruit's fuse check),
@@ -138,15 +151,14 @@ export function createInitialState(save) {
     // lockFruit) and counts DOWN, not time, toward zero.
     bombInPlay: false,
     bombFuseDrops: null,
-    magnetActive: false,
-    // 8.3: energy replaces a fixed timer -- drains while pulling, regenerates
-    // while idle (see physics.js's stepMagnet). magnetCol is where the
-    // player has dragged the companion to along its rail; magnetX is the
-    // continuous, lerped DRAW position of the puck riding there (the grid/
-    // logic only ever care about magnetCol, an integer column).
-    magnetEnergy: 0,
-    magnetCol: Math.floor(COLS / 2),
-    magnetX: Math.floor(COLS / 2) * CELL + CELL / 2,
+
+    // 10.1: Swap. armSwap toggles this like armRemover; the first tap on an
+    // occupied cell while armed fills swapSelectedCell (persists ACROSS
+    // separate gestures, unlike armPreviewCell above, which is per-gesture)
+    // and a second tap on an adjacent occupied cell performs the swap.
+    swapArmed: false,
+    swapSelectedCell: null,
+
     rainbowSchedule: [],
     rainbowChargeSpent: false,
     rainbowDelivered: 0,
@@ -158,7 +170,7 @@ export function createInitialState(save) {
     // `inventory`: these never persist and are discarded at endRun -- see
     // the long comment on grantEarnedCharge for why that separation matters.
     mergeMeter: 0,
-    earnedCharges: { remover: 0, magnet: 0, bomb: 0 },
+    earnedCharges: { remover: 0, swap: 0, bomb: 0 },
     chipPulse: null, // { id, t } while a chip is announcing an earned charge
 
     comboCount: 0,
@@ -265,9 +277,9 @@ export function unlockedPowerUps(state) {
 // This deliberately includes ones that are locked or out of stock, rendered
 // greyed. The previous version filtered on `inventory > 0`, which had two bad
 // consequences: a brand-new player saw a completely empty bar and had no way to
-// learn power-ups existed at all, and activating the Magnet -- which decrements
+// learn power-ups existed at all, and planting the Bomb -- which decrements
 // stock to zero -- made its own chip disappear at the instant of use, so its
-// six-second duration ran with no indicator anywhere on screen.
+// fuse countdown ran with no indicator anywhere on screen.
 export function hudPowerUps() {
   return POWERUPS.filter((p) => p.usage === 'tap' || p.usage === 'activate');
 }
@@ -446,10 +458,8 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.removerArmed = false;
   state.bombInPlay = false;
   state.bombFuseDrops = null;
-  state.magnetActive = false;
-  state.magnetEnergy = 0;
-  state.magnetCol = Math.floor(COLS / 2);
-  state.magnetX = state.magnetCol * CELL + CELL / 2;
+  state.swapArmed = false;
+  state.swapSelectedCell = null;
   state.lockedFlash = null;
   state.paused = false;
 
@@ -458,7 +468,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   // also clears these the instant a run ends, and the acceptance test that
   // checks inventory is byte-identical across a run with charges earned.
   state.mergeMeter = 0;
-  state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
+  state.earnedCharges = { remover: 0, swap: 0, bomb: 0 };
   state.chipPulse = null;
 
   state.grid = makeEmptyGrid(effectiveRows(state));
@@ -480,18 +490,18 @@ export function endRun(state, reason) {
   state.screen = SCREEN.GAMEOVER;
   state.gameOverReason = reason;
   state.active = null;
-  state.magnetActive = false;
-  state.magnetEnergy = 0;
   // 8.1: earned charges are run-scoped and must never survive to the next
   // run or leak into anything persisted -- explicit here (not left to the
   // next startRun) so "gone the instant the run ends" is true even before
   // another run begins.
   state.mergeMeter = 0;
-  state.earnedCharges = { remover: 0, magnet: 0, bomb: 0 };
+  state.earnedCharges = { remover: 0, swap: 0, bomb: 0 };
   state.chipPulse = null;
   state.bombInPlay = false;
   state.bombFuseDrops = null;
   state.removerArmed = false;
+  state.swapArmed = false;
+  state.swapSelectedCell = null;
   resetCombo(state);
 
   const previousBest = state.highScore;
@@ -549,19 +559,6 @@ export function addScore(state, points) {
 
 // --- In-run power-up activation -----------------------------------------
 
-// Summons the companion (8.3): starts at full energy, parked over wherever
-// the currently-falling fruit is (a sensible default the player can then
-// drag elsewhere) or the centre column if nothing is falling yet.
-export function activateMagnet(state) {
-  if (state.magnetActive) return false;
-  if (!consumeCharge(state, 'magnet')) return false;
-  state.magnetActive = true;
-  state.magnetEnergy = MAGNET_ENERGY_MAX;
-  state.magnetCol = state.active ? state.active.col : Math.floor(COLS / 2);
-  state.magnetX = state.magnetCol * CELL + CELL / 2;
-  return true;
-}
-
 // 8.1: total spendable stock for one power-up id -- purchased inventory plus
 // whatever this run has earned. Arming and canUsePowerUp both need this same
 // combined figure, so it lives in one place.
@@ -588,9 +585,19 @@ function consumeCharge(state, id) {
   return false;
 }
 
+// Remover and Swap (10.1) are the only two power-ups that both aim at a
+// board cell via armPreviewCell and commit on release -- arming one while
+// the other is already armed would make a single tap resolve as BOTH
+// (remove the cell AND attempt a swap against it) since onPointerUp checks
+// each independently. Arming either one here disarms the other, so only one
+// "aiming mode" can ever be live at a time.
 export function armRemover(state, armed) {
   if (armed && totalCharges(state, 'remover') <= 0) return false;
   state.removerArmed = armed;
+  if (armed) {
+    state.swapArmed = false;
+    state.swapSelectedCell = null;
+  }
   return true;
 }
 
@@ -600,12 +607,34 @@ export function consumeRemover(state) {
   return true;
 }
 
+// 10.1: Swap, same arm/consume shape as the Remover -- including disarming
+// the Remover in turn (see armRemover's own comment on why only one
+// board-aiming tool may ever be armed at once). Arming (and re-arming after
+// a completed swap) never marks state.dirty -- it is transient, not
+// persisted. Clears swapSelectedCell whenever the armed state changes so a
+// stale selection from a previous arm-cycle can never carry over into a new
+// one.
+export function armSwap(state, armed) {
+  if (armed && totalCharges(state, 'swap') <= 0) return false;
+  state.swapArmed = armed;
+  state.swapSelectedCell = null;
+  if (armed) state.removerArmed = false;
+  return true;
+}
+
+export function consumeSwap(state) {
+  if (!consumeCharge(state, 'swap')) return false;
+  state.swapArmed = false;
+  state.swapSelectedCell = null;
+  return true;
+}
+
 // 8.4: plants a bomb as the next thing to drop -- instead of arm-then-tap, it
 // falls and is steered like any other fruit, then detonates on its own where
 // it sits once the fuse (physics.js's spawnFruit/lockFruit) ends. Only one
 // may ever be in play (bombInPlay covers the whole lifecycle: falling,
 // resting, and counting down), so a second tap while one is already out is a
-// no-op, same shape as activateMagnet refusing a second summons.
+// no-op.
 export function plantBomb(state) {
   if (state.bombInPlay) return false;
   if (!consumeCharge(state, 'bomb')) return false;

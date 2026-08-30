@@ -6,14 +6,14 @@
 // alone -- correct at push time -- can describe a cell whose contents move on
 // before the event is drained.
 //
-// Fixture: one column (col 3), fully packed with 7 cells so no unrelated
+// Fixture: one column (col 3), fully packed (ROWS cells) so no unrelated
 // merges are possible in any other column. Two mergeable pairs, arranged so
 // resolving the first (rows 0-1) leaves its result sitting directly above a
-// second pair (rows 3-4) which merges afterward in the same cascade. Closing
-// the gap left by the second merge shifts the first merge's result down by
-// one row -- proving the row recorded on the first event no longer matches
-// where that fruit now sits, while its frozen (x, y) still correctly marks
-// where the merge itself actually happened.
+// second pair (the bottom two rows) which merges afterward in the same
+// cascade. Closing the gap left by the second merge shifts the first merge's
+// result down by one row -- proving the row recorded on the first event no
+// longer matches where that fruit now sits, while its frozen (x, y) still
+// correctly marks where the merge itself actually happened.
 import assert from 'node:assert/strict';
 import { CELL, COLS, ROWS } from '../js/constants.js';
 import { createInitialState } from '../js/state.js';
@@ -21,9 +21,12 @@ import { resolveMerges } from '../js/physics.js';
 
 const state = createInitialState(null);
 const col = 3;
-// [tier0, tier0, tier3, tier0, tier0, tier4, tier5] top to bottom -- distinct
-// filler tiers so nothing merges except the two intended pairs.
-const values = [0, 0, 3, 0, 0, 4, 5];
+// [tier0, tier0, tier3, tier0, tier0] top to bottom (ROWS=5) -- a filler tier
+// between the two pairs so nothing merges except the two intended ones; the
+// second pair sits at the very bottom, so no trailing filler is needed below
+// it (unlike the old 7-row fixture, which padded two more rows there purely
+// to fill the column -- not load-bearing for the mechanic itself).
+const values = [0, 0, 3, 0, 0];
 assert.equal(values.length, ROWS, 'fixture must fill the whole column so no unwanted settling happens beyond what the test expects');
 for (let r = 0; r < ROWS; r++) {
   for (let c = 0; c < COLS; c++) state.grid[r][c] = c === col ? values[r] : null;
