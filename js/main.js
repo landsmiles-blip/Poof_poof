@@ -7,11 +7,11 @@ import {
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
-  triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob,
+  triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob, debugHitEnabled,
 } from './state.js';
 import * as platform from './platform.js';
 import { spawnFruit, stepPhysics, isGameOver, stepMagnet } from './physics.js';
-import { drawFrame, canvasHeightFor } from './render.js';
+import { drawFrame, canvasHeightFor, drawDebugHitOverlay } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver } from './shop.js';
 import {
@@ -38,6 +38,11 @@ const overlay = document.getElementById('overlay');
 // that references `state` is only ever called after that has happened.
 let state;
 const fx = createEffects();
+
+// ?hitdebug=1: see js/state.js's debugHitEnabled and js/render.js's
+// drawDebugHitOverlay. Read once at boot, same as the rest of this module's
+// URL-driven behavior -- it can't change mid-session anyway.
+const DEBUG_HIT = debugHitEnabled();
 
 // The canvas has two sizes that must not be confused:
 //   - the BACKING STORE (canvas.width/height), in device pixels -- sized to
@@ -321,6 +326,7 @@ function loop(now) {
   if (state.screen === SCREEN.PLAYING) {
     update(dt);
     drawFrame(ctx, state, fx);
+    if (DEBUG_HIT) drawDebugHitOverlay(ctx, state);
     applyPageTheme(themeForScore(state.score));
   }
 
