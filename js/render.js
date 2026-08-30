@@ -507,6 +507,68 @@ function drawBoard(ctx, state, fx, theme) {
 // `fuseFraction` (8.4) only means anything for a bomb -- see
 // bombFuseFractionFor, which every call site computes from state so this
 // function itself never needs to know about state.bombFuseDrops directly.
+// ?hitdebug=1 only (js/state.js's debugHitEnabled, js/input.js's
+// recordDebugHit). A real phone reported HUD taps doing nothing while board
+// drags -- which go through the same toCanvasPoint -- work fine; this makes
+// the actual hit boxes and the actual recorded points visible on the device
+// itself instead of guessing from a desktop. Read-only: draws on top of the
+// normal frame, changes nothing it reads.
+export function drawDebugHitOverlay(ctx, state) {
+  if (!state.debugHits || state.debugHits.length === 0) return;
+
+  ctx.save();
+
+  // The real hit boxes handlePowerSlot tests against, bright and unmissable.
+  const items = hudPowerUps();
+  ctx.strokeStyle = '#ff00ff';
+  ctx.lineWidth = 2;
+  items.forEach((item, i) => {
+    const rect = powerSlotRect(i);
+    ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+  });
+
+  // Every recorded tap this run (oldest faintest), at the exact canvas point
+  // toCanvasPoint computed for it.
+  state.debugHits.forEach((hit, i) => {
+    const age = state.debugHits.length - 1 - i;
+    ctx.globalAlpha = Math.max(0.25, 1 - age * 0.15);
+    ctx.strokeStyle = hit.zone === 'HUD' ? '#00ffff' : '#ffff00';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(hit.x - 6, hit.y);
+    ctx.lineTo(hit.x + 6, hit.y);
+    ctx.moveTo(hit.x, hit.y - 6);
+    ctx.lineTo(hit.x, hit.y + 6);
+    ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+
+  // Readout for the most recent tap, in a panel low enough on the board to
+  // never sit under the HUD it's reporting on.
+  const last = state.debugHits[state.debugHits.length - 1];
+  const lines = [
+    `client: (${last.clientX.toFixed(1)}, ${last.clientY.toFixed(1)})`,
+    `canvas: (${last.x.toFixed(1)}, ${last.y.toFixed(1)})  zone: ${last.zone}`,
+    `scaleX: ${last.scaleX.toFixed(3)}  scaleY: ${last.scaleY.toFixed(3)}`,
+    `HUD_HEIGHT: ${last.hudHeight}  consumed: ${last.consumedByPowerSlot === null ? 'n/a' : last.consumedByPowerSlot}`,
+  ];
+  const panelX = 6;
+  const panelY = HUD_HEIGHT + 6;
+  const panelW = BOARD_WIDTH - 12;
+  const lineH = 13;
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+  ctx.fillRect(panelX, panelY, panelW, lineH * lines.length + 8);
+  ctx.font = `10px ${FONT_FAMILY}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#00ff00';
+  lines.forEach((line, i) => {
+    ctx.fillText(line, panelX + 5, panelY + 4 + i * lineH);
+  });
+
+  ctx.restore();
+}
+
 export function drawFruit(ctx, x, y, tier, color, tierIndex, fuseFraction) {
   const fill = color || tier.color;
   if (tier.shape === 'flower') {

@@ -7,9 +7,11 @@ import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT
 import { removeFruitAt, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
 import { canvasHeightFor } from './render.js';
 import {
-  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb,
+  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb, debugHitEnabled,
 } from './state.js';
 import { unlockAudio, playUiTick } from './audio.js';
+
+const DEBUG_HITS_KEPT = 6;
 
 function inRect(point, rect) {
   return point.x >= rect.x && point.x <= rect.x + rect.w
@@ -19,6 +21,7 @@ function inRect(point, rect) {
 export function attachInput(canvas, state) {
   let dragging = false;
   let draggingMagnet = false;
+  const debugHit = debugHitEnabled();
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
   //
@@ -39,6 +42,31 @@ export function attachInput(canvas, state) {
       x: (evt.clientX - rect.left) * scaleX,
       y: (evt.clientY - rect.top) * scaleY,
     };
+  }
+
+  // ?hitdebug=1 only. Records exactly the numbers toCanvasPoint just used, so
+  // js/render.js's overlay can show whether a real device's rect/scale differ
+  // from what Playwright's synthetic touch events see -- the coordinate math
+  // itself isn't touched by any of this, only observed after the fact.
+  function recordDebugHit(evt, point) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = CANVAS_WIDTH / rect.width;
+    const scaleY = canvasHeightFor(state) / rect.height;
+    if (!state.debugHits) state.debugHits = [];
+    const entry = {
+      clientX: evt.clientX,
+      clientY: evt.clientY,
+      x: point.x,
+      y: point.y,
+      scaleX,
+      scaleY,
+      hudHeight: HUD_HEIGHT,
+      zone: point.y <= HUD_HEIGHT ? 'HUD' : 'board',
+      consumedByPowerSlot: null, // filled in by onPointerDown when zone is HUD
+    };
+    state.debugHits.push(entry);
+    while (state.debugHits.length > DEBUG_HITS_KEPT) state.debugHits.shift();
+    return entry;
   }
 
   function cellAt(point) {
@@ -123,9 +151,11 @@ export function attachInput(canvas, state) {
     unlockAudio();
 
     const point = toCanvasPoint(evt);
+    const debugEntry = debugHit ? recordDebugHit(evt, point) : null;
 
     if (point.y <= HUD_HEIGHT) {
-      handlePowerSlot(point);
+      const consumed = handlePowerSlot(point);
+      if (debugEntry) debugEntry.consumedByPowerSlot = consumed;
       return;
     }
 

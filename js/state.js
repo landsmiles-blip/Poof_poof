@@ -74,6 +74,19 @@ export function devModeEnabled() {
   }
 }
 
+// `?hitdebug=1` turns on a temporary diagnostic overlay (js/input.js records
+// each tap, js/render.js draws the power-slot hit boxes and the recorded
+// points) for chasing a real-device report that HUD taps land nowhere while
+// board drags work fine. Same read-only-URL shape as devModeEnabled -- no
+// storage, no game-logic change, so a normal load is unaffected either way.
+export function debugHitEnabled() {
+  try {
+    return new URLSearchParams(window.location.search).get('hitdebug') === '1';
+  } catch {
+    return false;
+  }
+}
+
 // `save` is the blob platform.load() resolved to (or null/undefined for a
 // genuinely fresh player) -- this function never touches storage itself. See
 // toSaveBlob() for the inverse: state -> the shape platform.save() persists.
