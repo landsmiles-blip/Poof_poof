@@ -788,6 +788,141 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // ------------ power-up chips at real screen positions, across viewports ---
+  // A real phone found every HUD tap landing above its actual chip. Root
+  // cause: css/style.css's #game-canvas rect could end up TALLER than the
+  // logical 384-wide aspect on a very tall viewport (max-width binding while
+  // height stayed fixed to its own separate value), and js/input.js's old
+  // scaleY -- derived from rect.height -- no longer matched what the board
+  // actually rendered at. Dragging the falling fruit survived it because
+  // column clamping papers over an x-only error; chip taps had nothing to
+  // paper over the y error.
+  //
+  // The touch-powerups block above never could have caught this: it runs at
+  // exactly this suite's one default viewport, AND its own toPage() helper
+  // computes tap targets with `geom.height / canvasHeight` -- the SAME
+  // formula toCanvasPoint used to interpret them. That is tautological: it
+  // proves the formula agrees with itself, never that either one agrees with
+  // where a chip is actually drawn on screen. This test computes each chip's
+  // expected screen position a different way on purpose -- composing
+  // js/render.js's own drawFrame transform (one scale, from canvas.width
+  // alone, applied uniformly and anchored top-left) with the ACTUALLY
+  // MEASURED element rect and backing-store size -- so it cannot pass merely
+  // by mirroring js/input.js's fixed formula back at itself; it would fail
+  // just as hard if input.js regressed to a height-derived scaleY as it did
+  // against the real bug. It also asserts the element's rect stays on-ratio
+  // in its own right, since js/input.js's fix alone could mask a CSS
+  // regression (wrong box, right taps) without this check ever noticing.
+  {
+    const { context, page } = await freshPage(browser, 'chip-aspect-sweep', { hasTouch: true });
+    await page.goto(`${BASE}/index.html?dev=1`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(200);
+
+    // 9:16 and 9:18 are ordinary phones (controls); 9:20 and 9:22 are the
+    // extreme tall ratios the real report named; 4:3 is landscape, so the
+    // OTHER binding constraint (height, not width) gets exercised too. Widths
+    // climb across the tall ones (not just height) so each produces a
+    // visibly different canvas box in the notes below, rather than several
+    // coincidentally landing on the same numbers.
+    const RATIOS = [
+      ['9:16', 360, 640], ['9:18', 390, 780],
+      ['9:20', 414, 920], ['9:22', 450, 1100],
+      ['4:3', 800, 600],
+    ];
+
+    async function resetPowerState() {
+      await page.evaluate(() => {
+        const s = window.__poofDebugState;
+        s.removerArmed = false;
+        s.magnetActive = false;
+        s.bombInPlay = false;
+        s.bombFuseDrops = null;
+        s.armPreviewCell = null;
+      });
+    }
+
+    let allAspectOk = true;
+    let allChipsOk = true;
+    const notes = [];
+
+    for (const [label, w, h] of RATIOS) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(250);
+
+      const geom = await page.evaluate(async () => {
+        const C = await import('./js/constants.js');
+        const rn = await import('./js/render.js');
+        const rect = document.getElementById('game-canvas').getBoundingClientRect();
+        const canvas = document.getElementById('game-canvas');
+        return {
+          left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+          backingW: canvas.width, backingH: canvas.height,
+          canvasWidth: C.CANVAS_WIDTH,
+          logicalH: rn.canvasHeightFor(window.__poofDebugState),
+        };
+      });
+
+      const expectedRatio = geom.canvasWidth / geom.logicalH;
+      const actualRatio = geom.width / geom.height;
+      const aspectOk = Math.abs(actualRatio - expectedRatio) / expectedRatio < 0.01;
+      if (!aspectOk) allAspectOk = false;
+
+      // Independent derivation -- see the block comment above. Two
+      // separately-tested facts composed here, never js/input.js's own
+      // formula: drawFrame scales x and y by the SAME canvas.width-derived
+      // factor, and the canvas bitmap is then displayed into the CSS box
+      // (rect.width x rect.height is genuinely measured, not assumed).
+      const screenPos = (logicalX, logicalY) => {
+        const deviceX = logicalX * (geom.backingW / geom.canvasWidth);
+        const deviceY = logicalY * (geom.backingW / geom.canvasWidth);
+        return {
+          x: geom.left + deviceX * (geom.width / geom.backingW),
+          y: geom.top + deviceY * (geom.height / geom.backingH),
+        };
+      };
+
+      // hudPowerUps() order is [remover, magnet, bomb] (js/constants.js).
+      const chipChecks = [];
+      for (let i = 0; i < 3; i++) {
+        await resetPowerState();
+        const slot = await page.evaluate(async (idx) => {
+          const C = await import('./js/constants.js');
+          const r = C.powerSlotRect(idx);
+          return { cx: r.x + r.w / 2, cy: r.y + r.h / 2 };
+        }, i);
+        const pos = screenPos(slot.cx, slot.cy);
+
+        if (i === 1 || i === 2) {
+          // Magnet and Bomb both act on the currently falling fruit.
+          await page.evaluate(() => {
+            window.__poofDebugState.active = { tier: 0, col: 3, x: 3 * 64 + 32, targetX: 3 * 64 + 32, y: 100 };
+          });
+        }
+        await page.touchscreen.tap(pos.x, pos.y);
+        await page.waitForTimeout(60);
+
+        const consumed = await page.evaluate(async (idx) => {
+          const C = await import('./js/constants.js');
+          const s = window.__poofDebugState;
+          if (idx === 0) return s.removerArmed === true;
+          if (idx === 1) return s.magnetActive === true;
+          return !!s.active && s.active.tier === C.BOMB_TIER && s.bombInPlay === true;
+        }, i);
+        chipChecks.push(consumed);
+        if (!consumed) allChipsOk = false;
+      }
+
+      notes.push(`${label} ${Math.round(geom.width)}x${Math.round(geom.height)} onRatio=${aspectOk} chips=[${chipChecks.join(',')}]`);
+    }
+
+    const ok = allAspectOk && allChipsOk;
+    record('Power-up chips register a real touch tap at their true screen position, across viewport aspect ratios incl. 9:20/9:22',
+      ok, ok, notes.join('; '));
+    await context.close();
+  }
+
   // ---------------------------------------------------------------- theme
   {
     const { context, page } = await freshPage(browser, 'theme');

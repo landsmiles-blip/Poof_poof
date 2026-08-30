@@ -47,20 +47,41 @@ html, body {
   padding: 12px;
 }
 
-/* The board fills the available height instead of sitting at its intrinsic
-   384px. A canvas is a replaced element: with `width: auto` it resolves to its
-   intrinsic width, and `max-width: 100%` can only ever shrink it -- which is
-   why it stayed postage-stamp sized on a large screen no matter the viewport.
-   Driving `height` from the viewport and letting `aspect-ratio` derive the
-   width scales it up properly. The backing store is scaled to match in
-   main.js, so this magnifies real pixels rather than blurring a small bitmap. */
+/* The board fills the available space instead of sitting at its intrinsic
+   384px, but the element box must always land EXACTLY on the logical aspect
+   ratio -- never taller or wider than that, on any viewport.
+
+   This used to be `height: min(100vh, 1100px)` with `width: auto` and a
+   separate `max-width` clamp, relying on `aspect-ratio` to derive width from
+   height. That breaks the moment `max-width` is the one that actually binds:
+   `aspect-ratio` only recomputes the dimension marked `auto`, and here that
+   was width -- height stayed at its viewport-derived value regardless of
+   what max-width did to width afterwards. On a very tall, narrow phone
+   (checked against real device reports at 9:20 and 9:22) that is exactly
+   what happens: width gets clamped down to fit the screen, height does not
+   follow, and the element ends up taller than 384:N. The board then renders
+   letterboxed INSIDE that taller box (js/render.js's drawFrame always
+   scales from canvas.width alone), leaving a visible blank strip below the
+   grid -- and js/input.js's tap mapping is derived independently enough
+   that it no longer matters for HIT-TESTING (see toCanvasPoint's own
+   comment), but the wasted, mismatched box is still a real visual defect on
+   its own.
+
+   Fixed by computing `width` as the SMALLER of what the viewport's width and
+   height each independently allow for this ratio, then letting `aspect-ratio`
+   derive `height` FROM that already-resolved width -- never the reverse.
+   Whichever axis is actually tighter, the box is always exactly on-ratio,
+   and any leftover space becomes margin around the canvas (#app centers it)
+   rather than blank canvas below the grid. --canvas-ratio (a plain number)
+   and --canvas-aspect (a <ratio> for `aspect-ratio` itself) are both set
+   together from js/main.js's syncCanvasAspect, from the same
+   canvasHeightFor(state) value, so they can never disagree with each other. */
 #game-canvas {
   background: linear-gradient(to bottom, var(--board-top), var(--board-bottom));
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  height: min(calc(100vh - 24px), 1100px);
-  width: auto;
-  max-width: calc(100vw - 24px);
+  width: min(calc(100vw - 24px), calc(min(100vh - 24px, 1100px) * var(--canvas-ratio, 0.678445)));
+  height: auto;
   aspect-ratio: var(--canvas-aspect, 384 / 566);
   touch-action: none;
 }

@@ -5,13 +5,10 @@
 
 import { CELL, HUD_HEIGHT, COLS, powerSlotRect, CANVAS_WIDTH, MAGNET_RAIL_HEIGHT } from './constants.js';
 import { removeFruitAt, setDragTarget, hardDrop, setMagnetColumn } from './physics.js';
-import { canvasHeightFor } from './render.js';
 import {
-  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb, debugHitEnabled,
+  hudPowerUps, canUsePowerUp, activateMagnet, armRemover, consumeRemover, plantBomb,
 } from './state.js';
 import { unlockAudio, playUiTick } from './audio.js';
-
-const DEBUG_HITS_KEPT = 6;
 
 function inRect(point, rect) {
   return point.x >= rect.x && point.x <= rect.x + rect.w
@@ -21,52 +18,38 @@ function inRect(point, rect) {
 export function attachInput(canvas, state) {
   let dragging = false;
   let draggingMagnet = false;
-  const debugHit = debugHitEnabled();
 
   // Maps a pointer position to GAME coordinates (0..CANVAS_WIDTH).
   //
-  // Deliberately derived from the logical size, not `canvas.width`. The
-  // backing store is some device-pixel-per-logical-pixel multiple larger
-  // (js/main.js, DPR-driven and responsive since phase 4), so dividing by it
-  // would return backing-store pixels -- a uniform error that silently
-  // breaks every hit target: taps in the right half of the board fall
-  // outside COLS and do nothing, the whole power-up bar drops below the HUD
-  // gate and becomes untappable, and dragging pins the fruit against the
-  // right wall. Using the logical size stays correct regardless of the
-  // backing store's actual resolution.
+  // ONE scale, from rect.width alone, drives BOTH axes -- deliberately not
+  // rect.height/canvasHeightFor(state), even though that looks like the
+  // obvious symmetric choice. js/render.js's drawFrame computes a single
+  // scale from canvas.width (backing store) over CANVAS_WIDTH and applies it
+  // uniformly to x AND y, anchored top-left; js/main.js's applyBackingStoreSize
+  // always derives canvas.width/height from the SAME devicePixelRatio times
+  // the measured CSS rect, so the backing store's aspect always matches the
+  // rect's aspect and the canvas is never stretched non-uniformly on screen.
+  // Composing those two facts algebraically, the correct inverse is this
+  // single width-derived scale for both axes -- rect.height never enters it.
+  //
+  // A real phone found the bug this avoids: css/style.css's #game-canvas
+  // rect can end up TALLER than the logical 384-wide aspect on a very tall
+  // viewport (max-width binding while height stays fixed, both now fixed
+  // together -- see that rule's own comment), so rect.height stopped
+  // matching what the board actually rendered at. The old scaleY, built from
+  // rect.height, put every HUD tap above its real hit box; dragging the
+  // falling fruit survived it purely because column clamping papers over an
+  // x-only error. Deriving y from rect.width instead is correct regardless
+  // of whether the element ever goes off-ratio again -- it doesn't depend on
+  // that CSS invariant holding, only on drawFrame's own (separately tested)
+  // transform, which is the one fact that's actually load-bearing here.
   function toCanvasPoint(evt) {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = CANVAS_WIDTH / rect.width;
-    const scaleY = canvasHeightFor(state) / rect.height;
+    const scale = CANVAS_WIDTH / rect.width;
     return {
-      x: (evt.clientX - rect.left) * scaleX,
-      y: (evt.clientY - rect.top) * scaleY,
+      x: (evt.clientX - rect.left) * scale,
+      y: (evt.clientY - rect.top) * scale,
     };
-  }
-
-  // ?hitdebug=1 only. Records exactly the numbers toCanvasPoint just used, so
-  // js/render.js's overlay can show whether a real device's rect/scale differ
-  // from what Playwright's synthetic touch events see -- the coordinate math
-  // itself isn't touched by any of this, only observed after the fact.
-  function recordDebugHit(evt, point) {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = CANVAS_WIDTH / rect.width;
-    const scaleY = canvasHeightFor(state) / rect.height;
-    if (!state.debugHits) state.debugHits = [];
-    const entry = {
-      clientX: evt.clientX,
-      clientY: evt.clientY,
-      x: point.x,
-      y: point.y,
-      scaleX,
-      scaleY,
-      hudHeight: HUD_HEIGHT,
-      zone: point.y <= HUD_HEIGHT ? 'HUD' : 'board',
-      consumedByPowerSlot: null, // filled in by onPointerDown when zone is HUD
-    };
-    state.debugHits.push(entry);
-    while (state.debugHits.length > DEBUG_HITS_KEPT) state.debugHits.shift();
-    return entry;
   }
 
   function cellAt(point) {
@@ -151,11 +134,9 @@ export function attachInput(canvas, state) {
     unlockAudio();
 
     const point = toCanvasPoint(evt);
-    const debugEntry = debugHit ? recordDebugHit(evt, point) : null;
 
     if (point.y <= HUD_HEIGHT) {
-      const consumed = handlePowerSlot(point);
-      if (debugEntry) debugEntry.consumedByPowerSlot = consumed;
+      handlePowerSlot(point);
       return;
     }
 
