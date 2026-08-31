@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-15';
+export const BUILD_VERSION = '2026.08.28-16';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -97,10 +97,55 @@ export const GRAVITY_RAMP_DROPS_TO_CAP = 120;
 // the distance from START to BASE -- genuinely flat, not merely slower.
 export const GRAVITY_RAMP_EASE_POWER = 2;
 
-// The run ends when the spawn column's stack reaches the top; this is how
-// many rows of headroom remain when the danger warning (render.js) starts
-// pulsing that column's outline.
+// 12.2: the danger warning's headroom, now applied to EVERY column rather
+// than only the spawn column -- with a varying spawn there is no single
+// column that ends the run, so there is no single column to warn about.
 export const DANGER_ROWS_REMAINING = 2;
+
+// --- 12.2: where a fruit comes from ---------------------------------------
+// Until now every fruit spawned at Math.floor(COLS / 2) -- column 3 -- and
+// isGameOver checked that one column and nothing else. Measured in the real
+// game, touching nothing: six runs, median 13.5s, and every single one ended
+// on stacks 0,0,0,7,0,0. Seventeen percent of the board used. Five columns
+// completely empty and the run over.
+//
+// That is not difficulty, it is a structural flaw: every fruit the player
+// fails to steer lands in the one column that kills them, and free space
+// anywhere else counts for nothing.
+//
+// The fix is two changes that only work together:
+//
+//   1. The spawn column varies. A plain uniform pick, redirected to the
+//      nearest open column when the chosen one is full -- reusing the search
+//      columnForX already performs. A shuffled bag ("all six before any
+//      repeat") was built and measured against this and abandoned: the
+//      full-column redirect breaks the bag's guarantee often enough that the
+//      two were indistinguishable on run length and score, and the bag cost
+//      an extra piece of state to carry and reset.
+//
+//   2. The run ends when NO column has room, not when one does.
+//
+// Change 1 alone would be unfair, and this is the number that proves it:
+// with a fixed spawn, 8-13% of drops arrive over a column with two rows of
+// headroom or less. With a varying spawn that rises to 30-38%. A third of
+// drops would land with almost no time to steer -- see
+// SPAWN_MIN_REACTION_SEC, which is the other half of this change and is not
+// optional.
+// A floor on how long the player has between a fruit appearing and it
+// landing. If the natural fall is shorter than this, the fruit holds at the
+// top of its column for the difference before gravity engages; if it is
+// already longer, nothing happens at all.
+//
+// A floor rather than a flat delay, deliberately. A flat 0.3s hold on every
+// drop would add roughly ninety seconds of pure waiting to a three-hundred
+// drop run and slow the whole game down to fix a problem that only exists on
+// short falls. This costs nothing on an empty board (a fall to the floor of
+// a seven-row board takes ~1.7s) and pays out exactly where change 1 created
+// the shortfall.
+//
+// The player can steer during the hold -- that is the entire point. It is
+// reaction time, not a pause.
+export const SPAWN_MIN_REACTION_SEC = 0.8;
 
 // prefers-reduced-motion (js/effects.js): shake and particles are cut
 // entirely, but a merge should still read as a merge, so squash is scaled

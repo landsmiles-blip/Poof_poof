@@ -326,16 +326,36 @@ function drawPauseButton(ctx, theme) {
 // nothing was left to visually distinguish "you are about to lose" from
 // "this is just today's UI colour". theme.danger is fixed and appears
 // nowhere else, so this is now the one thing in the game that means "danger".
+// The board's warning. Until 12.2 this outlined the spawn column and nothing
+// else, because the spawn column was the only one that could end the run.
+// Any column can now, so any column within DANGER_ROWS_REMAINING of the top
+// is marked -- and the run only actually ends when they ALL are, which the
+// player can now see coming instead of being told about one column while
+// five sit empty.
 function drawDangerState(ctx, state, rows, theme) {
-  const startCol = Math.floor(COLS / 2);
-  if (state.stackHeight[startCol] < rows - DANGER_ROWS_REMAINING) return;
+  const threshold = rows - DANGER_ROWS_REMAINING;
+  let any = false;
+  for (let c = 0; c < COLS; c++) {
+    if (state.stackHeight[c] >= threshold) { any = true; break; }
+  }
+  if (!any) return;
 
+  // One pulse phase shared by every marked column, so several of them read as
+  // one warning rather than as a row of independently blinking lights.
   const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
   ctx.save();
-  ctx.globalAlpha = 0.3 + 0.4 * pulse;
   ctx.strokeStyle = theme.danger;
   ctx.lineWidth = 4;
-  ctx.strokeRect(startCol * CELL + 2, 2, CELL - 4, rows * CELL - 4);
+  for (let c = 0; c < COLS; c++) {
+    const height = state.stackHeight[c];
+    if (height < threshold) continue;
+    // A column with no room left is worse than one with a row to spare, and
+    // is drawn steady rather than pulsing -- a full column is not a warning
+    // any more, it is a fact.
+    const full = height >= rows;
+    ctx.globalAlpha = full ? 0.75 : 0.3 + 0.4 * pulse;
+    ctx.strokeRect(c * CELL + 2, 2, CELL - 4, rows * CELL - 4);
+  }
   ctx.restore();
 }
 
@@ -344,9 +364,9 @@ function drawDangerState(ctx, state, rows, theme) {
 // its solid end, just invisible, rather than a hardcoded black that would
 // mismatch the grid's actual (theme-tinted) colour on later boards.
 function withAlpha(rgbaString, alpha) {
-  const m = rgbaString.match(/rgba?\(([^)]+)\)/);
-  if (!m) return rgbaString;
-  const [r, g, b] = m[1].split(',').map((s) => parseFloat(s));
+  const parts = rgbaString.match(/rgba?\(([^)]+)\)/);
+  if (!parts) return rgbaString;
+  const [r, g, b] = parts[1].split(',').map((v) => parseFloat(v.trim()));
   return `rgba(${r},${g},${b},${alpha})`;
 }
 

@@ -1075,12 +1075,32 @@ async function shot(page, name, full = false) {
     await page.waitForSelector('#play-btn');
     await page.click('#play-btn');
 
-    // Do nothing: pre-12.2, spawn always lands in the one column that ends
-    // the run, so an untouched run reaches game over on its own (measured at
-    // 13-16s in the brief); 40s is a generous ceiling, not the expectation.
+    // 12.2: this used to sit and wait for an untouched run to end on its own,
+    // which worked only because every fruit landed in the one column that
+    // ended the run -- a 13-16s median with a 40s ceiling. That assumption is
+    // now false by design: a passive run survives past 150s, so the wait hung
+    // and the whole suite stopped at its first check.
+    //
+    // Game over is forced deterministically instead, the same way
+    // unit-tests/bomb-landmine.js builds a terminal board: fill every column,
+    // then let the next spawn find nowhere to go. (r + c) % 2 is a
+    // checkerboard -- no two equal neighbours in either direction -- so the
+    // filler cannot cascade-merge itself back into open space.
+    //
+    // What this test is actually about is untouched: the rAF chain surviving
+    // a host pause with no resume. How the run ends was never the subject.
+    await page.evaluate(() => {
+      const s = window.__poofDebugState;
+      const rows = s.grid.length;
+      for (let c = 0; c < s.stackHeight.length; c++) {
+        for (let r = 0; r < rows; r++) s.grid[r][c] = (r + c) % 2;
+        s.stackHeight[c] = rows;
+      }
+      s.active = null;
+    });
     await page.waitForFunction(
       () => window.__poofDebugState && window.__poofDebugState.screen === 'gameover',
-      undefined, { timeout: 40000, polling: 250 },
+      undefined, { timeout: 15000, polling: 100 },
     );
 
     // The host signal, with no resume -- exactly what js/platform.js's
