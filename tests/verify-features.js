@@ -1055,6 +1055,145 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // ------------------------------------------------- 12.1: the freeze (a)
+  // Deterministic reproduction from docs/phase12brief.md 12.1: reach game
+  // over, fire the host's "hidden" signal with NO matching resume ever
+  // arriving, then tap Play Again. Before the 12.1 fix this left rafHandle
+  // permanently null forever after -- showScreen()'s renderGameOver callback
+  // only hid the overlay and re-synced sizing, relying on a loop that was
+  // already dead. Counts real requestAnimationFrame calls (rather than
+  // diffing screenshots) to check the literal thing the brief asks for: "the
+  // rAF callback count keeps rising."
+  {
+    const { context, page } = await freshPage(browser, 'freeze-repro');
+    await page.addInitScript(() => {
+      window.__rafCount = 0;
+      const raf = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (cb) => raf((t) => { window.__rafCount += 1; cb(t); });
+    });
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+
+    // Do nothing: pre-12.2, spawn always lands in the one column that ends
+    // the run, so an untouched run reaches game over on its own (measured at
+    // 13-16s in the brief); 40s is a generous ceiling, not the expectation.
+    await page.waitForFunction(
+      () => window.__poofDebugState && window.__poofDebugState.screen === 'gameover',
+      undefined, { timeout: 40000, polling: 250 },
+    );
+
+    // The host signal, with no resume -- exactly what js/platform.js's
+    // localImpl wires visibility loss to, and exactly what the player's
+    // in-app WebView reproduction never sent a matching resume for.
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForTimeout(150);
+
+    await page.click('#play-btn'); // "Play Again"
+    await page.waitForTimeout(150);
+    const countAfterClick = await page.evaluate(() => window.__rafCount);
+    await page.waitForTimeout(500);
+    const countLater = await page.evaluate(() => window.__rafCount);
+    const screenAfter = await page.evaluate(() => window.__poofDebugState.screen);
+
+    const alive = countLater > countAfterClick;
+    record('12.1: Play Again re-arms a loop killed by an un-resumed pause', alive, alive,
+      `rAF count right after Play Again: ${countAfterClick}, 500ms later: ${countLater} (rising: ${alive}); screen: ${screenAfter}`,
+      await shot(page, '05-freeze-repro-recovered'));
+    await context.close();
+  }
+
+  // ------------------------------------------- 12.1: mid-run freeze (b)
+  // Same missing-resume signal, but fired mid-run instead of at game over --
+  // the brief's second required variant. No resume signal ever fires; a tap
+  // on the canvas has to wake the game on its own, via the document-level
+  // pointerdown fallback wired in js/main.js's boot().
+  {
+    const { context, page } = await freshPage(browser, 'freeze-midrun');
+    await page.addInitScript(() => {
+      window.__rafCount = 0;
+      const raf = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (cb) => raf((t) => { window.__rafCount += 1; cb(t); });
+    });
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(250); // a fruit is now actively falling
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { get: () => true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForTimeout(150);
+    const pausedState = await page.evaluate(() => window.__poofDebugState.paused);
+
+    const box = await page.locator('#game-canvas').boundingBox();
+    const countBeforeTap = await page.evaluate(() => window.__rafCount);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(500);
+    const countAfterTap = await page.evaluate(() => window.__rafCount);
+    const resumedState = await page.evaluate(() => window.__poofDebugState.paused);
+
+    const ok = pausedState === true && countAfterTap > countBeforeTap && resumedState === false;
+    record('12.1: a tap resumes a mid-run pause with no host resume signal', ok, ok,
+      `paused after hidden with no resume: ${pausedState}; rAF count before tap: ${countBeforeTap}, `
+      + `after: ${countAfterTap}; paused after tap: ${resumedState}`);
+    await context.close();
+  }
+
+  // ------------------------------------------- 12.1: loop survives a throw (d)
+  // Injects a real, one-shot throw inside drawBackground (via the shared
+  // CanvasRenderingContext2D prototype -- background.js keeps its own ctx in
+  // module scope, unreachable any other way from outside) and confirms the
+  // rAF chain keeps advancing afterwards. Deliberately not tracked via
+  // track(): this test's whole point is one caught console.error, which
+  // would otherwise fail the suite's overall zero-console-errors bar for an
+  // error that is expected and recovered from, not a regression.
+  {
+    const context = await browser.newContext({ viewport: { width: 500, height: 860 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      window.__rafCount = 0;
+      const raf = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (cb) => raf((t) => { window.__rafCount += 1; cb(t); });
+    });
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(200);
+
+    let pageErrorLeaked = false;
+    page.on('pageerror', () => { pageErrorLeaked = true; });
+
+    await page.evaluate(() => {
+      const proto = CanvasRenderingContext2D.prototype;
+      const orig = proto.createLinearGradient;
+      proto.createLinearGradient = function (...args) {
+        const bg = document.getElementById('bg-canvas');
+        if (bg && this === bg.getContext('2d')) {
+          proto.createLinearGradient = orig; // one-shot, restore immediately
+          throw new Error('injected: 12.1(d) throw-survival test');
+        }
+        return orig.apply(this, args);
+      };
+    });
+
+    const countBefore = await page.evaluate(() => window.__rafCount);
+    await page.waitForTimeout(500);
+    const countAfter = await page.evaluate(() => window.__rafCount);
+    const screenAfter = await page.evaluate(() => window.__poofDebugState.screen);
+
+    const survived = countAfter > countBefore && screenAfter === 'playing' && !pageErrorLeaked;
+    record('12.1: loop survives a throw inside drawBackground', survived, survived,
+      `rAF count before the injected throw: ${countBefore}, 500ms after: ${countAfter} `
+      + `(rising: ${countAfter > countBefore}); still on the playing screen: ${screenAfter === 'playing'}; `
+      + `error escaped as an uncaught exception: ${pageErrorLeaked}`);
+    await context.close();
+  }
+
   // ---------------------------------------------------------------- theme
   {
     const { context, page } = await freshPage(browser, 'theme');

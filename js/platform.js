@@ -3,8 +3,9 @@
 // container.
 //
 // This is the ONLY file in the codebase permitted to reference `ytgame`,
-// `localStorage`, or `visibilitychange`. Everything else -- including
-// js/state.js -- goes through the exported functions below.
+// `localStorage`, or a document-level lifecycle event (`visibilitychange`,
+// `pageshow`, `focus`). Everything else -- including js/state.js -- goes
+// through the exported functions below.
 //
 // Built as an adapter, not a port: `ytgame` is undefined outside the
 // Playables container, so ytgameImpl can never actually run here and cannot
@@ -181,6 +182,23 @@ function createLocalImpl() {
     document.addEventListener('visibilitychange', () => {
       const handlers = document.hidden ? pauseHandlers : resumeHandlers;
       for (const cb of handlers) cb();
+    });
+    // 12.1: visibilitychange's resume half proved to be exactly the
+    // unreliable signal in an in-app WebView (a github.io page inside an
+    // app's own browser, not Chrome) -- the freeze's reproduction is a
+    // hidden that fires with no matching resume ever arriving. pageshow
+    // (bfcache/back-forward restore) and window focus are independent
+    // signals that the page is visible again; wired to the SAME
+    // resumeHandlers list visibilitychange's resume half already drives, so
+    // callers (js/main.js) still see exactly one resume path. Resume-only on
+    // purpose: there is no matching pagehide/blur pause here, since a
+    // missed pause is invisible to the player (the game just keeps running
+    // a beat longer) while a missed resume is the freeze itself.
+    window.addEventListener('pageshow', () => {
+      for (const cb of resumeHandlers) cb();
+    });
+    window.addEventListener('focus', () => {
+      for (const cb of resumeHandlers) cb();
     });
   }
 

@@ -249,6 +249,14 @@ function showScreen() {
       syncCanvasAspect();
       syncReloadGuard();
       syncMusic();
+      // 12.1(a): startRun (called inside shop.js, before this callback runs)
+      // just set state.paused = false and state.screen = PLAYING. Normally
+      // the loop is already ticking -- it keeps running on the menu to
+      // animate the backdrop -- but if it had died for any reason (a host
+      // pause whose resume never fired, say), nothing else here would ever
+      // re-arm it. Guarded on rafHandle === null: the common case is a
+      // no-op read.
+      if (rafHandle === null) startLoop();
     });
   } else if (state.screen === SCREEN.GAMEOVER) {
     overlay.hidden = false;
@@ -260,6 +268,10 @@ function showScreen() {
       syncCanvasAspect();
       syncReloadGuard();
       syncMusic();
+      // 12.1(a): see the identical comment in renderMenu's callback above --
+      // this is the Play Again path, the one the freeze's reproduction
+      // actually hits.
+      if (rafHandle === null) startLoop();
     });
   }
 }
@@ -352,32 +364,68 @@ let lastTime = performance.now();
 // waking 60 times a second -- paused means not executing, not just idling.
 let rafHandle = null;
 
+// 12.1: the freeze's backstop. Every known way the rAF chain could die
+// without a genuine pause -- Play/Play Again after a host pause whose resume
+// never arrived, a throw inside loop() -- is fixed at its own source below,
+// but the bug that prompted this phase proved a path nobody had found yet.
+// This is what catches the next one: while paused, poll for the specific
+// contradiction "should be running (screen playing, not paused) but isn't
+// (no rAF handle)" and re-arm if so. 500ms, not a 60Hz loop -- the
+// certification concern about polling loops (see platform.js) still holds,
+// and this is a low-rate correctness check, not a render path.
+let watchdogHandle = null;
+
+function startWatchdog() {
+  if (watchdogHandle !== null) return;
+  watchdogHandle = setInterval(() => {
+    if (state.screen === SCREEN.PLAYING && !state.paused && rafHandle === null) startLoop();
+  }, 500);
+}
+
+function stopWatchdog() {
+  if (watchdogHandle === null) return;
+  clearInterval(watchdogHandle);
+  watchdogHandle = null;
+}
+
 function startLoop() {
   rafHandle = requestAnimationFrame(loop);
+  // The loop is confirmed running again -- the watchdog's job is done until
+  // the next pause.
+  stopWatchdog();
 }
 
 function loop(now) {
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (state.screen === SCREEN.PLAYING && !state.paused) {
-    update(dt);
-    drawFrame(ctx, state, fx);
-    applyPageTheme(themeForScore(state.score));
+  // 12.1(d): one bad frame must not brick the game. Without this, a throw
+  // anywhere in update()/drawFrame()/drawBackground() would skip the tail
+  // startLoop() call below and cancel the rAF chain for good -- identical to
+  // the freeze this phase exists to fix, just from a different cause.
+  try {
+    if (state.screen === SCREEN.PLAYING && !state.paused) {
+      update(dt);
+      drawFrame(ctx, state, fx);
+      applyPageTheme(themeForScore(state.score));
+    }
+
+    // 11.2 landmine (docs/phase11brief.md L2): deliberately OUTSIDE the
+    // branch above. That branch only runs while actively playing; the
+    // backdrop must keep animating behind the menu, the shop and the
+    // game-over screen too -- exactly where a player deciding whether to
+    // play again is looking. A genuine pause (below) stops this the same
+    // way it stops everything else in loop(): by the whole function not
+    // running, not by a flag here.
+    drawBackground(backgroundTheme(), now / 1000);
+
+    // Checked regardless of screen: most persisted-field changes (buying,
+    // picking a skin, toggling sound) happen on the menu/game-over overlays,
+    // not mid-run. Cheap when clean -- one boolean read most frames.
+    if (state.dirty) persist();
+  } catch (err) {
+    console.error('[poof-poof] loop() threw; recovering', err);
   }
-
-  // 11.2 landmine (docs/phase11brief.md L2): deliberately OUTSIDE the branch
-  // above. That branch only runs while actively playing; the backdrop must
-  // keep animating behind the menu, the shop and the game-over screen too --
-  // exactly where a player deciding whether to play again is looking. A
-  // genuine pause (below) stops this the same way it stops everything else
-  // in loop(): by the whole function not running, not by a flag here.
-  drawBackground(backgroundTheme(), now / 1000);
-
-  // Checked regardless of screen: most persisted-field changes (buying,
-  // picking a skin, toggling sound) happen on the menu/game-over overlays,
-  // not mid-run. Cheap when clean -- one boolean read most frames.
-  if (state.dirty) persist();
 
   // 9.3: openPauseMenu (via drainEvents, inside update() above) can set
   // state.paused mid-frame, cancelling rafHandle as part of pauseRun() --
@@ -385,7 +433,7 @@ function loop(now) {
   // again before the function even returns, undoing that cancellation in the
   // SAME frame. A host-driven pause never hits this: it fires from an event
   // listener between frames, with no trailing startLoop() call of its own to
-  // undo.
+  // undo. Outside the try/catch above (12.1(d)) so a throw can never skip it.
   if (!state.paused) startLoop();
 }
 
@@ -429,6 +477,11 @@ function pauseRun() {
   pauseMusicScheduler();
   state.paused = true;
   persistNow();
+  // 12.1(c): armed for exactly as long as the game claims to be paused --
+  // stopWatchdog() (in startLoop) disarms it the moment the loop is
+  // confirmed running again, whether that happens via resumeRun, the Play/
+  // Play Again re-arm below, or the watchdog catching itself.
+  startWatchdog();
 }
 function resumeRun() {
   lastTime = performance.now(); // avoid a huge dt spike on the first frame back
@@ -563,6 +616,20 @@ async function boot() {
 
   // Any first interaction anywhere is a valid moment to start audio.
   window.addEventListener('pointerdown', unlockAudio, { once: true });
+
+  // 12.1(b): the host visibility signal's resume half is exactly the
+  // unreliable one in an in-app WebView, which is what the freeze's
+  // reproduction turned out to be. pageshow/focus (wired in js/platform.js,
+  // the one file allowed to touch document-level lifecycle events) cover
+  // most of that, but this is the unconditional backstop: a tap anywhere
+  // must always be able to wake the game, regardless of which lifecycle
+  // signal did or didn't fire.
+  // Excludes the in-game pause panel on purpose -- see pausePanelOpen's own
+  // comment above -- and goes through the same resumeRun() every other
+  // resume path uses, never a second mechanism.
+  document.addEventListener('pointerdown', () => {
+    if (state.paused && !pausePanelOpen) resumeRun();
+  });
 
   applyPageTheme(themeForScore(0));
   // So the menu is never shown against a bare --page-bg before the loop's
