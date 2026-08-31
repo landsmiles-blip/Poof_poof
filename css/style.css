@@ -7,6 +7,19 @@
    ignores cross-origin requests and refuses to cache non-basic responses, so a
    CDN font could never be precached and would break offline play. A variable
    font, so this one 29KB file covers the whole weight axis. */
+/* Titan One -- the display face, SIL OFL 1.1 (assets/fonts/OFL.txt carries
+   both notices). Used for exactly one thing: the wordmark on the menu and
+   game-over screens. Self-hosted for the same reason Fredoka is -- the
+   service worker refuses to cache cross-origin responses, so a CDN face
+   could never be precached and would break offline play. 10 KB. */
+@font-face {
+  font-family: 'Titan One';
+  src: url('../assets/fonts/titanone-latin.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'Fredoka';
   src: url('../assets/fonts/fredoka-latin.woff2') format('woff2-variations'),
@@ -172,6 +185,102 @@ html, body {
   font-size: 28px;
 }
 
+/* 13.1 -- the wordmark.
+   Swapping the font alone would have produced a differently-shaped piece of
+   text; what makes a name read as a LOGO is the treatment around it. Four
+   things, all cheap: a heavy display face, one fruit colour per letter (set
+   inline from the player's live skin by js/shop.js, so it follows their
+   Palette choice for free), a thick outside stroke, and a small per-letter
+   lift and tilt off the baseline so the word bounces the way the game's
+   name sounds.
+
+   paint-order:stroke fill is what puts the stroke BEHIND the glyph --
+   without it -webkit-text-stroke draws centred on the outline and eats a
+   third of every letter. Both have been baseline in Chrome, Safari and
+   Firefox for years; where paint-order is somehow unsupported the letters
+   simply render a little heavier, which is a survivable degradation rather
+   than a broken one. */
+.wordmark {
+  margin: 0 0 8px;
+  font-family: 'Titan One', 'Fredoka', system-ui, sans-serif;
+  font-size: 50px;
+  line-height: 1.05;
+  letter-spacing: 0.5px;
+  text-align: center;
+  user-select: none;
+}
+
+.wordmark .wm { display: inline-block; }
+
+/* The stroke layer sizes the box; the fill layer is lifted out of flow and
+   laid exactly over it. Same characters, same transforms, so they stay in
+   register at any font size. */
+.wordmark .wm-word {
+  position: relative;
+  display: inline-block;
+}
+
+.wordmark .wm-layer {
+  display: block;
+  white-space: nowrap;
+}
+
+.wordmark .wm-stroke {
+  color: #ffffff;
+  -webkit-text-stroke: 7px #ffffff;
+  paint-order: stroke fill;
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.18), 0 8px 12px rgba(0, 0, 0, 0.22);
+}
+
+.wordmark .wm-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.wordmark .wm-l {
+  display: inline-block;
+}
+
+/* Narrow phones: eight letters of a heavy display face at 50px overflow a
+   320px-wide card. */
+@media (max-width: 360px) {
+  .wordmark { font-size: 40px; }
+  .wordmark .wm-stroke { -webkit-text-stroke-width: 5px; }
+}
+
+/* The opening line. Replaces .subtitle on the menu only -- one size up, less
+   transparent, and with the one word that matters carrying the accent, so it
+   reads as an invitation rather than a caption. */
+.tagline {
+  margin: 0 0 14px;
+  font-size: 15px;
+  line-height: 1.35;
+  opacity: 0.9;
+}
+
+.tagline .tagline-pop {
+  font-weight: 600;
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* 13.5 -- the game-over screen is where a player decides whether to go
+   again, and it was a five-line receipt. This is the only line on it that
+   points forward instead of back. */
+.next-unlock {
+  margin: 10px 0 2px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--accent);
+  font-size: 13px;
+  opacity: 0.95;
+}
+
+.next-unlock strong {
+  color: var(--accent);
+}
+
 .screen h2 {
   margin: 20px 0 8px;
   font-size: 16px;
@@ -314,12 +423,16 @@ button {
   );
 }
 
+/* 13.6: was a hardcoded #8e44ad -- which is TIERS[1], the grape's fruit
+   colour, reused as a button colour. It was the only button in the file not
+   taking var(--accent), so on every theme but the purple one it sat visibly
+   off-palette, and on Midnight (a teal accent) it read as broken. */
 .skin-btn {
   width: 100%;
   padding: 8px;
   border: none;
   border-radius: 8px;
-  background: #8e44ad;
+  background: var(--accent);
   color: white;
   font-weight: bold;
   font-size: 13px;
@@ -330,9 +443,13 @@ button {
   cursor: not-allowed;
 }
 
+/* Now that the idle button also uses --accent, "selected" has to differ by
+   something other than hue: it keeps the accent fill and adds a ring, so the
+   chosen palette is still obvious at a glance. */
 .skin-btn.selected:disabled {
   background: var(--accent);
   color: white;
+  box-shadow: 0 0 0 2px var(--board-top), 0 0 0 4px var(--accent);
 }
 
 .unlock-banner {

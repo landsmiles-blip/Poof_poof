@@ -4,6 +4,7 @@
 // mutating export itself) so attachInput could go back to exactly the
 // (canvas, state) shape phase 1 already established and tested here.
 import assert from 'node:assert/strict';
+import { MILESTONE_SCORES } from '../js/constants.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -182,7 +183,9 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   const events = state.events.filter((e) => e.type === 'lockedPowerUp');
   assert.equal(events.length, 1, 'a lockedPowerUp event should be pushed for a locked/out-of-stock slot');
   assert.equal(events[0].id, 'swap');
-  assert.equal(events[0].unlockScore, 1000);
+  // Swap unlocks on MILESTONE_SCORES[1] (see constants.POWERUPS); read it
+  // rather than repeating the number, which 13.2 changed.
+  assert.equal(events[0].unlockScore, MILESTONE_SCORES[1]);
   assert.equal(state.dirty, false, 'a locked-power-up tap changes no persisted field and must not mark state.dirty');
 }
 

@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-14';
+export const BUILD_VERSION = '2026.08.28-15';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -156,10 +156,24 @@ export const COMBO_MAX_MULTIPLIER = 3;
 // visual theme all key off these same four stops -- adding a milestone here
 // extends every gated system at once rather than needing a parallel ladder.
 //
-// Calibrated against 250-run simulations at three skill levels (median score:
-// novice ~1000, casual ~3000, expert ~9000) so each stop lands on the next
-// rung of the skill curve rather than all of them falling out of one run.
-export const MILESTONE_SCORES = [0, 1000, 3000, 8000];
+// 13.2: was [0, 1000, 3000, 8000]. Those were calibrated against simulated
+// runs (median score: novice ~1000, casual ~3000, expert ~9000) -- against a
+// BOT, which never misreads the board and never fumbles a drag. Measured
+// against a real player the ladder was simply out of reach: a personal best
+// of 2,127 means stops 2 and 3 had never once been seen, so the Dusk and
+// Midnight palettes, the Bomb and the Rainbow Fruit were all built, tested,
+// shipped -- and invisible. Content nobody can reach is content that does
+// not exist.
+//
+// Halved and then some. At a 2,127 best the player now sits inside stop 2
+// (Dusk + Bomb) immediately, with stop 3 one good run away rather than four
+// times their lifetime best.
+//
+// PROVISIONAL, and say so out loud: phase 12.2 (the spawn column) will
+// lengthen runs and therefore raise every score in the game. These four
+// numbers must be re-checked against real scores once that lands, not left
+// to drift. They are deliberately one line so that re-check is cheap.
+export const MILESTONE_SCORES = [0, 500, 1500, 4000];
 
 // --- Skins ---------------------------------------------------------------
 // Each skin supplies one color per tier, in tier order. Unlocks are checked
@@ -403,6 +417,15 @@ export const DANGER_COLOR = '#FF3B30';
 // system-ui is a fallback only; the face itself is self-hosted in assets/fonts.
 export const FONT_FAMILY = "'Fredoka', system-ui, sans-serif";
 
+// 13.1: the DISPLAY face, used for the wordmark on the menu and nothing
+// else. Deliberately NOT wired into FONT_FAMILY above: every ctx.font in
+// js/render.js reads that one constant, and the HUD layout is tuned to
+// Fredoka's exact metrics -- see POWER_SLOT's comment about digits spilling
+// over the board edge at y=86. Pointing FONT_FAMILY at a different face
+// would silently move every number in the HUD. Canvas keeps Fredoka; this
+// is a DOM-only face. SIL OFL, self-hosted beside Fredoka (assets/fonts).
+export const DISPLAY_FONT_FAMILY = "'Titan One', 'Fredoka', system-ui, sans-serif";
+
 // Clamp for the canvas backing store's device-pixel-per-logical-pixel ratio
 // (js/main.js derives the actual value from window.devicePixelRatio; js/
 // render.js reads it back from canvas.width at draw time, so nothing else
@@ -486,13 +509,58 @@ export const LEGACY_STORAGE_KEYS = {
 // js/background.js: a lit ground, a halo behind the board, drifting
 // decorative fruit silhouettes, and a page-level vignette, all on a
 // full-viewport canvas behind #app. See docs/phase11brief.md section 3.
-export const BG_SHAPE_COUNT = 16;
-export const BG_SHAPE_MIN_RADIUS = 16; // px
-export const BG_SHAPE_MAX_RADIUS = 62; // px
-export const BG_SHAPE_MIN_ALPHA = 0.05;
-export const BG_SHAPE_MAX_ALPHA = 0.10;
-export const BG_SHAPE_MAX_DRIFT_PX_PER_SEC = 8; // sideways and upward combined
+// 13.3: one flat population of shapes drifting UPWARD is replaced by three
+// depth bands falling DOWNWARD.
+//
+// Two ideas, both taken from the reference image of Tetris blocks tumbling
+// through a sunset. First, they fall: the backdrop becomes a slower, larger
+// echo of the thing the player is actually doing, instead of decoration that
+// happens to move. Second, depth is built from SCALE and SPEED, not from
+// alpha alone -- small/faint/slow reads as far away, large/faster/tumbling
+// reads as close, and the near band passing behind the board panel is what
+// sells it. Uniform sizes drifting at a uniform speed cannot read as depth
+// no matter how they are coloured.
+//
+// 18 shapes total, up from 16. Still one soft-gradient canvas at DPR 1
+// redrawn ~15 times a second; the cost difference is not measurable.
+export const BG_BANDS = [
+  // far: barely there, the parallax floor
+  { count: 8, minRadius: 10, maxRadius: 22, alpha: 0.045, minSpeed: 4, maxSpeed: 8, spin: 0.05, pops: false },
+  { count: 6, minRadius: 28, maxRadius: 48, alpha: 0.070, minSpeed: 10, maxSpeed: 18, spin: 0.12, pops: true },
+  // near: large, faster, visibly tumbling -- the band that creates the depth
+  { count: 4, minRadius: 62, maxRadius: 112, alpha: 0.095, minSpeed: 24, maxSpeed: 40, spin: 0.22, pops: true },
+];
+
+// 13.4: every so often one of the bigger shapes puffs out of existence --
+// a quick fade with a soft expanding ring behind it, then it is back. The
+// game is called Poof Poof and its one verb is "two things meet and vanish";
+// the backdrop should say that too, not merely drift.
+//
+// Deliberately rare. Periods are spread across this range per shape, and
+// only the mid and near bands pop (see `pops` above), which works out at
+// roughly one puff every three seconds somewhere on a phone screen -- often
+// enough to notice while waiting on the menu, rare enough that it never
+// becomes the thing you are looking at instead of the game.
+export const BG_POP_MIN_PERIOD_SEC = 18;
+export const BG_POP_MAX_PERIOD_SEC = 40;
+export const BG_POP_DURATION_SEC = 0.9;
+export const BG_POP_RING_SCALE = 2.4; // ring grows to this x the shape's radius
 export const BG_HALO_PEAK_ALPHA = 0.13; // brief: "keep it under 0.15"
+
+// 13.3: the Midnight stop's page colour is #05080F -- already all but black.
+// Darkening it a further BG_GROUND_DARKEN erases the ground gradient, the
+// drifting shapes and most of the halo, so the best-looking board in the
+// game arrives on a dead backdrop exactly when the player is most invested.
+// Rather than special-case one theme index, both values are interpolated by
+// how dark the page colour ALREADY is (js/background.js reads its relative
+// luminance), so a future palette gets the same treatment for free.
+export const BG_DARK_PAGE_LUMINANCE = 0.02; // at or below this, fully "dark"
+export const BG_DARK_GROUND_DARKEN = 0.08;  // instead of BG_GROUND_DARKEN
+export const BG_DARK_HALO_PEAK_ALPHA = 0.18; // instead of BG_HALO_PEAK_ALPHA
+// 0.24 first time out. Midnight's accent is a teal (#00D9C0) and at that
+// strength over a near-black page the whole surround took on a green cast
+// -- atmospheric, but reading as a colour wash rather than as light.
+export const BG_DARK_HALO_MID_ALPHA = 0.075; // instead of BG_HALO_MID_ALPHA
 export const BG_HALO_MID_ALPHA = 0.05; // at 55% of the halo's radius
 export const BG_HALO_RADIUS_SCALE = 0.9; // x hypot(boardWidth, boardHeight)
 export const BG_GROUND_LIGHTEN = 0.10; // top of the ground gradient, from theme.page
@@ -501,8 +569,9 @@ export const BG_VIGNETTE_INNER_SCALE = 0.30; // x outer radius, transparent insi
 export const BG_VIGNETTE_OUTER_SCALE = 0.78; // x max(viewport width, height)
 export const BG_VIGNETTE_EDGE_ALPHA = 0.45;
 // ~15fps: redraw only if this much time has passed since the last frame.
-// Nothing on this canvas moves faster than BG_SHAPE_MAX_DRIFT_PX_PER_SEC, so
-// there is nothing to gain from matching the board's own 60fps loop.
+// 13.3: even the near band's fastest shapes (BG_BANDS, up to 40px/s) move
+// under 3px between redraws at this rate, so there is nothing to gain from
+// matching the board's own 60fps loop.
 export const BG_MIN_REDRAW_INTERVAL_SEC = 0.066;
 // Fixed, not time-seeded: the decorative layout must be identical on every
 // load so a screenshot diff against it means something.

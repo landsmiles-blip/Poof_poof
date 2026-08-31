@@ -11,6 +11,7 @@
 // none of those touch localStorage, so this is safe regardless.
 import assert from 'node:assert/strict';
 import * as platform from '../js/platform.js';
+import { MILESTONE_SCORES } from '../js/constants.js';
 import {
   devModeEnabled, createInitialState, toSaveBlob, startRun, endRun, buyPowerUp,
   armSwap, plantBomb, consumeRemover, selectSkin,
@@ -50,7 +51,12 @@ try {
   assert.deepEqual(save, realSave, 'a read-only load should still see the real save');
 
   const state = createInitialState(save);
-  assert.equal(state.highScore, 8000, 'dev mode should inflate highScore in memory');
+  // Read from MILESTONE_SCORES rather than repeating its top value: dev mode
+  // inflates highScore to the LAST milestone, whatever that is, and 13.2
+  // retuned the ladder. A test that hardcodes the number fails on a change
+  // it is not actually testing.
+  assert.equal(state.highScore, MILESTONE_SCORES[MILESTONE_SCORES.length - 1],
+    'dev mode should inflate highScore in memory to the top milestone');
   assert.ok(state.inventory.bomb >= 5, 'dev mode should inflate inventory in memory');
 
   const before = fakeLocalStorage.snapshot();
