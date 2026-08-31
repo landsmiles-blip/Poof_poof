@@ -41,16 +41,26 @@ function findBombCell(state) {
   return null;
 }
 
-// 12.2: the column a fruit arrives in. Uniform across the six columns, then
+// The column the NEXT fruit will arrive in. Fixed at the middle of the board
+// (14, reverting 12.2's uniform random pick -- see the "Where a fruit comes
+// from" comment in js/constants.js for why both changes happened), then
 // redirected outward to the nearest column with room if that one is full --
 // the same alternating left/right search columnForX already performs, so a
 // full column is never a valid answer here either.
 //
 // Returns -1 only when every column is full, which is the terminal state
 // isGameOver reports.
-function chooseSpawnColumn(state) {
+//
+// DETERMINISTIC AND EXPORTED, and both of those are load-bearing. It has no
+// randomness and reads nothing but stackHeight, so js/render.js's
+// drawSpawnChute can call it to draw the marker over exactly the column the
+// next spawnFruit will use, including when the redirect moves it. A second
+// implementation of "where does the next fruit go" would eventually
+// disagree with this one, and the copy the player can SEE would be the one
+// that was wrong. Do not inline it into spawnFruit.
+export function spawnColumnFor(state) {
   const rows = effectiveRows(state);
-  const wanted = Math.floor(Math.random() * COLS);
+  const wanted = Math.floor(COLS / 2);
   if (state.stackHeight[wanted] < rows) return wanted;
   for (let offset = 1; offset < COLS; offset++) {
     const left = wanted - offset;
@@ -84,8 +94,9 @@ export function spawnFruit(state) {
   // destroy a charge the player paid for.
   //
   // 12.2: "blocked" now means every column is full, not that one nominated
-  // column is. Five empty columns no longer count for nothing.
-  const startCol = chooseSpawnColumn(state);
+  // column is. Five empty columns no longer count for nothing. 14 restored
+  // the fixed spawn column but kept this rule -- see js/constants.js.
+  const startCol = spawnColumnFor(state);
   if (startCol < 0) {
     return { blocked: true };
   }

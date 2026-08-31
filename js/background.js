@@ -11,7 +11,8 @@
 
 import {
   TIERS, BG_BANDS,
-  BG_HALO_PEAK_ALPHA, BG_HALO_MID_ALPHA, BG_HALO_RADIUS_SCALE,
+  BG_HALO_PEAK_ALPHA, BG_HALO_MID_ALPHA,
+  BG_HALO_MIN_SPILL_PX, BG_HALO_MAX_SPILL_PX, BG_HALO_SPILL_SCALE, BG_HALO_INNER_SPILL_SCALE,
   BG_GROUND_LIGHTEN, BG_GROUND_DARKEN,
   BG_DARK_PAGE_LUMINANCE, BG_DARK_GROUND_DARKEN,
   BG_DARK_HALO_PEAK_ALPHA, BG_DARK_HALO_MID_ALPHA,
@@ -166,19 +167,65 @@ function darknessOf(theme) {
 // Layer 2: the board reads as lit from behind rather than pasted onto the
 // ground. Skipped before the board has ever been measured (menu on a very
 // first boot) -- ground and shapes still show, just without a halo yet.
+//
+// 14: was one radial gradient centred on the board and sized from the
+// board's own diagonal. That is the wrong primitive the moment the board
+// gets big relative to the screen: the visible part of such a gradient is
+// only the thin margin around the board, and across a 53px margin it
+// resolves to three levels of colour -- a flat tint, measured, not guessed.
+// See the BG_HALO_MIN_SPILL_PX comment in js/constants.js for the numbers.
+//
+// Now: two soft glows cast OUTWARD from the board's own rectangle. The
+// falloff length is a pixel spill, not a fraction of the board, so it stays
+// legible whether the board fills 65% of the screen or 87% of it.
+//
+// The rectangle we fill is clipped OUT of the canvas before filling ('evenodd'
+// against a full-canvas rect), so only the shadow lands. That is not a
+// flourish -- the board canvas is hidden on the menu, and without the cutout
+// the fill itself would paint a solid accent-coloured rectangle across the
+// menu where the board is going to be.
 function drawHalo(theme, w, h, darkness) {
   if (!boardRect) return;
-  const cx = boardRect.left + boardRect.width / 2;
-  const cy = boardRect.top + boardRect.height / 2;
-  const radius = Math.hypot(boardRect.width, boardRect.height) * BG_HALO_RADIUS_SCALE;
+  const { left, top, width, height } = boardRect;
+  if (width <= 0 || height <= 0) return;
+
+  const marginX = Math.max(0, (w - width) / 2);
+  const marginY = Math.max(0, (h - height) / 2);
+  const spill = Math.min(
+    BG_HALO_MAX_SPILL_PX,
+    Math.max(BG_HALO_MIN_SPILL_PX, Math.max(marginX, marginY) * BG_HALO_SPILL_SCALE),
+  );
   const peak = lerp(BG_HALO_PEAK_ALPHA, BG_DARK_HALO_PEAK_ALPHA, darkness);
   const mid = lerp(BG_HALO_MID_ALPHA, BG_DARK_HALO_MID_ALPHA, darkness);
-  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-  g.addColorStop(0, hexToRgba(theme.accent, peak));
-  g.addColorStop(0.55, hexToRgba(theme.accent, mid));
-  g.addColorStop(1, hexToRgba(theme.accent, 0));
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  // Everything except the board's own footprint. Plain rects, no rounded
+  // corners: the board's CSS radius is 12px and the smallest spill here is
+  // 40px of blur, which erases that distinction completely -- so rounding
+  // would cost a ctx.roundRect Safari fallback for a difference nobody can
+  // see.
+  ctx.beginPath();
+  ctx.rect(0, 0, w, h);
+  ctx.rect(left, top, width, height);
+  ctx.clip('evenodd');
+
+  // Two passes: a tight bright one that reads as the board's own edge light,
+  // and a wide faint one that carries it out into the surround. One pass
+  // alone is either a hard rim or a vague fog.
+  for (const [blur, alpha] of [
+    [spill * BG_HALO_INNER_SPILL_SCALE, peak],
+    [spill, mid],
+  ]) {
+    ctx.shadowColor = hexToRgba(theme.accent, alpha);
+    ctx.shadowBlur = blur;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fillStyle = hexToRgba(theme.accent, 1);
+    ctx.beginPath();
+    ctx.rect(left, top, width, height);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // A plain filled disc -- deliberately not render.js's drawCircle, whose rim

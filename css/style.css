@@ -117,14 +117,23 @@ html, body {
    deliberately left alone here. What actually IS this file's to reclaim:
    the fixed viewport margin (12px -> 8px, #app's own padding) and the
    height cap (1100px -> 1600px, guards against an absurdly large render on
-   a very tall desktop window, not a limit real phones were hitting). */
+   a very tall desktop window, not a limit real phones were hitting).
+
+   14: the "widening ROWS would close it for real" note above is no longer
+   hypothetical -- ROWS went 7 -> 10 and the gap it describes is now mostly
+   closed (65% -> 87% of a 390x844 phone). The two fallback numbers below
+   moved with it, which is the whole reason unit-tests/css-geometry.js
+   exists: 10.2 changed ROWS and left them behind, and the shipped build
+   painted one wrong-shaped frame on every load until syncCanvasAspect
+   corrected it. If you change ROWS or CELL, that test fails until you come
+   back here. */
 #game-canvas {
   background: linear-gradient(to bottom, var(--board-top), var(--board-bottom));
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  width: min(calc(100vw - 16px), calc(min(100vh - 16px, 1600px) * var(--canvas-ratio, 0.678445)));
+  width: min(calc(100vw - 16px), calc(min(100vh - 16px, 1600px) * var(--canvas-ratio, 0.506596)));
   height: auto;
-  aspect-ratio: var(--canvas-aspect, 384 / 566);
+  aspect-ratio: var(--canvas-aspect, 384 / 758);
   touch-action: none;
 }
 
