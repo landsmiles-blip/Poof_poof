@@ -1194,6 +1194,89 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // --------------------------- 12.1 follow-up: tap-to-wake is Pages-only
+  // The document-level pointerdown fallback above is a WebView-unreliability
+  // backstop for the Pages build's visibility-based pause signal. Inside the
+  // Playables container platform.onPause/onResume are the real, host-owned
+  // ytgame.system signals -- a stray tap resuming ahead of (or instead of)
+  // the host's own onResume call would let the game's local paused state
+  // drift out of sync with what the host believes it told the Playable, so
+  // js/main.js now gates the fallback out entirely when
+  // platform.isPlayablesEnv is true. Stubs window.ytgame (the minimal
+  // surface js/platform.js's ytgameImpl calls during boot/pause/resume)
+  // before navigation, so the module picks the ytgameImpl branch exactly the
+  // way it would inside the real container -- no localStorage/
+  // visibilitychange path involved at all. rAF-count sampling (not the
+  // debug-state hook, which is deliberately absent from the Playables path)
+  // proves both directions: a tap does NOT resume, and the real host
+  // onResume callback still does.
+  {
+    const { context, page } = await freshPage(browser, 'playables-tap-gate');
+    await page.addInitScript(() => {
+      window.__rafCount = 0;
+      const raf = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (cb) => raf((t) => { window.__rafCount += 1; cb(t); });
+
+      let pauseCb = null;
+      let resumeCb = null;
+      window.__ytgameLifecycle = {
+        firePause: () => { if (pauseCb) pauseCb(); },
+        fireResume: () => { if (resumeCb) resumeCb(); },
+      };
+      window.ytgame = {
+        IN_PLAYABLES_ENV: true,
+        game: {
+          loadData: () => Promise.resolve(null),
+          saveData: () => Promise.resolve(),
+          firstFrameReady: () => {},
+          gameReady: () => {},
+        },
+        system: {
+          onPause: (cb) => { pauseCb = cb; },
+          onResume: (cb) => { resumeCb = cb; },
+          isAudioEnabled: () => true,
+          onAudioEnabledChange: () => {},
+          getLanguage: () => Promise.resolve('en'),
+        },
+        engagement: { sendScore: () => Promise.resolve() },
+      };
+    });
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(250); // a fruit is now actively falling
+
+    // The real host pause signal -- ytgame.system.onPause's own callback,
+    // not visibilitychange -- cancels the loop.
+    await page.evaluate(() => window.__ytgameLifecycle.firePause());
+    await page.waitForTimeout(150);
+    const flatA = await page.evaluate(() => window.__rafCount);
+    await page.waitForTimeout(250);
+    const flatB = await page.evaluate(() => window.__rafCount);
+    const genuinelyPaused = flatA === flatB;
+
+    // A tap on the canvas must NOT wake it -- the fallback is gated out.
+    const box = await page.locator('#game-canvas').boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(400);
+    const afterTap = await page.evaluate(() => window.__rafCount);
+    const tapDidNothing = afterTap === flatB;
+
+    // The real host resume signal must still work -- gating the tap
+    // fallback must not have broken the legitimate resume path.
+    await page.evaluate(() => window.__ytgameLifecycle.fireResume());
+    await page.waitForTimeout(400);
+    const afterHostResume = await page.evaluate(() => window.__rafCount);
+    const hostResumeWorked = afterHostResume > afterTap;
+
+    const ok = genuinelyPaused && tapDidNothing && hostResumeWorked;
+    record('12.1: tap-to-wake fallback is gated out of the Playables container', ok, ok,
+      `rAF flat while host-paused: ${flatA} -> ${flatB} (${genuinelyPaused}); `
+      + `rAF after a tap (should be unchanged): ${afterTap} (${tapDidNothing}); `
+      + `rAF after the real host onResume (should rise): ${afterHostResume} (${hostResumeWorked})`);
+    await context.close();
+  }
+
   // ---------------------------------------------------------------- theme
   {
     const { context, page } = await freshPage(browser, 'theme');

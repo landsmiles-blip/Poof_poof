@@ -627,9 +627,19 @@ async function boot() {
   // Excludes the in-game pause panel on purpose -- see pausePanelOpen's own
   // comment above -- and goes through the same resumeRun() every other
   // resume path uses, never a second mechanism.
-  document.addEventListener('pointerdown', () => {
-    if (state.paused && !pausePanelOpen) resumeRun();
-  });
+  //
+  // Pages-only. Inside the Playables container platform.onPause/onResume are
+  // the real ytgame.system signals, not the WebView-unreliable visibility
+  // event this fallback was written for -- the host owns that lifecycle
+  // there. Letting a stray tap silently resume ahead of (or instead of) the
+  // host's own onResume call would let the game's local paused state drift
+  // out of sync with what YouTube believes it told the Playable, which is a
+  // worse failure than the one this fallback exists to catch.
+  if (!platform.isPlayablesEnv) {
+    document.addEventListener('pointerdown', () => {
+      if (state.paused && !pausePanelOpen) resumeRun();
+    });
+  }
 
   applyPageTheme(themeForScore(0));
   // So the menu is never shown against a bare --page-bg before the loop's
