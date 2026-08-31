@@ -10,14 +10,17 @@
 // here reads or writes game state.
 
 import {
-  TIERS, BG_SHAPE_COUNT, BG_SHAPE_MIN_RADIUS, BG_SHAPE_MAX_RADIUS,
-  BG_SHAPE_MIN_ALPHA, BG_SHAPE_MAX_ALPHA, BG_SHAPE_MAX_DRIFT_PX_PER_SEC,
+  TIERS, BG_BANDS,
   BG_HALO_PEAK_ALPHA, BG_HALO_MID_ALPHA, BG_HALO_RADIUS_SCALE,
   BG_GROUND_LIGHTEN, BG_GROUND_DARKEN,
+  BG_DARK_PAGE_LUMINANCE, BG_DARK_GROUND_DARKEN,
+  BG_DARK_HALO_PEAK_ALPHA, BG_DARK_HALO_MID_ALPHA,
   BG_VIGNETTE_INNER_SCALE, BG_VIGNETTE_OUTER_SCALE, BG_VIGNETTE_EDGE_ALPHA,
   BG_MIN_REDRAW_INTERVAL_SEC, BG_SHAPE_SEED,
+  BG_POP_MIN_PERIOD_SEC, BG_POP_MAX_PERIOD_SEC, BG_POP_DURATION_SEC, BG_POP_RING_SCALE,
 } from './constants.js';
 import { isReducedMotion } from './effects.js';
+import { relativeLuminance } from './theme.js';
 
 let canvas = null;
 let ctx = null;
@@ -48,22 +51,36 @@ function mulberry32(seed) {
 function buildShapes(width, height) {
   const rng = mulberry32(BG_SHAPE_SEED);
   const list = [];
-  for (let i = 0; i < BG_SHAPE_COUNT; i++) {
-    const tier = Math.floor(rng() * TIERS.length);
-    list.push({
-      x0: rng() * width,
-      y0: rng() * height,
-      radius: BG_SHAPE_MIN_RADIUS + rng() * (BG_SHAPE_MAX_RADIUS - BG_SHAPE_MIN_RADIUS),
-      tier,
-      // Tied to the tier's own real shape rather than an independent coin
-      // flip, so the decorative silhouettes echo the actual fruit roster.
-      isFlower: TIERS[tier].shape === 'flower',
-      alpha: BG_SHAPE_MIN_ALPHA + rng() * (BG_SHAPE_MAX_ALPHA - BG_SHAPE_MIN_ALPHA),
-      vx: (rng() - 0.5) * BG_SHAPE_MAX_DRIFT_PX_PER_SEC,
-      vy: -(rng() * BG_SHAPE_MAX_DRIFT_PX_PER_SEC), // up and sideways, never down
-      rotation0: rng() * Math.PI * 2,
-      spin: (rng() - 0.5) * 0.3, // rad/sec -- only visible on rosettes
-    });
+  for (const band of BG_BANDS) {
+    for (let i = 0; i < band.count; i++) {
+      const tier = Math.floor(rng() * TIERS.length);
+      const radius = band.minRadius + rng() * (band.maxRadius - band.minRadius);
+      list.push({
+        x0: rng() * width,
+        // Start spread over a band's worth of extra height above the
+        // viewport as well as inside it, so nothing arrives in a visible
+        // row at t=0 and the first frame already looks settled.
+        y0: rng() * (height + band.maxRadius * 2) - band.maxRadius,
+        radius,
+        tier,
+        // Tied to the tier's own real shape rather than an independent coin
+        // flip, so the decorative silhouettes echo the actual fruit roster.
+        isFlower: TIERS[tier].shape === 'flower',
+        alpha: band.alpha,
+        // A little sideways wander, but the dominant motion is DOWN -- the
+        // backdrop echoes the falling fruit rather than contradicting it.
+        vx: (rng() - 0.5) * band.minSpeed,
+        vy: band.minSpeed + rng() * (band.maxSpeed - band.minSpeed),
+        rotation0: rng() * Math.PI * 2,
+        spin: (rng() - 0.5) * 2 * band.spin, // rad/sec -- reads on rosettes and on the near band
+        // 13.4: only the two closer bands puff; a 12px far-band shape
+        // popping is invisible and would just cost fill-rate.
+        popPeriod: band.pops
+          ? BG_POP_MIN_PERIOD_SEC + rng() * (BG_POP_MAX_PERIOD_SEC - BG_POP_MIN_PERIOD_SEC)
+          : 0,
+        popOffset: rng() * BG_POP_MAX_PERIOD_SEC,
+      });
+    }
   }
   return list;
 }
@@ -122,25 +139,43 @@ function hexToRgba(hex, alpha) {
 
 // Layer 1: the largest single improvement in the phase -- replaces a flat
 // --page-bg fill with a gradient lit from above.
-function drawGround(theme, w, h) {
+function drawGround(theme, w, h, darkness) {
   const g = ctx.createLinearGradient(0, 0, 0, h);
   g.addColorStop(0, shade(theme.page, BG_GROUND_LIGHTEN));
-  g.addColorStop(1, shade(theme.page, -BG_GROUND_DARKEN));
+  g.addColorStop(1, shade(theme.page, -lerp(BG_GROUND_DARKEN, BG_DARK_GROUND_DARKEN, darkness)));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+// 0 for an ordinary page colour, 1 for one already at or below
+// BG_DARK_PAGE_LUMINANCE. Drives both the ground's darkening and the halo's
+// strength, so the Midnight stop keeps a visible backdrop -- see the
+// BG_DARK_* comment in js/constants.js.
+function darknessOf(theme) {
+  const lum = relativeLuminance(theme.page);
+  if (lum <= BG_DARK_PAGE_LUMINANCE) return 1;
+  const ceiling = BG_DARK_PAGE_LUMINANCE * 4;
+  if (lum >= ceiling) return 0;
+  return 1 - (lum - BG_DARK_PAGE_LUMINANCE) / (ceiling - BG_DARK_PAGE_LUMINANCE);
 }
 
 // Layer 2: the board reads as lit from behind rather than pasted onto the
 // ground. Skipped before the board has ever been measured (menu on a very
 // first boot) -- ground and shapes still show, just without a halo yet.
-function drawHalo(theme, w, h) {
+function drawHalo(theme, w, h, darkness) {
   if (!boardRect) return;
   const cx = boardRect.left + boardRect.width / 2;
   const cy = boardRect.top + boardRect.height / 2;
   const radius = Math.hypot(boardRect.width, boardRect.height) * BG_HALO_RADIUS_SCALE;
+  const peak = lerp(BG_HALO_PEAK_ALPHA, BG_DARK_HALO_PEAK_ALPHA, darkness);
+  const mid = lerp(BG_HALO_MID_ALPHA, BG_DARK_HALO_MID_ALPHA, darkness);
   const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-  g.addColorStop(0, hexToRgba(theme.accent, BG_HALO_PEAK_ALPHA));
-  g.addColorStop(0.55, hexToRgba(theme.accent, BG_HALO_MID_ALPHA));
+  g.addColorStop(0, hexToRgba(theme.accent, peak));
+  g.addColorStop(0.55, hexToRgba(theme.accent, mid));
   g.addColorStop(1, hexToRgba(theme.accent, 0));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
@@ -180,17 +215,57 @@ function drawFlatRosette(ctx2, x, y, r, rotation) {
 // Layer 3: sixteen drifting silhouettes, coloured from the live skin (see
 // drawBackground's theme.skinColors) so a player's chosen skin is reflected
 // even in the surround.
-function drawShapes(theme, timeSec, w, h) {
+function drawShapes(theme, timeSec, w, h, reduced) {
   if (!shapes) return;
   for (const s of shapes) {
+    // Wrapped over the viewport plus a shape's own diameter at each end, so
+    // a large near-band shape slides fully off the bottom before reappearing
+    // at the top instead of snapping out of existence mid-screen.
+    const span = h + s.radius * 2;
     const x = wrap(s.x0 + s.vx * timeSec, w);
-    const y = wrap(s.y0 + s.vy * timeSec, h);
+    const y = wrap(s.y0 + s.vy * timeSec, span) - s.radius;
     const rotation = s.rotation0 + s.spin * timeSec;
+
+    // 13.4: the puff. `phase` is 0..1 through this shape's own pop cycle;
+    // only the tail BG_POP_DURATION_SEC of it does anything, so a shape
+    // spends the overwhelming majority of its life simply falling. Analytic
+    // from absolute time like the position above, for the same reason: the
+    // ~15fps throttle means frames arrive at irregular intervals and
+    // anything accumulated per call would drift.
+    let alpha = s.alpha;
+    let ringT = -1;
+    if (!reduced && s.popPeriod > 0) {
+      const cycle = (timeSec + s.popOffset) % s.popPeriod;
+      const since = cycle - (s.popPeriod - BG_POP_DURATION_SEC);
+      if (since >= 0) {
+        ringT = since / BG_POP_DURATION_SEC; // 0 -> 1 across the puff
+        alpha = s.alpha * (1 - ringT);
+      }
+    }
+
+    if (ringT >= 0) {
+      // The ring the shape leaves behind: expands outward and fades, drawn
+      // under the shrinking shape so the two read as one event.
+      const rr = s.radius * (1 + (BG_POP_RING_SCALE - 1) * ringT);
+      ctx.save();
+      ctx.globalAlpha = s.alpha * (1 - ringT) * 0.9;
+      ctx.strokeStyle = theme.skinColors[s.tier];
+      ctx.lineWidth = Math.max(1.5, s.radius * 0.12 * (1 - ringT));
+      ctx.beginPath();
+      ctx.arc(x, y, rr, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (alpha <= 0.002) continue;
     ctx.save();
-    ctx.globalAlpha = s.alpha;
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = theme.skinColors[s.tier];
-    if (s.isFlower) drawFlatRosette(ctx, x, y, s.radius, rotation);
-    else drawFlatDisc(ctx, x, y, s.radius);
+    // Shrinks slightly as it goes, so the puff reads as a pop rather than a
+    // plain fade.
+    const r = ringT >= 0 ? s.radius * (1 - 0.35 * ringT) : s.radius;
+    if (s.isFlower) drawFlatRosette(ctx, x, y, r, rotation);
+    else drawFlatDisc(ctx, x, y, r);
     ctx.restore();
   }
 }
@@ -231,8 +306,9 @@ export function drawBackground(theme, timeSec) {
 
   const w = canvas.width;
   const h = canvas.height;
-  drawGround(theme, w, h);
-  drawHalo(theme, w, h);
-  drawShapes(theme, timeSec, w, h);
+  const darkness = darknessOf(theme);
+  drawGround(theme, w, h, darkness);
+  drawHalo(theme, w, h, darkness);
+  drawShapes(theme, timeSec, w, h, reduced);
   drawPageVignette(w, h);
 }

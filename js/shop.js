@@ -8,8 +8,8 @@
 // until the player had already lost a run. After a page load the first run was
 // always unequipped, no matter how full the inventory was.
 
-import { POWERUPS, SKINS, TIERS, BUILD_VERSION } from './constants.js';
-import { buyPowerUp, startRun, selectSkin, isUnlockedByScore } from './state.js';
+import { POWERUPS, SKINS, TIERS, BUILD_VERSION, MILESTONE_SCORES } from './constants.js';
+import { buyPowerUp, startRun, selectSkin, isUnlockedByScore, skinColor } from './state.js';
 import { unlockAudio, toggleMuted, isMuted, playUiTick } from './audio.js';
 import { isMusicOn, toggleMusic } from './music.js';
 import { hasHaptics, isHapticsOn, toggleHaptics } from './effects.js';
@@ -18,14 +18,94 @@ import { iconCanvas } from './icons.js';
 // Tiers sampled for the little skin swatch previews.
 const SWATCH_TIERS = [0, 3, 6, 8];
 
+// 13.1: the wordmark, built letter by letter so each can carry its own
+// colour and its own small lift off the baseline. Colours come from
+// skinColor(), not from TIERS directly, so the title reflects whichever
+// palette the player has chosen -- pick Clarity and the name is drawn in
+// Clarity, for free and with no second code path.
+//
+// The two arrays are a fixed bounce, not a random one: a title that shuffles
+// on every render reads as a glitch rather than as character, and this way a
+// screenshot diff of the menu still means something.
+const WM_LIFT = [0, -4, 2, -3];
+const WM_TILT = [-4, 3, -2, 4];
+
+function wordmarkHTML(state) {
+  let index = 0;
+
+  // Each word is drawn TWICE, stacked: a solid white copy underneath that
+  // carries the stroke, and the coloured copy on top with no stroke at all.
+  //
+  // This is not belt-and-braces, it is the only way to get the result. A
+  // stroke applied per letter grows every glyph outward independently, so
+  // each letter ends up ringed in white and the word reads as eight
+  // scattered stickers rather than one name -- and widening the tracking to
+  // stop them colliding only makes that worse. Stroking a single white copy
+  // of the whole word gives ONE continuous outline around the outside of it,
+  // with the per-letter colours laid over the top. Both layers emit the same
+  // characters with the same per-letter transforms, so they cannot drift out
+  // of register.
+  function layers(word) {
+    const stroke = [...word].map((ch, i) => {
+      const t = `translateY(${WM_LIFT[(index + i) % 4]}px) rotate(${WM_TILT[(index + i) % 4]}deg)`;
+      return `<span class="wm-l" style="transform:${t}">${ch}</span>`;
+    }).join('');
+    const fill = [...word].map((ch, i) => {
+      const color = skinColor(state, (index + i) % TIERS.length);
+      const t = `translateY(${WM_LIFT[(index + i) % 4]}px) rotate(${WM_TILT[(index + i) % 4]}deg)`;
+      return `<span class="wm-l" style="color:${color};transform:${t}">${ch}</span>`;
+    }).join('');
+    index += word.length;
+    return `<span class="wm-word">`
+      + `<span class="wm-layer wm-stroke" aria-hidden="true">${stroke}</span>`
+      + `<span class="wm-layer wm-fill">${fill}</span>`
+      + `</span>`;
+  }
+
+  // aria-label so the name is announced once, as a name, rather than as
+  // eight separate letters across two visually-identical layers.
+  return `<span class="wm" aria-label="Poof Poof" role="img">`
+    + `${layers('Poof')} ${layers('Poof')}`
+    + `</span>`;
+}
+
+// 13.5: the one line on the game-over screen that points forward. Finds the
+// next milestone above the player's best and names what is waiting there --
+// derived from MILESTONE_SCORES, SKINS and POWERUPS rather than a hand-kept
+// list, so it can never describe a reward that has been renamed or moved.
+function nextUnlockHTML(state) {
+  const next = MILESTONE_SCORES.find((score) => score > state.highScore);
+  if (next === undefined) return '';
+  const rewards = [
+    ...SKINS.filter((k) => k.unlockScore === next).map((k) => `the ${k.name} palette`),
+    ...POWERUPS.filter((p) => p.unlockScore === next).map((p) => p.name),
+  ];
+  if (rewards.length === 0) return '';
+  const list = rewards.length === 1
+    ? rewards[0]
+    : `${rewards.slice(0, -1).join(', ')} and ${rewards[rewards.length - 1]}`;
+  const away = next - state.highScore;
+  return `<p class="next-unlock"><strong>${away}</strong> more to unlock ${list}</p>`;
+}
+
 export function renderMenu(root, state, onStart) {
   renderShopScreen(root, state, {
-    title: 'Poof Poof',
+    // The title slot is rendered as HTML (see homeHTML) -- the menu passes a
+    // wordmark, every other screen passes a plain string.
+    title: wordmarkHTML(state),
+    titleClass: 'wordmark',
     // Coins moved to the Cart button's own badge (7.1) -- the home screen
     // carries only the four things the brief specifies: title, best score,
     // Play, the icon row.
+    //
+    // 13.1: the old line -- "Drag falling fruit, merge matching pairs, chase
+    // the watermelon" -- was an instruction manual on a title screen, and it
+    // gave away the goal in the first sentence anyone reads. Three beats
+    // instead: the verb the player actually performs (they slide a falling
+    // fruit sideways -- they do not catch it and they do not drop it), the
+    // rule, and the game's own name as the payoff.
     lead: `
-      <p class="subtitle">Drag falling fruit, merge matching pairs, chase the watermelon.</p>
+      <p class="tagline">Slide. Match. <span class="tagline-pop">Poof</span>.</p>
       <p class="stat">Best score: <strong>${state.highScore}</strong></p>
     `,
     playLabel: 'Play',
@@ -43,6 +123,7 @@ export function renderGameOver(root, state, onPlayAgain) {
       <p class="stat">Coins earned: <strong>+${state.lastRunCoinsEarned}</strong></p>
       <p class="stat">Coin balance: <strong>${state.coins}</strong></p>
       ${renderUnlockBanner(state)}
+      ${nextUnlockHTML(state)}
     `,
     playLabel: 'Play Again',
     onStart: onPlayAgain,
@@ -109,7 +190,7 @@ export function renderPausePanel(root, state, { onResume, onBackToMenu }) {
 // Play, an icon row); the icon row opens one of three panels within the same
 // overlay, each with its own back control. The overlay still fully replaces
 // the canvas either way -- this only restructures what's inside it.
-function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
+function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onStart }) {
   // Held across redraws so buying something does not clear the toggles.
   const opts = { useSlowDrop: false, useExtraRow: false, useRainbow: false };
   let panel = 'home'; // 'home' | 'cart' | 'palette' | 'gear'
@@ -150,7 +231,7 @@ function renderShopScreen(root, state, { title, lead, playLabel, onStart }) {
     const canAffordAnything = POWERUPS.some((p) => isUnlockedByScore(p, state.highScore) && state.coins >= p.cost);
     return `
       <div class="screen screen-home">
-        <h1>${title}</h1>
+        <h1${titleClass ? ` class="${titleClass}"` : ''}>${title}</h1>
         ${lead}
         <button class="primary" id="play-btn">${playLabel}</button>
         <div class="icon-row">

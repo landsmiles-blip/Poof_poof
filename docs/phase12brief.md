@@ -143,7 +143,16 @@ Still no image files, still no network requests, still nothing drawn that is not
 
 ---
 
-## 12.4 — The menu, and the type
+## 12.4 — The menu, and the type — **SUPERSEDED by docs/phase13brief.md**
+
+> **Do not implement this section.** Phase 13 ships the title screen instead,
+> with a different face (Titan One, not Baloo 2) and different copy
+> ("Slide. Match. Poof.", not "Two of a kind, and — poof."). Both changed
+> after the candidates were actually rendered rather than reasoned about;
+> phase 13's brief §0.2 gives the reasoning. Building both would produce two
+> competing title screens. Kept below only as a record of what was originally
+> specified.
+
 
 ### The copy
 
