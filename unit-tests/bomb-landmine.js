@@ -75,12 +75,26 @@ function freshRun() {
   const state = freshRun();
   const startCol = Math.floor(COLS / 2);
   const rows = state.grid.length;
-  // Fill the spawn column to one short of the top with ordinary fruit
-  // (alternating tiers, so this filler does not cascade-merge on its own
-  // when resolveMerges runs after the bomb lands), then land a bomb in the
-  // last remaining slot -- if it takes up space like any other tier, this
-  // alone must end the run.
-  for (let r = 1; r < rows; r++) state.grid[r][startCol] = r % 2;
+  // Fill the WHOLE board to one free slot with ordinary fruit, then land a
+  // bomb in that last slot -- if a bomb takes up space like any other tier,
+  // this must end the run.
+  //
+  // 12.2 changed what "the run is over" means: it used to be "the spawn
+  // column is full" and is now "no column has room", so filling one column
+  // is no longer a terminal state and this test has to build the real one.
+  // The subject of the test is unchanged -- a bomb occupying a cell like any
+  // other tier -- only the board it is asserted against.
+  //
+  // (r + c) % 2 rather than r % 2: a checkerboard has no two equal
+  // neighbours in either direction, so this filler cannot cascade-merge on
+  // its own when resolveMerges runs after the bomb lands. Alternating on the
+  // row alone would have put equal tiers side by side across columns.
+  for (let c = 0; c < COLS; c++) {
+    if (c === startCol) continue;
+    for (let r = 0; r < rows; r++) state.grid[r][c] = (r + c) % 2;
+    state.stackHeight[c] = rows;
+  }
+  for (let r = 1; r < rows; r++) state.grid[r][startCol] = (r + startCol) % 2;
   state.stackHeight[startCol] = rows - 1;
   state.active = {
     tier: BOMB_TIER, col: startCol, x: startCol * CELL + CELL / 2, targetX: startCol * CELL + CELL / 2, y: 0,
@@ -92,7 +106,7 @@ function freshRun() {
   assert.equal(landed, true, 'a bomb should fall and land exactly like any other fruit');
   assert.equal(state.stackHeight[startCol], rows, 'a landed bomb must count toward stack height');
   assert.equal(state.grid[0][startCol], BOMB_TIER, 'the bomb should be resting at the top of the now-full column');
-  assert.equal(isGameOver(state), true, 'a bomb filling the spawn column to the top must end the run, same as any fruit would');
+  assert.equal(isGameOver(state), true, 'a bomb filling the last free cell on the board must end the run, same as any fruit would');
   assert.equal(state.score, scoreBefore, 'landing a bomb (no merge) must award no score');
   assert.equal(state.bombFuseDrops, BOMB_FUSE_DROPS, 'landing should start the fuse counting down');
 }

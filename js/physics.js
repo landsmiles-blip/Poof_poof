@@ -5,6 +5,7 @@ import {
   COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
+  SPAWN_MIN_REACTION_SEC,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter,
@@ -40,14 +41,52 @@ function findBombCell(state) {
   return null;
 }
 
-export function spawnFruit(state) {
-  const startCol = Math.floor(COLS / 2);
+// 12.2: the column a fruit arrives in. Uniform across the six columns, then
+// redirected outward to the nearest column with room if that one is full --
+// the same alternating left/right search columnForX already performs, so a
+// full column is never a valid answer here either.
+//
+// Returns -1 only when every column is full, which is the terminal state
+// isGameOver reports.
+function chooseSpawnColumn(state) {
   const rows = effectiveRows(state);
+  const wanted = Math.floor(Math.random() * COLS);
+  if (state.stackHeight[wanted] < rows) return wanted;
+  for (let offset = 1; offset < COLS; offset++) {
+    const left = wanted - offset;
+    const right = wanted + offset;
+    if (left >= 0 && state.stackHeight[left] < rows) return left;
+    if (right < COLS && state.stackHeight[right] < rows) return right;
+  }
+  return -1;
+}
 
+// How long this fruit holds at the top before gravity takes it. See
+// SPAWN_MIN_REACTION_SEC: a floor on time-to-land, not a flat delay, so it
+// is zero on an empty board and only pays out over a tall column.
+//
+// Measured against the column the fruit ARRIVES over, once, at spawn. The
+// player may immediately steer somewhere taller or shorter and the hold does
+// not follow them -- recomputing it as they drag would make the fruit
+// hesitate whenever they passed over a tall column, which reads as lag
+// rather than as grace.
+function spawnHangSecFor(state, col) {
+  const rows = effectiveRows(state);
+  const landingRow = rows - 1 - state.stackHeight[col];
+  const distance = landingRow * CELL + CELL / 2 + tierDef(state.nextTier).radius;
+  const fallSec = distance / currentGravityPxPerSec(state);
+  return Math.max(0, SPAWN_MIN_REACTION_SEC - fallSec);
+}
+
+export function spawnFruit(state) {
   // Bail before consuming anything. A blocked spawn ends the run, and eating a
   // scheduled wild (or advancing the index) on the way out would silently
   // destroy a charge the player paid for.
-  if (state.stackHeight[startCol] >= rows) {
+  //
+  // 12.2: "blocked" now means every column is full, not that one nominated
+  // column is. Five empty columns no longer count for nothing.
+  const startCol = chooseSpawnColumn(state);
+  if (startCol < 0) {
     return { blocked: true };
   }
 
@@ -68,6 +107,10 @@ export function spawnFruit(state) {
     }
   }
 
+  // Computed before nextTier is consumed below -- it needs the radius of the
+  // fruit that is about to spawn, which is still state.nextTier at this point.
+  const hangSec = spawnHangSecFor(state, startCol);
+
   // state.nextTier was decided one spawn ahead of time (in nextTierFor, called
   // from here and from startRun) specifically so the HUD's "Next" preview is
   // never a lie -- nothing here is allowed to override it.
@@ -87,6 +130,7 @@ export function spawnFruit(state) {
     x: startCol * CELL + CELL / 2,
     targetX: startCol * CELL + CELL / 2,
     y: -tierDef(tier).radius,
+    hangSec,
   };
   return { blocked: false };
 }
@@ -110,6 +154,14 @@ export function stepPhysics(state, dt) {
 
   // Slow Drop multiplies the RAMPED value, so it stays proportionally useful
   // late in a run rather than becoming irrelevant as the ramp climbs past it.
+  // 12.2: the reaction floor. Steering above is deliberately OUTSIDE this
+  // branch -- the fruit tracks the pointer while it holds, which is the
+  // whole purpose. Only the fall waits.
+  if (active.hangSec > 0) {
+    active.hangSec -= dt;
+    return false;
+  }
+
   const gravity = currentGravityPxPerSec(state) * (state.slowDropActive ? SLOW_DROP_MULTIPLIER : 1);
   active.y += gravity * dt;
 
@@ -374,8 +426,13 @@ export function swapFruits(state, r1, c1, r2, c2) {
   return true;
 }
 
+// 12.2: the board is over when there is nowhere left to put anything, not
+// when one nominated column fills. This is the single line that stopped five
+// empty columns from counting for nothing.
 export function isGameOver(state) {
   const rows = effectiveRows(state);
-  const startCol = Math.floor(COLS / 2);
-  return state.stackHeight[startCol] >= rows;
+  for (let c = 0; c < COLS; c++) {
+    if (state.stackHeight[c] < rows) return false;
+  }
+  return true;
 }
