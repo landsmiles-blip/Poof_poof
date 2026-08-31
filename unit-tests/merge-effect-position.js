@@ -6,25 +6,47 @@
 // alone -- correct at push time -- can describe a cell whose contents move on
 // before the event is drained.
 //
-// Fixture: one column (col 3), fully packed with 7 cells so no unrelated
-// merges are possible in any other column. Two mergeable pairs, arranged so
-// resolving the first (rows 0-1) leaves its result sitting directly above a
-// second pair (rows 3-4) which merges afterward in the same cascade. Closing
-// the gap left by the second merge shifts the first merge's result down by
-// one row -- proving the row recorded on the first event no longer matches
-// where that fruit now sits, while its frozen (x, y) still correctly marks
-// where the merge itself actually happened.
+// Fixture: one column (col 3), packed to the full height of the board so no
+// unrelated merges are possible in any other column. Two mergeable pairs,
+// arranged so resolving the first (rows 0-1) leaves its result sitting
+// directly above a second pair (rows 3-4) which merges afterward in the same
+// cascade. Closing the gap left by the second merge shifts the first merge's
+// result down by one row -- proving the row recorded on the first event no
+// longer matches where that fruit now sits, while its frozen (x, y) still
+// correctly marks where the merge itself actually happened.
+//
+// 14: the fixture's first five rows are the test's actual subject and are
+// still written out by hand; everything BELOW them was a hardcoded
+// `[..., 4, 5]` tail that happened to be exactly ROWS long when ROWS was 7,
+// so raising ROWS to 10 failed this file on its own fixture check rather
+// than on anything it is testing. Same class of bug as phase 13's two tests
+// that hardcoded a MILESTONE_SCORES value: repeating a constant WAS the bug,
+// and the tail is now generated to whatever height the board is.
 import assert from 'node:assert/strict';
-import { CELL, COLS, ROWS } from '../js/constants.js';
+import { CELL, COLS, ROWS, MAX_TIER } from '../js/constants.js';
 import { createInitialState } from '../js/state.js';
 import { resolveMerges } from '../js/physics.js';
 
 const state = createInitialState(null);
 const col = 3;
-// [tier0, tier0, tier3, tier0, tier0, tier4, tier5] top to bottom -- distinct
-// filler tiers so nothing merges except the two intended pairs.
-const values = [0, 0, 3, 0, 0, 4, 5];
+// [tier0, tier0, tier3, tier0, tier0] top to bottom: the two intended pairs
+// and the blocker between them.
+const values = [0, 0, 3, 0, 0];
+// Filler beneath, cycling 4..8 so no two vertically adjacent cells ever match
+// (the first filler is 4 against the pair's 0 above it) and nothing down
+// there can merge on its own or settle in a way this test did not ask for.
+// Capped at MAX_TIER so the cycle can never emit a tier that does not exist.
+const FILL_LOW = 4;
+const FILL_SPAN = MAX_TIER - FILL_LOW + 1;
+const FILL_FROM = values.length;
+assert.ok(FILL_SPAN >= 2, 'the filler cycle needs at least two distinct tiers to avoid adjacent matches');
+for (let i = FILL_FROM; i < ROWS; i++) values.push(FILL_LOW + ((i - FILL_FROM) % FILL_SPAN));
 assert.equal(values.length, ROWS, 'fixture must fill the whole column so no unwanted settling happens beyond what the test expects');
+// Only the generated tail: rows 0-1 and 3-4 are the two pairs this test is
+// built around and are SUPPOSED to match.
+for (let r = FILL_FROM; r < values.length; r++) {
+  assert.notEqual(values[r], values[r - 1], `generated filler rows ${r - 1}/${r} must differ, or the tail merges on its own`);
+}
 for (let r = 0; r < ROWS; r++) {
   for (let c = 0; c < COLS; c++) state.grid[r][c] = c === col ? values[r] : null;
 }

@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-16';
+export const BUILD_VERSION = '2026.08.28-17';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -27,7 +27,54 @@ export const COLS = 6;
 // the ceiling -- lowering the ceiling punishes the player for merging well,
 // which is the one thing the game is asking them to do. Do not re-shrink
 // this to fix difficulty.
-export const ROWS = 7;
+//
+// 14: 7 -> 10. This is the THIRD time this constant has moved (7 -> 5 ->
+// 7 -> 10), so it carries its evidence rather than an opinion.
+//
+// Against the genre, measured from the games' own published boards rather
+// than from memory:
+//
+//   Tetris (Guideline)   10 x 20 visible  1:2.0
+//   Puyo Puyo             6 x 12          1:2.0
+//   Dr. Mario             8 x 11..16      1:1.4 .. 1:2.0
+//   Poof Poof at 7 rows   6 x 7           1:1.17   <- shortest of the lot
+//   Poof Poof at 10 rows  6 x 10          1:1.67   <- inside the range
+//
+// Every successful faller is roughly twice as tall as it is wide. Ours was
+// not, and the two complaints this phase answers -- "the fruit dropping
+// from every which way is not making sense" and "is it supposed to cover
+// all the way to the floor of the phone" -- are both downstream of that one
+// number. A short board cannot afford a fixed spawn column (see
+// chooseSpawnColumn in js/physics.js); a tall one can, which is why Puyo has
+// had one since 1991.
+//
+// Against the screen, computed from css/style.css's ACTUAL sizing formula
+// (min(100vw - 16, min(100vh - 16, 1600) * ratio)), not estimated:
+//
+//   rows   390x844   412x915   375x667 (SE)   fruit cell (390 / 412 / SE)
+//    7       65%       64%        79%          62.3 / 66.0 / 59.8 px
+//    8       73%       71%        88%          62.3 / 66.0 / 59.8 px
+//    9       80%       78%        97%          62.3 / 66.0 / 55.9 px
+//   10       87%       85%        98%          62.3 / 66.0 / 55.0 px
+//   12       98%       98%        98%          59.8 / 64.9 / 47.0 px
+//
+// The load-bearing row is that the FRUIT DOES NOT SHRINK up to ten rows on
+// an ordinary phone. The canvas is six columns wide whatever the row count,
+// width is the binding constraint on a phone, so extra rows consume
+// currently-empty backdrop rather than cell size. Twelve rows is where the
+// height term finally wins and the fruit starts shrinking; ten is the last
+// stop before that, which is why it is ten and not twelve.
+//
+// YouTube Playables' design requirements say a game SHOULD fill the
+// viewport, and MUST otherwise be centred with pillarbox/letterbox. We were
+// compliant at 65% via the second clause. At 87% we satisfy the first.
+//
+// KNOWN CONSEQUENCE, not hidden: an empty-board fall goes from ~1.66s to
+// ~2.40s at baseline gravity, and ~2.76s to ~3.99s at the ramp's slow
+// opening. GRAVITY_PX_PER_SEC is deliberately NOT touched to compensate --
+// see its own comment, and §5 of docs/phase14brief.md for the measurement
+// that decision rests on. Do not "fix" the fall time without re-measuring.
+export const ROWS = 10;
 export const CELL = 64; // px, size of one grid cell
 
 export const BOARD_WIDTH = COLS * CELL;
@@ -59,6 +106,30 @@ export const MAX_TIER = TIERS.length - 1;
 // Which tiers can spawn as a new falling fruit, and their relative odds.
 export const SPAWN_POOL = [0, 0, 0, 1, 1, 2];
 
+// 14 DELIBERATELY DID NOT TOUCH THIS, and the reasoning is here rather than
+// in a commit message because the temptation to "fix" it will recur.
+//
+// ROWS 7 -> 10 made the board 45% taller, so a fall to an empty floor takes
+// 45% longer at the same speed. Measured in the browser, spawn to the next
+// spawn on the very first drop of a fresh run: 2426ms at 7 rows, 3675ms at
+// 10. That is a real cost and it lands on the worst possible drop -- the
+// first one a new player ever sees -- because the gravity ramp's eased
+// opening (GRAVITY_RAMP_START_MULTIPLIER, 0.6x) is ALSO at its slowest
+// there. The two gentle-opening mechanisms now stack.
+//
+// Scaling this constant by the board height would hold time-to-land
+// constant, and that is arguably the better long-term shape for it. It was
+// not done here for two reasons. First, one lever at a time: changing the
+// board's size and the fall's speed in the same phase makes it impossible to
+// tell which one is responsible for how the result plays. Second, the
+// genre's own answer to "the natural fall is slow" is not faster gravity, it
+// is a drop control -- every faller has a soft drop and a hard drop, and so
+// does this one (js/physics.js's hardDrop) except that it is bound to the
+// keyboard only. On a phone, the platform this is being certified for, there
+// is currently no way to skip the wait at all.
+//
+// So the honest fix is a touch drop control, not a bigger number here. If
+// the opening reads as sluggish, reach for that first.
 export const GRAVITY_PX_PER_SEC = 260; // the baseline the ramp below reaches at drop GRAVITY_RAMP_DROPS_TO_BASE
 export const SLOW_DROP_MULTIPLIER = 0.5;
 export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the pointer horizontally
@@ -97,40 +168,53 @@ export const GRAVITY_RAMP_DROPS_TO_CAP = 120;
 // the distance from START to BASE -- genuinely flat, not merely slower.
 export const GRAVITY_RAMP_EASE_POWER = 2;
 
-// 12.2: the danger warning's headroom, now applied to EVERY column rather
-// than only the spawn column -- with a varying spawn there is no single
-// column that ends the run, so there is no single column to warn about.
+// 12.2: the danger warning's headroom, applied to EVERY column rather than
+// only the spawn column. 14 restored the fixed spawn column but NOT the
+// old game-over rule, so this still stands: the run ends when the last
+// column fills, so any column can be the one that ends it, and there is no
+// single column to warn about.
 export const DANGER_ROWS_REMAINING = 2;
 
-// --- 12.2: where a fruit comes from ---------------------------------------
-// Until now every fruit spawned at Math.floor(COLS / 2) -- column 3 -- and
-// isGameOver checked that one column and nothing else. Measured in the real
-// game, touching nothing: six runs, median 13.5s, and every single one ended
-// on stacks 0,0,0,7,0,0. Seventeen percent of the board used. Five columns
-// completely empty and the run over.
+// --- Where a fruit comes from (12.2, revised by 14) ------------------------
+// Two separate rules, changed together in 12.2 and separated again in 14.
+// They are separate and the distinction is the whole point:
 //
-// That is not difficulty, it is a structural flaw: every fruit the player
-// fails to steer lands in the one column that kills them, and free space
-// anywhere else counts for nothing.
+//   A. WHICH COLUMN a fruit arrives in.
+//   B. WHEN THE RUN ENDS.
 //
-// The fix is two changes that only work together:
+// Before 12.2 both were "column 3". Every fruit spawned at
+// Math.floor(COLS / 2) and isGameOver read that one column and nothing else.
+// Measured in the real game, touching nothing: six runs, median 13.5s, every
+// single one ending on stacks 0,0,0,7,0,0 -- seventeen percent of the board
+// used, five columns completely empty, run over.
 //
-//   1. The spawn column varies. A plain uniform pick, redirected to the
-//      nearest open column when the chosen one is full -- reusing the search
-//      columnForX already performs. A shuffled bag ("all six before any
-//      repeat") was built and measured against this and abandoned: the
-//      full-column redirect breaks the bag's guarantee often enough that the
-//      two were indistinguishable on run length and score, and the bag cost
-//      an extra piece of state to carry and reset.
+// 12.2 fixed that by changing BOTH rules: a uniform random spawn column, and
+// a whole-board game over. It worked on the numbers (13.5s median to still
+// alive past 150s) and it was wrong on the feel, in the player's own words:
+// "the fruit dropping from every which way is not making sense."
 //
-//   2. The run ends when NO column has room, not when one does.
+// They are right, and the genre agrees. Puyo Puyo has spawned every pair at
+// one fixed column since 1991, marks that square on the board, and ends the
+// run when it fills. Tetris spawns in a fixed centred position. NONE of them
+// spawn at random. What made a fixed spawn unbearable here was not the fixed
+// spawn -- it was rule B, plus a UI failure: we never showed the player which
+// column mattered. Puyo draws its death square from second one; we drew
+// nothing.
 //
-// Change 1 alone would be unfair, and this is the number that proves it:
-// with a fixed spawn, 8-13% of drops arrive over a column with two rows of
-// headroom or less. With a varying spawn that rises to 30-38%. A third of
-// drops would land with almost no time to steer -- see
-// SPAWN_MIN_REACTION_SEC, which is the other half of this change and is not
-// optional.
+// So 14 keeps rule B's fix and reverts rule A:
+//
+//   A. The spawn column is FIXED at Math.floor(COLS / 2), and the board
+//      draws the chute above it (js/render.js's drawSpawnChute) so it is
+//      never a hidden rule. When that column is genuinely full the spawn is
+//      redirected outward to the nearest column with room -- and the chute
+//      moves with it, so the marker is never a lie.
+//   B. The run still ends only when NO column has room. Five empty columns
+//      never count for nothing again.
+//
+// Deterministic, so the chute can be drawn from the same function the spawn
+// uses -- see spawnColumnFor in js/physics.js, which both call. Two
+// implementations of "where does the next fruit go" would eventually
+// disagree, and the one the player can see would be the one that was wrong.
 // A floor on how long the player has between a fruit appearing and it
 // landing. If the natural fall is shorter than this, the fruit holds at the
 // top of its column for the difference before gravity engages; if it is
@@ -139,13 +223,38 @@ export const DANGER_ROWS_REMAINING = 2;
 // A floor rather than a flat delay, deliberately. A flat 0.3s hold on every
 // drop would add roughly ninety seconds of pure waiting to a three-hundred
 // drop run and slow the whole game down to fix a problem that only exists on
-// short falls. This costs nothing on an empty board (a fall to the floor of
-// a seven-row board takes ~1.7s) and pays out exactly where change 1 created
-// the shortfall.
+// short falls. It costs nothing on an empty board (a fall to the floor of a
+// ten-row board takes ~2.4s) and pays out exactly where the fall is short.
+//
+// 12.2 introduced this to cover the 30-38% of drops a RANDOM spawn column
+// dropped over a nearly-full column. 14's fixed spawn cuts that back to the
+// 8-13% a fixed column produces, so it now fires much more rarely -- but it
+// is kept, not reverted, because the case it covers still exists and is
+// nastier now: a fruit arriving over a tall CENTRE column, or redirected
+// onto a tall neighbour, is exactly where the player most needs the time.
 //
 // The player can steer during the hold -- that is the entire point. It is
 // reaction time, not a pause.
 export const SPAWN_MIN_REACTION_SEC = 0.8;
+
+// --- The chute (14) --------------------------------------------------------
+// The marker over the spawn column. Puyo draws a red X on its death square;
+// we deliberately do not, for one hard reason: DANGER_COLOR's own comment
+// says it "appears nowhere except the danger state -- one colour, one
+// meaning," and the chute is a RESTING-state fact, not a warning. Spending
+// the game's only red on something that is true for the whole run would
+// leave nothing to shout with, which is exactly the mistake milestone 0's
+// old alarm-red accent made.
+//
+// So the chute is drawn in theme.text -- the ink already chosen to read
+// against the current board, on light boards and dark ones alike -- at an
+// alpha low enough to sit under the fruit rather than compete with them.
+// The escalation is then free and unambiguous: quiet ink while the column
+// has room, drawDangerState's red over the top of it when it does not.
+export const SPAWN_CHUTE_TINT_ALPHA = 0.055; // column wash at the top edge, fading to 0
+export const SPAWN_CHUTE_FADE_ROWS = 2; // ...over this many rows
+export const SPAWN_CHUTE_MARK_ALPHA = 0.30; // the chevron and the two lip ticks
+export const SPAWN_CHUTE_MARK_INSET = 7; // px from the column's side walls to a lip tick
 
 // prefers-reduced-motion (js/effects.js): shake and particles are cut
 // entirely, but a merge should still read as a merge, so squash is scaled
@@ -606,8 +715,62 @@ export const BG_DARK_HALO_PEAK_ALPHA = 0.18; // instead of BG_HALO_PEAK_ALPHA
 // strength over a near-black page the whole surround took on a green cast
 // -- atmospheric, but reading as a colour wash rather than as light.
 export const BG_DARK_HALO_MID_ALPHA = 0.075; // instead of BG_HALO_MID_ALPHA
-export const BG_HALO_MID_ALPHA = 0.05; // at 55% of the halo's radius
-export const BG_HALO_RADIUS_SCALE = 0.9; // x hypot(boardWidth, boardHeight)
+export const BG_HALO_MID_ALPHA = 0.05; // the wider, fainter of the two passes
+
+// 14: BG_HALO_RADIUS_SCALE (0.9 x the board's own diagonal, as one radial
+// gradient centred on the board) is GONE, and a measurement killed it rather
+// than a preference.
+//
+// A radial gradient centred on the board falls off over a distance set by
+// the BOARD's size -- but the only part of it anyone can see is the margin
+// AROUND the board, and ROWS 7 -> 10 shrank that margin on a 390x844 phone
+// from 146px to 53px while making the board's diagonal larger. Sampling the
+// backdrop canvas itself up the centre line, screen edge to board edge:
+//
+//    7 rows:  rgb(57,43,32) -> rgb(71,51,34)   largest channel step: 14
+//   10 rows:  rgb(60,45,32) -> rgb(63,47,32)   largest channel step:  3
+//
+// Three levels across the whole visible strip is not a glow, it is a flat
+// tint. The board would have arrived at 87% of the screen sitting on a
+// backdrop that had quietly stopped doing its job.
+//
+// So the halo is no longer a gradient sized by the board; it is a glow that
+// hugs the board's rectangle, with a falloff length -- the SPILL -- measured
+// in pixels. That is independent of how big the board is, which is the whole
+// point: a future ROWS change cannot flatten it again.
+//
+// Measured again after the change, the same way: a spread of 13 across the
+// visible strip at 10 rows, against the 7-row build's 14. The glow is back
+// to the strength it had before the board grew.
+//
+// The spill grows with whatever margin is actually there (a desktop window
+// has hundreds of pixels of surround and should get a broad glow; a phone
+// has fifty and should get a rim), with a floor so the phone case still
+// clears the board's own 24px CSS drop shadow, and a ceiling because
+// shadowBlur's cost scales with the blurred AREA.
+//
+// That ceiling is 240 because it was measured, not because it is a round
+// number. Whole-backdrop redraw cost, forced to flush -- Chromium's canvas
+// is GPU-backed and queues draw calls, so timing the calls alone reports a
+// meaningless 0.10ms -- against the ~66ms one redraw gets at
+// BG_MIN_REDRAW_INTERVAL_SEC's ~15fps:
+//
+//   ceiling   phone 390x844   desktop 1280x800
+//   (before)     4.03 ms          10.19 ms      <- the old radial halo
+//     320        3.75 ms          26.94 ms
+//     240        3.78 ms          20.61 ms      <- here
+//     180        3.78 ms          17.77 ms
+//
+// The phone -- the certification target, and the only place the low-end GPU
+// and the 512 MB heap actually bite -- is unaffected at every ceiling,
+// because its spill is set by the FLOOR above and never reaches this. The
+// ceiling exists only so a desktop does not spend 27ms of every redraw on a
+// gradient, and 240 keeps the broad desktop glow while giving back most of
+// the cost. See drawHalo in js/background.js.
+export const BG_HALO_MIN_SPILL_PX = 90;
+export const BG_HALO_MAX_SPILL_PX = 240;
+export const BG_HALO_SPILL_SCALE = 1.6; // x the larger of the two margins around the board
+export const BG_HALO_INNER_SPILL_SCALE = 0.45; // the tighter, brighter of the two passes
 export const BG_GROUND_LIGHTEN = 0.10; // top of the ground gradient, from theme.page
 export const BG_GROUND_DARKEN = 0.30; // bottom of the ground gradient, from theme.page
 export const BG_VIGNETTE_INNER_SCALE = 0.30; // x outer radius, transparent inside this

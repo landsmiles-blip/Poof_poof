@@ -6,8 +6,14 @@ import {
   powerSlotRect, POWER_SLOT, pauseButtonRect,
   FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
+  SPAWN_CHUTE_TINT_ALPHA, SPAWN_CHUTE_FADE_ROWS, SPAWN_CHUTE_MARK_ALPHA, SPAWN_CHUTE_MARK_INSET,
 } from './constants.js';
 import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
+// The ONE function that decides where the next fruit arrives (js/physics.js).
+// Imported rather than reimplemented here on purpose -- see its own comment.
+// It is a pure read of stackHeight and mutates nothing, so this file's "no
+// state mutation" rule is intact.
+import { spawnColumnFor } from './physics.js';
 import {
   squashScaleAt, shakeOffset, drawParticles, drawBombRings,
 } from './effects.js';
@@ -332,6 +338,67 @@ function drawPauseButton(ctx, theme) {
 // is marked -- and the run only actually ends when they ALL are, which the
 // player can now see coming instead of being told about one column while
 // five sit empty.
+// 14: the chute -- the marker over the column the next fruit will arrive in.
+//
+// The whole reason a fixed spawn column was unbearable before is that it was
+// INVISIBLE. Puyo Puyo has spawned at one fixed column since 1991 and draws
+// that square on the board from second one; we had the same rule and drew
+// nothing, so "the fruit dropping from every which way" was the complaint
+// against the random fix rather than against the missing marker.
+//
+// The column is read from js/physics.js's spawnColumnFor -- the same function
+// spawnFruit itself calls -- so when the middle column fills and the spawn is
+// redirected outward, the chute MOVES WITH IT. A marker that keeps pointing
+// at a dead column would be worse than no marker: it would be a lie exactly
+// when the player most needs to trust it. That redirect is also the only
+// visible sign the mercy rule has kicked in, which is otherwise a silent
+// mechanic.
+//
+// Drawn in theme.grid rather than DANGER_COLOR -- see the chute constants in
+// js/constants.js for why the game's one red is not spent here -- and drawn
+// BEFORE drawDangerState so the red warning paints over the top of it when
+// the same column is also running out of room.
+function drawSpawnChute(ctx, state, rows, theme) {
+  const col = spawnColumnFor(state);
+  if (col < 0) return; // whole board full: the run is over, there is no next fruit
+
+  const x0 = col * CELL;
+  const cx = x0 + CELL / 2;
+
+  // A wash down the mouth of the column, fading out over SPAWN_CHUTE_FADE_ROWS
+  // so it reads as a chute the fruit falls out of rather than as a highlighted
+  // column -- the bottom of that column is ordinary board and should look it.
+  const fadeH = Math.min(rows, SPAWN_CHUTE_FADE_ROWS) * CELL;
+  const wash = ctx.createLinearGradient(0, 0, 0, fadeH);
+  wash.addColorStop(0, withAlpha(theme.grid, SPAWN_CHUTE_TINT_ALPHA));
+  wash.addColorStop(1, withAlpha(theme.grid, 0));
+  ctx.fillStyle = wash;
+  ctx.fillRect(x0, 0, CELL, fadeH);
+
+  ctx.save();
+  ctx.strokeStyle = withAlpha(theme.grid, SPAWN_CHUTE_MARK_ALPHA);
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+
+  // Two lip ticks at the column's shoulders, and a chevron between them. Kept
+  // inside the top ~16px: the falling fruit is revealed through this band in
+  // the first fraction of its fall and is clear of it for the rest, so the
+  // mark is legible almost all of the time without ever fighting the fruit.
+  ctx.beginPath();
+  ctx.moveTo(x0 + SPAWN_CHUTE_MARK_INSET, 0);
+  ctx.lineTo(x0 + SPAWN_CHUTE_MARK_INSET, 11);
+  ctx.moveTo(x0 + CELL - SPAWN_CHUTE_MARK_INSET, 0);
+  ctx.lineTo(x0 + CELL - SPAWN_CHUTE_MARK_INSET, 11);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, 7);
+  ctx.lineTo(cx, 15);
+  ctx.lineTo(cx + 8, 7);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawDangerState(ctx, state, rows, theme) {
   const threshold = rows - DANGER_ROWS_REMAINING;
   let any = false;
@@ -481,6 +548,9 @@ function drawBoard(ctx, state, fx, theme) {
     ctx.stroke();
   }
 
+  // Order matters: the chute is a resting-state fact and the danger marking is
+  // a warning, so the warning goes on top when both land on the same column.
+  drawSpawnChute(ctx, state, rows, theme);
   drawDangerState(ctx, state, rows, theme);
 
   for (let r = 0; r < rows; r++) {
