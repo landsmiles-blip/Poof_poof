@@ -5,7 +5,7 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
-  RAINBOW_TIER, RAINBOW_SCHEDULE, BOMB_TIER,
+  RAINBOW_TIER, RAINBOW_DEF, RAINBOW_SCHEDULE, BOMB_TIER, BOMB_DEF,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
   GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
@@ -316,6 +316,27 @@ export function getSkin(state) {
 export function skinColor(state, tierIndex) {
   const skin = getSkin(state);
   return skin.colors[tierIndex] || SKINS[0].colors[tierIndex];
+}
+
+// 14.1: the colour of ANY tier, sentinels included. skinColor above indexes
+// straight into a nine-entry palette, so it answers `undefined` for the
+// rainbow (99) and the bomb (98) -- correct for what it is, useless to a
+// caller that only has "a tier".
+//
+// This exists because there were TWO copies of that wrapper: render.js's
+// colorFor handled both sentinels, main.js's colorForTier handled only the
+// rainbow. The bomb branch was simply missing from one of them, and the
+// consequence was not cosmetic -- see docs/phase14-1brief.md. Two copies of a
+// lookup eventually disagree, and the copy that disagrees is the one nobody
+// is looking at. There is now one, here, beside the palette it reads.
+//
+// In state.js rather than render.js because it is a pure read of state plus
+// constants with no drawing in it, and main.js should not have to import the
+// renderer to ask what colour something is.
+export function tierColor(state, tierIndex) {
+  if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF.color;
+  if (tierIndex === BOMB_TIER) return BOMB_DEF.color;
+  return skinColor(state, tierIndex);
 }
 
 export function selectSkin(state, id) {
