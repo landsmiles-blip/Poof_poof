@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-17';
+export const BUILD_VERSION = '2026.08.28-18';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -45,7 +45,7 @@ export const COLS = 6;
 // from every which way is not making sense" and "is it supposed to cover
 // all the way to the floor of the phone" -- are both downstream of that one
 // number. A short board cannot afford a fixed spawn column (see
-// chooseSpawnColumn in js/physics.js); a tall one can, which is why Puyo has
+// spawnColumnFor in js/physics.js); a tall one can, which is why Puyo has
 // had one since 1991.
 //
 // Against the screen, computed from css/style.css's ACTUAL sizing formula
@@ -69,11 +69,17 @@ export const COLS = 6;
 // viewport, and MUST otherwise be centred with pillarbox/letterbox. We were
 // compliant at 65% via the second clause. At 87% we satisfy the first.
 //
-// KNOWN CONSEQUENCE, not hidden: an empty-board fall goes from ~1.66s to
-// ~2.40s at baseline gravity, and ~2.76s to ~3.99s at the ramp's slow
-// opening. GRAVITY_PX_PER_SEC is deliberately NOT touched to compensate --
-// see its own comment, and §5 of docs/phase14brief.md for the measurement
-// that decision rests on. Do not "fix" the fall time without re-measuring.
+// CONSEQUENCE, and the correction that followed. At a fixed 260 px/s this
+// change made an empty-board fall go from ~1.66s to ~2.40s, and phase 14
+// shipped it that way on a "one lever at a time" argument. Played, that cost
+// an active player HALF their drops and half their score -- because ROWS is
+// not one lever while gravity is a fixed pixel speed. 14.2 derived gravity
+// from this constant instead, so time-to-land no longer moves when this
+// number does. See GRAVITY_BASELINE_FALL_SEC below for the measurements, and
+// unit-tests/fall-time-invariance.js for the assertion that keeps it true.
+//
+// Which means the rule for anyone editing THIS line is now simple: changing
+// ROWS changes how much board there is and nothing else. Keep it that way.
 export const ROWS = 10;
 export const CELL = 64; // px, size of one grid cell
 
@@ -106,31 +112,59 @@ export const MAX_TIER = TIERS.length - 1;
 // Which tiers can spawn as a new falling fruit, and their relative odds.
 export const SPAWN_POOL = [0, 0, 0, 1, 1, 2];
 
-// 14 DELIBERATELY DID NOT TOUCH THIS, and the reasoning is here rather than
-// in a commit message because the temptation to "fix" it will recur.
+// --- Gravity, derived from the board (14.2) --------------------------------
+// This used to be a hand-set 260 px/s, and phase 14 deliberately left it
+// alone on a "one lever at a time" argument. That argument was wrong, and
+// the correction is worth spelling out because it is the interesting part.
 //
-// ROWS 7 -> 10 made the board 45% taller, so a fall to an empty floor takes
-// 45% longer at the same speed. Measured in the browser, spawn to the next
-// spawn on the very first drop of a fresh run: 2426ms at 7 rows, 3675ms at
-// 10. That is a real cost and it lands on the worst possible drop -- the
-// first one a new player ever sees -- because the gravity ramp's eased
-// opening (GRAVITY_RAMP_START_MULTIPLIER, 0.6x) is ALSO at its slowest
-// there. The two gentle-opening mechanisms now stack.
+// ROWS is not one lever if gravity is a fixed pixel speed. A taller board
+// means a longer fall at the same px/s, which means fewer drops per minute,
+// which means less score per minute -- so changing the board's SIZE silently
+// changes its DIFFICULTY and its ECONOMY, which is exactly the class of
+// change CLAUDE.md says to stop and flag rather than wave through.
 //
-// Scaling this constant by the board height would hold time-to-land
-// constant, and that is arguably the better long-term shape for it. It was
-// not done here for two reasons. First, one lever at a time: changing the
-// board's size and the fall's speed in the same phase makes it impossible to
-// tell which one is responsible for how the result plays. Second, the
-// genre's own answer to "the natural fall is slow" is not faster gravity, it
-// is a drop control -- every faller has a soft drop and a hard drop, and so
-// does this one (js/physics.js's hardDrop) except that it is bound to the
-// keyboard only. On a phone, the platform this is being certified for, there
-// is currently no way to skip the wait at all.
+// Measured, three played runs of 180s each on a 390x844 viewport, real
+// pointer drags, a bot merging as well as it can (tools/playtest-phase14.cjs):
 //
-// So the honest fix is a touch drop control, not a bigger number here. If
-// the opening reads as sluggish, reach for that first.
-export const GRAVITY_PX_PER_SEC = 260; // the baseline the ramp below reaches at drop GRAVITY_RAMP_DROPS_TO_BASE
+//   build                       drops / 180s     score        first drop
+//   7 rows, 260 px/s            135, 127, 132    1633/1494/1744   2.24 s
+//   10 rows, 260 px/s            71,  69,  70     787/ 706/ 555   3.46 s
+//   10 rows, derived (376)      121, 117, 119    1417/1185/1289   2.24 s
+//
+// Ten rows at a fixed 260 HALVED an actively-played run. Two effects
+// multiply to produce that. The obvious one is geometry: 45% more fall on
+// every drop. The one that is easy to miss is that the ramp above is keyed
+// to spawnIndex -- DROPS, not time -- so fewer drops also means the ramp
+// climbs more slowly, which means gravity stays lower, which means fewer
+// drops still.
+//
+// And it lands hardest on the GOOD player, which is backwards. Merge well and
+// your stacks stay low; low stacks mean near-full-height falls on every drop,
+// so you pay the tax every time. The passive player's stacks grow and their
+// falls shorten, so they escape most of it.
+//
+// So gravity is derived from the board's own height to hold TIME-TO-LAND
+// constant. GRAVITY_BASELINE_FALL_SEC is not a new tuning value: it is
+// exactly what 260 px/s produced on the seven-row board every number in this
+// file was tuned against (431 px / 260 = 1.6576923 s), so the expression
+// below reproduces 260.000 at ROWS = 7. At ten rows it gives ~375.8. See
+// unit-tests/fall-time-invariance.js, which asserts both.
+//
+// The distance term is the same one js/state.js's emptyBoardFallSec uses --
+// a fruit's centre travels (rows - 1) cells, plus half a cell, plus its own
+// radius, before its bottom edge reaches the floor. Kept identical on
+// purpose: the combo window is derived from that function, so a mismatch
+// here would put the window quietly out of step with the fall it exists to
+// sit just above.
+//
+// STILL TRUE, and still the better long-term answer: the genre's response to
+// a slow fall is a drop control, not faster gravity, and js/physics.js's
+// hardDrop is bound to the keyboard only -- a phone player cannot skip a
+// fall at all. This change makes the wait what it always was rather than
+// making it short. A touch drop control is still worth building.
+export const GRAVITY_BASELINE_FALL_SEC = 431 / 260;
+export const GRAVITY_PX_PER_SEC =
+  ((ROWS - 1) * CELL + CELL / 2 + TIERS[0].radius) / GRAVITY_BASELINE_FALL_SEC;
 export const SLOW_DROP_MULTIPLIER = 0.5;
 export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the pointer horizontally
 
@@ -246,9 +280,17 @@ export const SPAWN_MIN_REACTION_SEC = 0.8;
 // leave nothing to shout with, which is exactly the mistake milestone 0's
 // old alarm-red accent made.
 //
-// So the chute is drawn in theme.text -- the ink already chosen to read
-// against the current board, on light boards and dark ones alike -- at an
-// alpha low enough to sit under the fruit rather than compete with them.
+// So the chute is drawn in theme.grid -- which THEMES derives from the same
+// ink as theme.text, at low alpha, and which theme.js interpolates as an
+// rgba() string so js/render.js's withAlpha can restate its alpha without a
+// second colour parser. (14.1: this comment said theme.text, which is the
+// hex the grid colour is derived FROM and not what the code reads. Caught in
+// review. Copy that lies is worse than no copy -- see POWERUPS's `desc`
+// rule, which says exactly that about a different field.)
+//
+// Either way the point holds: it is the ink already chosen to read against
+// the current board, on light boards and dark ones alike, at an alpha low
+// enough to sit under the fruit rather than compete with them.
 // The escalation is then free and unambiguous: quiet ink while the column
 // has room, drawDangerState's red over the top of it when it does not.
 export const SPAWN_CHUTE_TINT_ALPHA = 0.055; // column wash at the top edge, fading to 0

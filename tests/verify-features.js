@@ -811,6 +811,71 @@ async function shot(page, name, full = false) {
         + `inPlay=${result.inPlayAfter}, detonated=${result.detonated}`);
     }
 
+    // 14.1: a bomb detonating on a LIGHT board used to poison the event
+    // pipeline for the rest of the run. detonateBomb clears its own cell, so
+    // the event carried BOMB_TIER; main.js's colour lookup had no bomb branch
+    // and handed `undefined` to effects.js, which threw; and main.js cleared
+    // state.events only AFTER the loop, so the same event threw again on
+    // every subsequent frame. Phase 12.1's try/catch kept the game drawing,
+    // which is why it never looked broken -- but every merge sound,
+    // particle, squash, haptic and chip pulse was gone, and so was the pause
+    // button, whose openPauseMenu() call lives inside that same loop.
+    //
+    // unit-tests/tier-color.js covers the colour. This covers the JAM, which
+    // no pure-logic test can see: it detonates for real on a bright board and
+    // then asserts the pipeline is still alive afterwards -- the queue drains,
+    // no page error escaped, and a pauseRequested pushed AFTER the detonation
+    // still opens the panel.
+    {
+      await resetRun();
+      const jam = await page.evaluate(async () => {
+        const C = await import('./js/constants.js');
+        const th = await import('./js/theme.js');
+        const ph = await import('./js/physics.js');
+        const s = window.__poofDebugState;
+        // Score 0 is milestone 0, whose board is the brightest in the game --
+        // this is the path that actually threw, not a contrived one.
+        const bright = th.relativeLuminance(th.themeForScore(s.score).boardTop) >= 0.5;
+
+        const rows = s.grid.length;
+        for (let c = 0; c < C.COLS; c++) {
+          for (let r = 0; r < rows; r++) s.grid[r][c] = null;
+          s.stackHeight[c] = 0;
+        }
+        s.grid[rows - 1][2] = 0;
+        s.grid[rows - 1][3] = C.BOMB_TIER;
+        s.grid[rows - 1][4] = 1;
+        s.stackHeight[2] = 1; s.stackHeight[3] = 1; s.stackHeight[4] = 1;
+        ph.detonateBomb(s, rows - 1, 3);
+        const carriedBombTier = s.events.some(
+          (e) => e.type === 'bombCleared' && e.cells.some((c) => c.tier === C.BOMB_TIER));
+
+        // Let the real loop drain it, then queue a pause behind where the bad
+        // event was and let the loop drain that too.
+        await new Promise((r) => setTimeout(r, 300));
+        const queueAfterDetonation = s.events.length;
+        s.events.push({ type: 'pauseRequested' });
+        await new Promise((r) => setTimeout(r, 300));
+        return {
+          bright,
+          carriedBombTier,
+          queueAfterDetonation,
+          queueAfterPause: s.events.length,
+          paused: s.paused,
+          panelVisible: !document.getElementById('pause-overlay').hidden,
+        };
+      });
+
+      const jamOk = jam.bright && jam.carriedBombTier
+        && jam.queueAfterDetonation === 0 && jam.queueAfterPause === 0
+        && jam.paused && jam.panelVisible;
+      record('14.1: a bomb detonation on a light board does not jam the event pipeline',
+        jamOk, jamOk,
+        `bright board: ${jam.bright}; the event carried BOMB_TIER (the tier that used to throw): ${jam.carriedBombTier}; `
+        + `queue drained to ${jam.queueAfterDetonation} after the detonation; a pauseRequested queued AFTERWARDS still `
+        + `opened the panel (paused=${jam.paused}, visible=${jam.panelVisible}) and drained to ${jam.queueAfterPause}`);
+    }
+
     await context.close();
   }
 

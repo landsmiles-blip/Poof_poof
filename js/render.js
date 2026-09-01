@@ -8,7 +8,7 @@ import {
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
   SPAWN_CHUTE_TINT_ALPHA, SPAWN_CHUTE_FADE_ROWS, SPAWN_CHUTE_MARK_ALPHA, SPAWN_CHUTE_MARK_INSET,
 } from './constants.js';
-import { skinColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
+import { tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
 // The ONE function that decides where the next fruit arrives (js/physics.js).
 // Imported rather than reimplemented here on purpose -- see its own comment.
 // It is a pure read of stackHeight and mutates nothing, so this file's "no
@@ -50,10 +50,12 @@ function tierDefFor(tierIndex) {
   return TIERS[tierIndex];
 }
 
+// 14.1: was the SECOND copy of this lookup. It was the correct one -- it
+// handled both sentinels, where main.js's colorForTier handled only the
+// rainbow -- which is precisely why nobody noticed the other was wrong. Both
+// now call state.js's tierColor.
 function colorFor(state, tierIndex) {
-  if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF.color;
-  if (tierIndex === BOMB_TIER) return BOMB_DEF.color;
-  return skinColor(state, tierIndex);
+  return tierColor(state, tierIndex);
 }
 
 // How much fuse is left, 1 (fresh/still falling) down to 0 (about to

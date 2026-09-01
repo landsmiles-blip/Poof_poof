@@ -2,11 +2,11 @@
 // render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
-  CANVAS_WIDTH, TIERS, RAINBOW_TIER, RAINBOW_DEF, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, CELL,
+  CANVAS_WIDTH, TIERS, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
 } from './constants.js';
 import {
-  createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, devModeEnabled,
+  createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, tierColor, devModeEnabled,
   triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob,
 } from './state.js';
 import * as platform from './platform.js';
@@ -276,8 +276,11 @@ function showScreen() {
   }
 }
 
+// 14.1: was a local wrapper that handled the rainbow sentinel and not the
+// bomb, while js/render.js carried a second copy that handled both. See
+// state.js's tierColor, which is now the only one.
 function colorForTier(tier) {
-  return tier === RAINBOW_TIER ? RAINBOW_DEF.color : skinColor(state, tier);
+  return tierColor(state, tier);
 }
 
 // Turns queued physics events into sound and visual feedback. Physics never
@@ -291,71 +294,86 @@ function drainEvents() {
   // than the very bottom of the board.
   const bright = relativeLuminance(themeForScore(state.score).boardTop) >= 0.5;
 
-  for (const event of state.events) {
-    if (event.type === 'merge') {
-      playMerge(event.tier);
-      spawnMergeEffects(fx, {
-        row: event.row,
-        col: event.col,
-        x: event.x,
-        y: event.y,
-        tier: event.tier,
-        color: colorForTier(event.tier),
-        bright,
-      });
-    } else if (event.type === 'reachedTop' || event.type === 'topTier') {
-      playCelebration();
-      spawnMergeEffects(fx, {
-        row: event.row,
-        col: event.col,
-        x: event.x,
-        y: event.y,
-        tier: TIERS.length - 1,
-        color: colorForTier(TIERS.length - 1),
-        bright,
-      });
-    } else if (event.type === 'bombCleared') {
-      // One max-intensity burst per destroyed fruit, plus one expanding ring
-      // centred on the target. Detonation previously produced no visual or
-      // tactile response at all, despite clearing up to nine cells -- the
-      // loudest action in the game happened in silence.
-      const topTier = TIERS.length - 1;
-      for (const cell of event.cells) {
+  // 14.1: the loop is wrapped so the queue is cleared even if a handler
+  // throws. It used to clear only on the way out, which turned any single bad
+  // event into a permanent one: the throw skipped the clear, the same event
+  // was still at the head of the queue on the next frame, and it threw again,
+  // every frame, for the rest of the run. Phase 12.1's try/catch around the
+  // loop body kept the game DRAWING, which is why it never looked broken --
+  // but every merge sound, particle, squash, haptic and chip pulse behind
+  // that event was dead, and so was the pause button, since
+  // openPauseMenu()'s only caller is the `pauseRequested` branch below.
+  //
+  // A dropped frame of effects is a bad outcome. A dropped RUN is a different
+  // kind of bad, and the difference is this `finally`.
+  try {
+    for (const event of state.events) {
+      if (event.type === 'merge') {
+        playMerge(event.tier);
         spawnMergeEffects(fx, {
-          row: cell.row,
-          col: cell.col,
-          tier: topTier,
-          color: colorForTier(cell.tier),
-          silent: true, // one pulse for the batch, fired below
+          row: event.row,
+          col: event.col,
+          x: event.x,
+          y: event.y,
+          tier: event.tier,
+          color: colorForTier(event.tier),
           bright,
         });
+      } else if (event.type === 'reachedTop' || event.type === 'topTier') {
+        playCelebration();
+        spawnMergeEffects(fx, {
+          row: event.row,
+          col: event.col,
+          x: event.x,
+          y: event.y,
+          tier: TIERS.length - 1,
+          color: colorForTier(TIERS.length - 1),
+          bright,
+        });
+      } else if (event.type === 'bombCleared') {
+        // One max-intensity burst per destroyed fruit, plus one expanding ring
+        // centred on the target. Detonation previously produced no visual or
+        // tactile response at all, despite clearing up to nine cells -- the
+        // loudest action in the game happened in silence.
+        const topTier = TIERS.length - 1;
+        for (const cell of event.cells) {
+          spawnMergeEffects(fx, {
+            row: cell.row,
+            col: cell.col,
+            tier: topTier,
+            color: colorForTier(cell.tier),
+            silent: true, // one pulse for the batch, fired below
+            bright,
+          });
+        }
+        spawnBombRing(fx, event.col * CELL + CELL / 2, event.row * CELL + CELL / 2);
+        vibrate(HAPTIC_BOMB_MS);
+      } else if (event.type === 'removerUsed') {
+        spawnMergeEffects(fx, {
+          row: event.row,
+          col: event.col,
+          tier: event.tier,
+          bright,
+          color: colorForTier(event.tier),
+        });
+      } else if (event.type === 'lockedPowerUp') {
+        playUiTick();
+        triggerLockedFlash(state, event.id);
+      } else if (event.type === 'chargeEarned') {
+        // 8.1: a reward moment, announced -- the chip's own pulse is already
+        // set by grantEarnedCharge (state.js); this is just the sound/haptic.
+        playChargeEarned();
+        vibrate(HAPTIC_CHARGE_EARNED_MS);
+      } else if (event.type === 'pauseRequested') {
+        // 9.3: routed through state.events (not a callback) so input.js's
+        // attachInput can stay exactly (canvas, state) -- see its own comment
+        // at the push site.
+        openPauseMenu();
       }
-      spawnBombRing(fx, event.col * CELL + CELL / 2, event.row * CELL + CELL / 2);
-      vibrate(HAPTIC_BOMB_MS);
-    } else if (event.type === 'removerUsed') {
-      spawnMergeEffects(fx, {
-        row: event.row,
-        col: event.col,
-        tier: event.tier,
-        bright,
-        color: colorForTier(event.tier),
-      });
-    } else if (event.type === 'lockedPowerUp') {
-      playUiTick();
-      triggerLockedFlash(state, event.id);
-    } else if (event.type === 'chargeEarned') {
-      // 8.1: a reward moment, announced -- the chip's own pulse is already
-      // set by grantEarnedCharge (state.js); this is just the sound/haptic.
-      playChargeEarned();
-      vibrate(HAPTIC_CHARGE_EARNED_MS);
-    } else if (event.type === 'pauseRequested') {
-      // 9.3: routed through state.events (not a callback) so input.js's
-      // attachInput can stay exactly (canvas, state) -- see its own comment
-      // at the push site.
-      openPauseMenu();
     }
+  } finally {
+    state.events.length = 0;
   }
-  state.events.length = 0;
 }
 
 let lastTime = performance.now();
