@@ -2,7 +2,7 @@
 // render, input, audio, effects, theme, platform, and the shop screens together.
 
 import {
-  CANVAS_WIDTH, TIERS, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, CELL,
+  CANVAS_WIDTH, TIERS, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, HAPTIC_LEVEL_UP_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
 } from './constants.js';
 import {
@@ -15,7 +15,7 @@ import { drawFrame, canvasHeightFor } from './render.js';
 import { attachInput } from './input.js';
 import { renderMenu, renderGameOver, renderPausePanel } from './shop.js';
 import {
-  playMerge, playCelebration, playGameOver, playUiTick, playChargeEarned,
+  playMerge, playCelebration, playGameOver, playUiTick, playChargeEarned, playLevelUp,
   suspendAudio, resumeAudio, unlockAudio, getAudioContext,
   hydrate as hydrateAudio, isMuted, setHostAudioEnabled as setAudioHostEnabled,
 } from './audio.js';
@@ -26,7 +26,7 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing,
+  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 import { initBackground, setBoardRect, drawBackground } from './background.js';
@@ -369,6 +369,15 @@ function drainEvents() {
         // attachInput can stay exactly (canvas, state) -- see its own comment
         // at the push site.
         openPauseMenu();
+      } else if (event.type === 'levelUp') {
+        // 15: exactly three reactions, per docs/phase15-spec.md section 6.2 --
+        // a distinct sound (not playCelebration, which already means "reached
+        // the top tier"), a haptic tick, and one shake pulse plus the
+        // on-board callout (both effects.js's job, see triggerLevelUp). None
+        // of this pauses or slows the run; it is decoration over live play.
+        playLevelUp();
+        vibrate(HAPTIC_LEVEL_UP_MS);
+        triggerLevelUp(fx, event.level);
       }
     }
   } finally {

@@ -879,6 +879,61 @@ async function shot(page, name, full = false) {
     await context.close();
   }
 
+  // ------------------------------------------- 15: levels are visible and announced
+  // docs/phase15-spec.md section 7.3. Forces spawnIndex to the last drop of
+  // level 1, spawns one fruit through the REAL spawnFruit (not a simulated
+  // stand-in), and confirms a levelUp event actually reached the queue --
+  // then hard-drops it (skipping the fall wait, not the mechanic) so the real
+  // game loop's own next spawnFruit call, on its own next frame, proves the
+  // callout did not gate anything. The callout landing on screen is
+  // confirmed by the screenshot, not by re-parsing canvas pixels -- see the
+  // note on record() calls elsewhere in this file that do the same.
+  {
+    const { context, page } = await freshPage(browser, 'levels');
+    await page.goto(`${BASE}/index.html`);
+    await page.waitForSelector('#play-btn');
+    await page.click('#play-btn');
+    await page.waitForTimeout(200);
+
+    const spawned = await page.evaluate(async () => {
+      const C = await import('./js/constants.js');
+      const ph = await import('./js/physics.js');
+      const s = window.__poofDebugState;
+      s.spawnIndex = C.LEVEL_DROPS - 1;
+      s.active = null;
+      ph.spawnFruit(s); // crosses the level 1 -> 2 boundary
+      const levelUpEvents = s.events.filter((e) => e.type === 'levelUp');
+      const result = { levelUpCount: levelUpEvents.length, level: levelUpEvents[0]?.level, spawnIndexAfterSpawn: s.spawnIndex };
+      // Land it immediately rather than waiting on gravity -- the real loop's
+      // own update() then spawns the NEXT fruit on its own very next frame,
+      // which is the thing that actually proves nothing paused.
+      ph.hardDrop(s);
+      return result;
+    });
+
+    // Let the real drainEvents (main.js, running in the live loop) process
+    // the pushed event -- sound, haptic, shake, and the on-board callout --
+    // before the screenshot.
+    await page.waitForTimeout(200);
+    const shotPath = await shot(page, '06-level-up-callout');
+
+    await page.waitForTimeout(1500);
+    const after = await page.evaluate(() => ({
+      screen: window.__poofDebugState.screen,
+      spawnIndex: window.__poofDebugState.spawnIndex,
+    }));
+
+    const announced = spawned.levelUpCount === 1 && spawned.level === 2;
+    const notGated = after.screen === 'playing' && after.spawnIndex > spawned.spawnIndexAfterSpawn;
+    const ok = announced && notGated;
+    record('15: levels are visible and announced', ok, ok,
+      `levelUp event pushed crossing 10->11 drops: ${spawned.levelUpCount === 1} (level ${spawned.level}, expected 2); `
+      + `still on the playing screen 1.5s later: ${after.screen === 'playing'}; `
+      + `spawnIndex kept advancing (not gated by the callout): ${spawned.spawnIndexAfterSpawn} -> ${after.spawnIndex}`,
+      shotPath);
+    await context.close();
+  }
+
   // ------------ power-up chips at real screen positions, across viewports ---
   // A real phone found every HUD tap landing above its actual chip. Root
   // cause: css/style.css's #game-canvas rect could end up TALLER than the

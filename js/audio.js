@@ -171,6 +171,15 @@ export function playChargeEarned() {
   blip(root * Math.pow(2, 7 / 12), { duration: 0.16, type: 'triangle', gain: 0.24, delay: 0.07 });
 }
 
+// A level-up (15): a short rising two-note cue, pitched above playChargeEarned
+// so the two reward sounds never get mistaken for each other -- a charge is a
+// tool becoming available, a level is the game itself moving up a notch.
+export function playLevelUp() {
+  const root = 880;
+  blip(root, { duration: 0.11, type: 'triangle', gain: 0.24 });
+  blip(root * Math.pow(2, 7 / 12), { duration: 0.18, type: 'triangle', gain: 0.26, delay: 0.08 });
+}
+
 // Descending tone when a run ends.
 export function playGameOver() {
   blip(330, { duration: 0.5, type: 'triangle', gain: 0.28, bendTo: 110 });
