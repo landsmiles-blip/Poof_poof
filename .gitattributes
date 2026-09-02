@@ -1,0 +1,22 @@
+# Phase 16 follow-up: this repo had no .gitattributes, so a Windows checkout
+# (Git for Windows defaults to core.autocrlf=true) got CRLF line endings
+# while a Linux/macOS checkout got LF -- same git blobs, different bytes on
+# disk depending on which machine built dist/playables/. Harmless (nowhere
+# near any Stability §1-3 size limit either way), but the certification
+# bundle should be byte-identical regardless of which machine builds it, not
+# "usually fine, off by a few KB sometimes." This forces LF on checkout for
+# every text source file, on every platform, regardless of the user's own
+# core.autocrlf setting -- and marks the two binary asset types explicitly
+# so git never guesses wrong on those.
+
+* text=auto eol=lf
+
+*.js  text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+*.woff2 binary
+*.png binary

@@ -150,7 +150,15 @@ html, body {
    shop's content is scrollable and needs its own height, not the board's. */
 #overlay {
   width: min(var(--canvas-css-width, 384px), calc(100vw - 16px));
-  min-width: 320px;
+  /* Phase 16: a bare 320px here WINS over max-width below it once the
+     viewport itself drops under 336px (320 + the 16px margin) -- min-width
+     always beats max-width in CSS, so the overlay was pinned to 320px while
+     the page was narrower than that. Measured at Google's own 9:32 example
+     ratio (304px-wide viewport): document width came back 312px, an 8px
+     horizontal overflow. Clamping min-width to the same viewport-minus-
+     margin ceiling max-width already uses means it can never win past the
+     viewport again, at any width. */
+  min-width: min(320px, calc(100vw - 16px));
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
   overflow-y: auto;

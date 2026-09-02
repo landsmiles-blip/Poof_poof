@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-19';
+export const BUILD_VERSION = '2026.09.02-20';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
