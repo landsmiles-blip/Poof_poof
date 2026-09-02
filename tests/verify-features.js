@@ -1352,6 +1352,28 @@ async function shot(page, name, full = false) {
   // onResume callback still does.
   {
     const { context, page } = await freshPage(browser, 'playables-tap-gate');
+    // Phase 16 follow-up: index.html now loads the real Playables SDK
+    // (<script src="https://www.youtube.com/game_api/v1">) as a classic,
+    // blocking script BEFORE js/main.js -- exactly what Integration §1
+    // requires. That is also exactly what broke this test on any machine
+    // with real internet access: the classic script runs before this
+    // addInitScript's mock is ever read by js/platform.js's deferred module,
+    // and it unconditionally assigns `window.ytgame = <the real SDK's own
+    // object>` -- clobbering the mock below with a real one whose
+    // IN_PLAYABLES_ENV is false (correctly -- this page genuinely isn't
+    // inside the container). The auditor's own sandbox had youtube.com
+    // blocked outright, so the request failed before it could clobber
+    // anything and this test passed there by accident, not by design.
+    //
+    // The fix is not to change what the mock claims -- it's to stop the
+    // real script from ever running its overwrite on THIS page load. A
+    // route fulfilled with an empty, successful (200) response satisfies
+    // the <script> tag (it "loads", no console error, nothing throws) while
+    // executing zero code -- so the addInitScript mock below survives
+    // completely untouched, in any network environment.
+    await page.route('https://www.youtube.com/game_api/v1', (route) => {
+      route.fulfill({ status: 200, contentType: 'application/javascript', body: '' });
+    });
     await page.addInitScript(() => {
       window.__rafCount = 0;
       const raf = window.requestAnimationFrame.bind(window);
@@ -1798,9 +1820,64 @@ async function shot(page, name, full = false) {
     }
   }
 
+  // ---------------------------------------------- aspect ratio sweep (16)
+  // Design §1: "Game MUST follow responsive design: be playable in all
+  // aspect ratios and adjust automatically when the viewport changes.
+  // Non-exhaustive examples: 9:32, 9:21, 9:16, 3:4, 1:1, 4:3, 16:9, 21:9,
+  // 32:9." Added after the phase-16 audit found the menu overflowing
+  // horizontally at 9:32 (a bare min-width on #overlay beat max-width once
+  // the viewport dropped under 336px) -- a regression an eyeballed check on
+  // a phone would never catch, since 9:32 is far narrower than any real
+  // device. Every ratio Google names, measured at roughly constant pixel
+  // area so no ratio is trivially easy just for being small.
+  {
+    const RATIOS = [[9, 32], [9, 21], [9, 16], [3, 4], [1, 1], [4, 3], [16, 9], [21, 9], [32, 9]];
+    const AREA = 390 * 844;
+    const overflows = [];
+    for (const [w, h] of RATIOS) {
+      const scale = Math.sqrt(AREA / (w * h));
+      const vw = Math.round(w * scale);
+      const vh = Math.round(h * scale);
+      const { context, page } = await freshPage(browser, `ratio-${w}x${h}`, { viewport: { width: vw, height: vh } });
+      await page.goto(`${BASE}/index.html`);
+      await page.waitForSelector('#play-btn');
+      await page.waitForTimeout(400);
+      const menu = await page.evaluate(() => ({
+        docW: document.documentElement.scrollWidth,
+        winW: window.innerWidth,
+      }));
+      if (menu.docW > menu.winW) {
+        overflows.push(`${w}:${h} (${vw}x${vh}) menu docW=${menu.docW} > winW=${menu.winW}`);
+      }
+      await context.close();
+    }
+    record('Aspect ratio sweep (9 ratios, no horizontal overflow)', overflows.length === 0, overflows.length === 0,
+      overflows.length === 0
+        ? `all 9 of Google's example ratios fit with no horizontal overflow`
+        : `overflow at: ${overflows.join('; ')}`);
+  }
+
   // ------------------------------------------------------- offline boot
   {
     const { context, page } = await freshPage(browser, 'offline');
+    // Phase 16 (B1) added a required, cross-origin SDK tag to index.html.
+    // service-worker.js deliberately lets cross-origin requests pass through
+    // uncached (its fetch handler: `if (url.origin !== self.location.origin)
+    // return;`), so this one request can never be served from cache -- a
+    // genuine offline reload of the standalone PWA build will always fail it
+    // with net::ERR_INTERNET_DISCONNECTED. That failure is expected and
+    // inherent to this build only: dist/playables/ never ships a service
+    // worker at all (build-playables.js's INCLUDE_DIRS excludes it), so
+    // Google never sees a service worker, an offline reload, or this error.
+    // Confirmed via requestfailed (not just a string match on the console
+    // text) so only THIS specific, independently-verified failure is
+    // exempted -- any other console error on this page, or a second failure
+    // that happens to log identical text, still fails the suite.
+    const SDK_URL = 'https://www.youtube.com/game_api/v1';
+    let sdkFailedOffline = false;
+    page.on('requestfailed', (req) => {
+      if (req.url() === SDK_URL) sdkFailedOffline = true;
+    });
     await page.goto(`${BASE}/index.html`);
     await page.waitForSelector('#play-btn');
     // let the service worker install and precache
@@ -1814,6 +1891,10 @@ async function shot(page, name, full = false) {
     await context.setOffline(false);
     record('Offline boot (service worker)', true, offlineOk,
       `game boots from cache with the network down: ${offlineOk}`);
+    if (sdkFailedOffline) {
+      const idx = errors.indexOf('offline console: Failed to load resource: net::ERR_INTERNET_DISCONNECTED');
+      if (idx !== -1) errors.splice(idx, 1);
+    }
     await context.close();
   }
 
