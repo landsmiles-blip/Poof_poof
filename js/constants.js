@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.08.28-18';
+export const BUILD_VERSION = '2026.08.28-19';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -109,8 +109,50 @@ export const TIERS = [
 
 export const MAX_TIER = TIERS.length - 1;
 
+// --- Spawn pool escalation (15) ---------------------------------------------
+// SPAWN_POOL used to be one fixed table for the whole run. It is the half of
+// this phase that keeps the game escalating once LEVEL_SPEED_CAP_LEVEL stops
+// speed from doing anything further (see the level-curve comment above) --
+// not optional, since a level system that only raised speed would put a
+// number on screen and deliver nothing behind it past level 10 / ~90 seconds.
+//
+// Honest status: the SHAPE is validated (a milder table, topping out at tier
+// 3 by drop 90, took a played run from 20% board fill at three minutes to 49%
+// at five -- the mechanism demonstrably creates fill pressure), the VALUES
+// below are a starting point more aggressive than that measurement, chosen to
+// clear the acceptance bar in docs/phase15-spec.md section 8. See that
+// document's section 9 for the tuning procedure if they need revisiting.
+export const SPAWN_POOL_BY_BAND = [
+  [0, 0, 0, 1, 1, 2], // band 0 -- levels 1-2
+  [0, 0, 1, 1, 2, 2], // band 1 -- levels 3-4
+  [0, 1, 1, 2, 2, 3], // band 2 -- levels 5-6
+  [1, 1, 2, 2, 3, 3], // band 3 -- levels 7-8
+  [1, 2, 2, 3, 3, 4], // band 4 -- levels 9-10
+  // 15, tuning pass 2 (docs/phase15-spec.md section 9). Two real, played
+  // measurements, not guesses:
+  //   bands 0-5 only (band 5 clamped for levels 11+): 42% fill at 300s.
+  //   + band 6 [2,3,3,4,4,5] (pass 1, the spec's own prescribed first step):
+  //     22% fill -- WORSE, not better.
+  // Pass 1 made the pool more aggressive and fill went DOWN. The likely
+  // mechanism: js/physics.js's mergeCells clears a cell to null on reaching
+  // MAX_TIER (a watermelon merge scores and VANISHES, it does not leave a
+  // tile) -- spawning closer to that ceiling more often means fewer merges
+  // are needed to trigger a clear, which REMOVES cells from the board. A
+  // "harsher" pool can shrink the board it was meant to fill.
+  // Per the spec's own procedure this is still the prescribed next step
+  // (make band 5, and 6, harsher) rather than reversing direction on a
+  // hypothesis -- run for real rather than assumed. See docs/phase15brief.md
+  // for that measurement and, if this also fails, the stop-and-report call.
+  [3, 3, 4, 4, 5, 5], // band 5 -- levels 11-12
+  [3, 4, 4, 5, 5, 6], // band 6 -- levels 13+
+];
+export const LEVELS_PER_SPAWN_BAND = 2;
+
 // Which tiers can spawn as a new falling fruit, and their relative odds.
-export const SPAWN_POOL = [0, 0, 0, 1, 1, 2];
+// Kept as an alias for the opening band, not a second table: tests/
+// verify-features.js reads this to assert a flower tier appears in the
+// opening drops, and band 0 IS the opening.
+export const SPAWN_POOL = SPAWN_POOL_BY_BAND[0];
 
 // --- Gravity, derived from the board (14.2) --------------------------------
 // This used to be a hand-set 260 px/s, and phase 14 deliberately left it
@@ -168,39 +210,52 @@ export const GRAVITY_PX_PER_SEC =
 export const SLOW_DROP_MULTIPLIER = 0.5;
 export const DRAG_LERP = 0.35; // how quickly the falling fruit follows the pointer horizontally
 
-// --- Difficulty ramp -------------------------------------------------------
-// Found by playing rather than reading: gravity was a flat 260 px/s from the
-// first drop of a run to the last -- a new player's first drop fell exactly
-// as fast as an expert's hundredth. Keyed off state.spawnIndex (drops so
-// far), not score: score already drives the milestones and the theme
-// interpolation, and coupling a third system to it makes all three harder to
-// reason about, whereas "the more you play" is exactly what a drop count
-// measures. state.spawnIndex is reset to 0 in startRun, so the ramp resets
-// with every run for free.
+// --- Difficulty ramp / levels (15) ------------------------------------------
+// Was a continuous ramp (0.6x eased quadratic to 1.0x over 40 drops, then
+// linear to 1.3x over the next 80, flat after) that changed the game a lot --
+// 2.5x across three minutes -- while never telling the player it had. Two
+// separate facts drove this phase, both measured in a real browser, 390x844,
+// real pointer drags: the escalation was real but invisible (median
+// time-to-land fell from ~2.3s to ~0.8-0.9s by drop 100, unannounced), and a
+// competent player never filled the board (two runs both ended ~120 drops at
+// stacks 2,2,2,1,2,2 -- a fifth of a ten-row board). Phase 14 made the board
+// taller, which removed the space pressure Suika Game leans on entirely;
+// speed was the only pressure left, and speed has a hard ceiling -- see the
+// SPAWN_MIN_REACTION_SEC discussion below.
 //
-// A starting point, tuned by feel, not derived from simulation like the
-// combo/milestone constants. The cap is load-bearing, not just restraint --
-// see stepPhysics's dt clamp, which is what keeps even the capped speed free
-// of any tunnelling risk. Do not remove it on the grounds that it "seems
-// fine"; the clamp is what makes it fine.
+// Levels replace the continuous ramp with a stepped one, keyed off the same
+// spawnIndex (drops), because a step the player can COUNT is a step they can
+// notice -- Tetris steps every 10 lines, Dr. Mario every 10 pills, and this
+// game's own spawnIndex is already "pieces placed," so 10 drops per level is
+// the genre-native choice, not an arbitrary one. At 10 drops/level, level 2
+// arrives in roughly 25 seconds, inside the 30-90s core-loop window YouTube
+// Playables asks for.
+export const LEVEL_DROPS = 10;
+
+// levelFor(spawnIndex) = floor(spawnIndex / LEVEL_DROPS) + 1 (js/state.js).
+// gravityRampMultiplier(spawnIndex) is now
+//   LEVEL_SPEED_START * LEVEL_SPEED_STEP ** (min(level, LEVEL_SPEED_CAP_LEVEL) - 1)
 //
-// 8.2: the first version of this ramp reached today's baseline speed by drop
-// 20 -- roughly ninety seconds in. That is not a ramp, it is a short runway,
-// and it read as one immediately. Stretched hard: the opening is now eased
-// in (see gravityRampMultiplier's `t ** GRAVITY_RAMP_EASE_POWER`, not a
-// straight line) so the first ~15 drops are nearly flat before it starts
-// climbing, baseline speed does not arrive until drop 40, and the cap -- now
-// slightly lower, since a much longer runway needs a gentler ceiling to
-// still feel like ONE curve -- is not reached until drop 120.
-export const GRAVITY_RAMP_START_MULTIPLIER = 0.6;
-export const GRAVITY_RAMP_BASE_MULTIPLIER = 1.0;
-export const GRAVITY_RAMP_CAP_MULTIPLIER = 1.3;
-export const GRAVITY_RAMP_DROPS_TO_BASE = 40;
-export const GRAVITY_RAMP_DROPS_TO_CAP = 120;
-// Power for the ease-in curve over [0, DROPS_TO_BASE]: quadratic. At 15/40 of
-// the way through that stretch, an eased quadratic has covered only ~14% of
-// the distance from START to BASE -- genuinely flat, not merely slower.
-export const GRAVITY_RAMP_EASE_POWER = 2;
+// These four numbers are measured, not chosen by taste. A search over
+// LEVEL_DROPS in {10,12,15} x LEVEL_SPEED_START in {0.60,0.65,0.70,0.75} x
+// step in 0.01 increments found the smallest step, at each combination, for
+// which the stepped curve is NEVER below the continuous ramp above at any
+// drop index 0-200. 10 / 0.70 / 1.12 won: worst gap +0.003 at drop 39 (i.e.
+// it never regresses), and 10 matches the genre. unit-tests/levels.js
+// hardcodes the OLD formula as literal reference data and asserts this
+// exactly, so a future retune of either curve cannot silently make the game
+// slower than the build already played and approved.
+export const LEVEL_SPEED_START = 0.70;
+export const LEVEL_SPEED_STEP = 1.12;
+
+// Derived, not picked: SPAWN_MIN_REACTION_SEC (below) floors total time per
+// drop at 0.8s no matter how fast gravity goes. At level 10 an empty-board
+// drop already takes 0.85s; level 11 would compute to 0.76s, which the floor
+// would erase entirely -- the speed step would put a number on screen and
+// change nothing behind it. Ten is the last level a speed step still moves.
+// This is also why the phase does not stop at speed alone: js/state.js's
+// SPAWN_POOL_BY_BAND (below) is what keeps escalating past this point.
+export const LEVEL_SPEED_CAP_LEVEL = 10;
 
 // 12.2: the danger warning's headroom, applied to EVERY column rather than
 // only the spawn column. 14 restored the fixed spawn column but NOT the
@@ -549,6 +604,12 @@ export const LOCKED_FLASH_DURATION_SEC = 0.35;
 // reward, not a denial, and should read as one.
 export const CHIP_PULSE_DURATION_SEC = 0.6;
 
+// How long the big centred "LEVEL n" callout stays on screen (15) -- scaling
+// up and fading out, never gating the run. Its timer lives in the fx object
+// (js/effects.js), like every other timed effect here, not in state: it is
+// presentation, and state is what gets saved.
+export const LEVEL_CALLOUT_SEC = 1.2;
+
 // Haptics, in ms. Only fires where navigator.vibrate exists.
 export const HAPTIC_MERGE_MS = 12;
 export const HAPTIC_TOP_TIER_MS = 45;
@@ -558,6 +619,9 @@ export const HAPTIC_BOMB_MS = 70;
 // A charge earned mid-run (8.1) is a reward moment, not a hazard -- a single
 // crisp tick, shorter than the bomb's but distinct from a plain merge's.
 export const HAPTIC_CHARGE_EARNED_MS = 30;
+// A level-up (15) is announced, not alarming -- between the charge tick above
+// and a top-tier merge (HAPTIC_TOP_TIER_MS, 45) in weight.
+export const HAPTIC_LEVEL_UP_MS = 35;
 
 // --- Merge meter (8.1) -----------------------------------------------------
 // Power-ups used to be inventory, not play: coins arrive only at endRun and

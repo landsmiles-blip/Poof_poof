@@ -2,35 +2,36 @@
 // No rendering, input, or audio logic here, just plain data and state transitions.
 
 import {
-  COLS, ROWS, CELL, SPAWN_POOL, COINS_PER_SCORE, TIERS,
+  COLS, ROWS, CELL, SPAWN_POOL_BY_BAND, LEVELS_PER_SPAWN_BAND, COINS_PER_SCORE, TIERS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   RAINBOW_TIER, RAINBOW_DEF, RAINBOW_SCHEDULE, BOMB_TIER, BOMB_DEF,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
-  GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_BASE_MULTIPLIER,
-  GRAVITY_RAMP_CAP_MULTIPLIER, GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP,
-  GRAVITY_RAMP_EASE_POWER,
+  GRAVITY_PX_PER_SEC, LEVEL_DROPS, LEVEL_SPEED_START, LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL,
 } from './constants.js';
 
-// --- Difficulty ramp -------------------------------------------------------
+// --- Levels / difficulty ramp (15) ------------------------------------------
 // Lives here rather than physics.js so state.js can stay the single source of
 // truth for anything comboWindowSecFor also needs -- physics.js already
 // imports from state.js, and the reverse would be a cycle.
 //
-// START -> BASE over [0, DROPS_TO_BASE] (8.2: eased in, not linear -- nearly
-// flat for the first ~15 drops of that stretch, then climbing), then BASE ->
-// CAP over [DROPS_TO_BASE, DROPS_TO_CAP] (still linear -- only the opening
-// needed to feel generous), flat at CAP after that.
+// levelFor is a pure function of spawnIndex ALONE -- no score, no time, no
+// state.level field to keep in sync. startRun already resets spawnIndex to 0,
+// so the level resets with every run for free, the same way the ramp always
+// did. Exported so js/physics.js's spawnFruit can detect a level boundary
+// (levelFor(after) > levelFor(before)) without duplicating the arithmetic.
+export function levelFor(spawnIndex) {
+  return Math.floor(Math.max(0, spawnIndex) / LEVEL_DROPS) + 1;
+}
+
+// Stepped, not continuous (see LEVEL_SPEED_START's comment in constants.js
+// for why, and for the measurement that these four numbers reproduce). Every
+// drop within one level shares one multiplier; it only changes at a level
+// boundary, which is also the frame js/physics.js pushes the levelUp event --
+// speed and the announcement of speed change in lockstep by construction.
 export function gravityRampMultiplier(spawnIndex) {
-  const drops = Math.max(0, spawnIndex);
-  if (drops >= GRAVITY_RAMP_DROPS_TO_CAP) return GRAVITY_RAMP_CAP_MULTIPLIER;
-  if (drops >= GRAVITY_RAMP_DROPS_TO_BASE) {
-    const t = (drops - GRAVITY_RAMP_DROPS_TO_BASE) / (GRAVITY_RAMP_DROPS_TO_CAP - GRAVITY_RAMP_DROPS_TO_BASE);
-    return GRAVITY_RAMP_BASE_MULTIPLIER + (GRAVITY_RAMP_CAP_MULTIPLIER - GRAVITY_RAMP_BASE_MULTIPLIER) * t;
-  }
-  const t = drops / GRAVITY_RAMP_DROPS_TO_BASE;
-  const eased = t ** GRAVITY_RAMP_EASE_POWER;
-  return GRAVITY_RAMP_START_MULTIPLIER + (GRAVITY_RAMP_BASE_MULTIPLIER - GRAVITY_RAMP_START_MULTIPLIER) * eased;
+  const level = Math.min(levelFor(spawnIndex), LEVEL_SPEED_CAP_LEVEL);
+  return LEVEL_SPEED_START * Math.pow(LEVEL_SPEED_STEP, level - 1);
 }
 
 export function currentGravityPxPerSec(state) {
@@ -131,7 +132,9 @@ export function createInitialState(save) {
 
     score: 0,
     active: null, // the currently falling fruit
-    nextTier: randomSpawnTier(),
+    // 15: explicitly 0, not state.spawnIndex -- state itself does not exist
+    // yet at this point in the object literal under construction.
+    nextTier: randomSpawnTier(0),
 
     slowDropActive: false,
     removerArmed: false,
@@ -232,8 +235,22 @@ export function makeEmptyGrid(rows = ROWS) {
   return Array.from({ length: rows }, () => new Array(COLS).fill(null));
 }
 
-export function randomSpawnTier() {
-  return SPAWN_POOL[Math.floor(Math.random() * SPAWN_POOL.length)];
+// 15: which band's pool to sample from -- level 1-2 is band 0, 3-4 is band 1,
+// and so on, clamped to the last band once levels run past the table
+// (SPAWN_POOL_BY_BAND's own "levels 11+" row). A pure function of spawnIndex,
+// same as levelFor itself.
+function spawnBandFor(spawnIndex) {
+  const band = Math.floor((levelFor(spawnIndex) - 1) / LEVELS_PER_SPAWN_BAND);
+  return Math.min(SPAWN_POOL_BY_BAND.length - 1, band);
+}
+
+// spawnIndex defaults to 0 (band 0, the opening pool) so every existing call
+// site that has no run in progress yet -- createInitialState building the
+// very first state object, before spawnIndex itself exists on it -- still
+// gets sensible odds without having to thread a literal 0 through by hand.
+export function randomSpawnTier(spawnIndex = 0) {
+  const pool = SPAWN_POOL_BY_BAND[spawnBandFor(spawnIndex)];
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 export function effectiveRows(state) {
@@ -255,7 +272,7 @@ export function nextTierFor(state) {
     schedule.shift();
     return RAINBOW_TIER;
   }
-  return randomSpawnTier();
+  return randomSpawnTier(state.spawnIndex);
 }
 
 // --- Skins ---------------------------------------------------------------

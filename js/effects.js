@@ -13,7 +13,7 @@ import {
   SHAKE_MIN_TIER, SHAKE_DURATION_SEC, SHAKE_MAX_PX,
   HAPTIC_MERGE_MS, HAPTIC_TOP_TIER_MS, REDUCED_MOTION_SQUASH_SCALE,
   PARTICLE_BRIGHT_VIBRANCE_BOOST, PARTICLE_BRIGHT_LIFE_SCALE,
-  BOMB_RING_DURATION_SEC,
+  BOMB_RING_DURATION_SEC, LEVEL_CALLOUT_SEC,
 } from './constants.js';
 
 // Crude vibrance boost: pushes each channel away from the colour's own grey
@@ -38,7 +38,32 @@ export function createEffects() {
     particles: [], // { x, y, vx, vy, t, life, color, size }
     shake: { t: 0, duration: 0, magnitude: 0 },
     bombRings: [], // { x, y, t, duration } -- 7.3
+    levelCallout: null, // { level, t } -- 15, see triggerLevelUp
   };
+}
+
+// 15: the level-up reaction's two purely-visual pieces (the sound and the
+// haptic are main.js's job, same seam as every other event). Ambient shake
+// during ordinary play was rejected in docs/phase15-spec.md section 6.2 --
+// shake already means "you just did something big," and a level change is
+// exactly the kind of instant that is true of, not a state to hold shake
+// under. A single pulse here, not a comparison against the current shake the
+// way spawnMergeEffects' top-tier pulse is (that one only grows if the new
+// hit is bigger; this one always fires, since a level-up is not competing
+// with a merge for "biggest thing on screen right now" -- it wins by
+// definition).
+//
+// Reduced motion cuts the shake (mirroring spawnMergeEffects' own gate) but
+// NOT the callout -- js/render.js still draws it, fading without scaling, per
+// docs/phase15-spec.md section 6.3. The sound and haptic are unaffected
+// either way; only motion is what this preference asks to remove.
+export function triggerLevelUp(fx, level) {
+  if (!reducedMotion) {
+    fx.shake.t = 0;
+    fx.shake.duration = SHAKE_DURATION_SEC;
+    fx.shake.magnitude = SHAKE_MAX_PX;
+  }
+  fx.levelCallout = { level, t: 0 };
 }
 
 // Expanding ring on a bomb detonation -- the loudest action in the game
@@ -215,6 +240,11 @@ export function updateEffects(fx, dt) {
     r.t += dt;
     if (r.t >= r.duration) fx.bombRings.splice(i, 1);
   }
+
+  if (fx.levelCallout) {
+    fx.levelCallout.t += dt;
+    if (fx.levelCallout.t >= LEVEL_CALLOUT_SEC) fx.levelCallout = null;
+  }
 }
 
 // Scale factors for the fruit at (row, col), if it is mid-pop.
@@ -282,4 +312,5 @@ export function clearEffects(fx) {
   fx.shake.duration = 0;
   fx.shake.magnitude = 0;
   fx.bombRings.length = 0;
+  fx.levelCallout = null;
 }

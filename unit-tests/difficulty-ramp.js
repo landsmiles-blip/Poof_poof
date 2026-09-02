@@ -6,30 +6,47 @@
 // sits below one fall once gravity is slowed at the start of the ramp.
 import assert from 'node:assert/strict';
 import {
-  GRAVITY_PX_PER_SEC, GRAVITY_RAMP_START_MULTIPLIER, GRAVITY_RAMP_CAP_MULTIPLIER,
-  GRAVITY_RAMP_DROPS_TO_BASE, GRAVITY_RAMP_DROPS_TO_CAP, ROWS, CELL, TIERS,
+  GRAVITY_PX_PER_SEC, LEVEL_DROPS, LEVEL_SPEED_START, LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL,
+  ROWS, CELL, TIERS,
 } from '../js/constants.js';
 import {
   gravityRampMultiplier, currentGravityPxPerSec, comboWindowSecFor, startRun, createInitialState,
 } from '../js/state.js';
 
-// --- Gravity rises with drop count and never exceeds the cap ---------------
+// --- Gravity rises with drop count and never exceeds the cap (15: rewritten
+// for the stepped level curve -- see unit-tests/levels.js for the full level
+// system test suite; this section only re-covers what this file already
+// covered before, now in terms of levels rather than the deleted GRAVITY_
+// RAMP_* constants) ----------------------------------------------------------
 {
-  assert.equal(gravityRampMultiplier(0), GRAVITY_RAMP_START_MULTIPLIER, 'drop 0 should be the start multiplier');
-  assert.equal(gravityRampMultiplier(GRAVITY_RAMP_DROPS_TO_BASE), 1, 'baseline should land exactly on 1x');
-  assert.equal(gravityRampMultiplier(GRAVITY_RAMP_DROPS_TO_CAP), GRAVITY_RAMP_CAP_MULTIPLIER, 'the cap drop should land exactly on the cap multiplier');
-  assert.equal(gravityRampMultiplier(GRAVITY_RAMP_DROPS_TO_CAP + 500), GRAVITY_RAMP_CAP_MULTIPLIER, 'far beyond the cap drop, the multiplier must not keep climbing');
+  const capMultiplier = LEVEL_SPEED_START * Math.pow(LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL - 1);
+  const capDrop = (LEVEL_SPEED_CAP_LEVEL - 1) * LEVEL_DROPS;
+
+  assert.equal(gravityRampMultiplier(0), LEVEL_SPEED_START, 'drop 0 should be the start multiplier');
+  assert.equal(gravityRampMultiplier(capDrop), capMultiplier, 'the first drop of the cap level should land exactly on the capped multiplier');
+  assert.equal(gravityRampMultiplier(capDrop + 500), capMultiplier, 'far beyond the cap level, the multiplier must not keep climbing');
+
+  // 15: the ramp is now STEPPED, not continuous -- every drop within one
+  // level shares exactly one multiplier, and it only changes at a level
+  // boundary. This is a genuine behaviour change from the old continuous
+  // ramp this section used to test, so it gets its own assertion rather than
+  // being left implicit in the monotonic sweep below.
+  assert.equal(gravityRampMultiplier(0), gravityRampMultiplier(LEVEL_DROPS - 1),
+    'every drop within one level must share the same multiplier');
+  assert.notEqual(gravityRampMultiplier(LEVEL_DROPS - 1), gravityRampMultiplier(LEVEL_DROPS),
+    'the multiplier must actually change at a level boundary');
 
   let prev = -Infinity;
-  for (let drop = 0; drop <= GRAVITY_RAMP_DROPS_TO_CAP + 50; drop += 1) {
+  for (let drop = 0; drop <= capDrop + 50; drop += 1) {
     const m = gravityRampMultiplier(drop);
     assert.ok(m >= prev, `multiplier must never decrease as drops increase (drop ${drop})`);
-    assert.ok(m <= GRAVITY_RAMP_CAP_MULTIPLIER + 1e-9, `multiplier must never exceed the cap (drop ${drop})`);
+    assert.ok(m <= capMultiplier + 1e-9, `multiplier must never exceed the cap (drop ${drop})`);
     prev = m;
   }
 
-  const state = { spawnIndex: GRAVITY_RAMP_DROPS_TO_BASE };
-  assert.equal(currentGravityPxPerSec(state), GRAVITY_PX_PER_SEC, 'at the baseline drop, ramped gravity should equal the flat constant it replaced');
+  const state = { spawnIndex: 0 };
+  assert.equal(currentGravityPxPerSec(state), GRAVITY_PX_PER_SEC * LEVEL_SPEED_START,
+    'at drop 0, ramped gravity should be the flat constant times the level-1 (start) multiplier');
 }
 
 // --- The invariant test: one fall < window < two falls, everywhere on the ramp
@@ -87,11 +104,11 @@ function independentFallSec(gravityPxPerSec, rows) {
 {
   const state = createInitialState(null);
   state.spawnIndex = 45; // deep into a previous run's ramp
-  assert.notEqual(gravityRampMultiplier(state.spawnIndex), GRAVITY_RAMP_START_MULTIPLIER, 'sanity: 45 drops in should not read as the ramp start');
+  assert.notEqual(gravityRampMultiplier(state.spawnIndex), LEVEL_SPEED_START, 'sanity: 45 drops in should not read as the ramp start');
 
   startRun(state, {});
   assert.equal(state.spawnIndex, 0, 'startRun must reset spawnIndex');
-  assert.equal(gravityRampMultiplier(state.spawnIndex), GRAVITY_RAMP_START_MULTIPLIER, 'a fresh run must read back at the ramp start, not wherever the previous run left off');
+  assert.equal(gravityRampMultiplier(state.spawnIndex), LEVEL_SPEED_START, 'a fresh run must read back at the ramp start, not wherever the previous run left off');
 }
 
 console.log('difficulty-ramp: gravity ramps with drop count, caps correctly, preserves the combo-window invariant across the whole ramp, and resets on startRun');

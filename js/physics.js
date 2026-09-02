@@ -8,7 +8,7 @@ import {
   SPAWN_MIN_REACTION_SEC,
 } from './constants.js';
 import {
-  effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter,
+  effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
 } from './state.js';
 
 // Tier lookup that also answers for the rainbow and bomb sentinels, so
@@ -132,7 +132,20 @@ export function spawnFruit(state) {
     // so endRun's refund check is correct.
     state.rainbowDelivered = (state.rainbowDelivered || 0) + 1;
   }
+  // 15: the only place spawnIndex increments, so the only place a level
+  // boundary can be crossed. Compared against the PRE-increment value rather
+  // than caching levelFor(state.spawnIndex) from the top of this function --
+  // spawnIndex is the single source of truth for both, and computing the
+  // "before" from it here (one subtraction) needs no second variable to keep
+  // in sync with the increment below.
+  const levelBefore = levelFor(state.spawnIndex);
   state.spawnIndex += 1;
+  if (levelFor(state.spawnIndex) > levelBefore) {
+    // Physics pushes the event; js/main.js's drainEvents turns it into sound,
+    // haptics and the on-board callout -- the same seam every other reaction
+    // in this game goes through. No audio/effects/DOM call from here.
+    state.events.push({ type: 'levelUp', level: levelFor(state.spawnIndex) });
+  }
   state.nextTier = nextTierFor(state);
 
   state.active = {

@@ -4,18 +4,19 @@ import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
   powerSlotRect, POWER_SLOT, pauseButtonRect,
-  FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC, MERGE_METER_MAX, DANGER_ROWS_REMAINING,
+  FONT_FAMILY, DISPLAY_FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC,
+  MERGE_METER_MAX, DANGER_ROWS_REMAINING, LEVEL_CALLOUT_SEC,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
   SPAWN_CHUTE_TINT_ALPHA, SPAWN_CHUTE_FADE_ROWS, SPAWN_CHUTE_MARK_ALPHA, SPAWN_CHUTE_MARK_INSET,
 } from './constants.js';
-import { tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor } from './state.js';
+import { tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor, levelFor } from './state.js';
 // The ONE function that decides where the next fruit arrives (js/physics.js).
 // Imported rather than reimplemented here on purpose -- see its own comment.
 // It is a pure read of stackHeight and mutates nothing, so this file's "no
 // state mutation" rule is intact.
 import { spawnColumnFor } from './physics.js';
 import {
-  squashScaleAt, shakeOffset, drawParticles, drawBombRings,
+  squashScaleAt, shakeOffset, drawParticles, drawBombRings, isReducedMotion,
 } from './effects.js';
 import { themeForScore, themePosition, relativeLuminance } from './theme.js';
 import { drawIcon } from './icons.js';
@@ -127,6 +128,9 @@ export function drawFrame(ctx, state, fx) {
   if (fx) {
     drawParticles(ctx, fx);
     drawBombRings(ctx, fx);
+    // 15: last of all -- see drawLevelCallout's own comment on why this is
+    // not inside drawBoard.
+    drawLevelCallout(ctx, fx, COLS * CELL, boardHeightFor(state), theme);
   }
   ctx.restore();
 }
@@ -141,6 +145,14 @@ function drawHUD(ctx, state, width, theme) {
   ctx.font = `13px ${FONT_FAMILY}`;
   ctx.fillText(`Best ${state.highScore}`, 10, 32);
   ctx.fillText(`Coins ${state.coins}`, 10, 50);
+
+  // 15: the persistent level readout. (10, 66) at 12px was checked against a
+  // 390x844 screenshot and clears POWER_SLOT.y (80) with room to spare -- see
+  // docs/phase15brief.md for the check. Left column, under Coins, same
+  // left-aligned block the three stats above it already are.
+  ctx.font = `bold 12px ${FONT_FAMILY}`;
+  ctx.fillStyle = theme.text;
+  ctx.fillText(`LV ${levelFor(state.spawnIndex)}`, 10, 66);
 
   drawComboMeter(ctx, state, width, theme);
 
@@ -425,6 +437,47 @@ function drawDangerState(ctx, state, rows, theme) {
     ctx.globalAlpha = full ? 0.75 : 0.3 + 0.4 * pulse;
     ctx.strokeRect(c * CELL + 2, 2, CELL - 4, rows * CELL - 4);
   }
+  ctx.restore();
+}
+
+// 15: the big centred callout on a level-up, alongside the persistent HUD
+// readout drawHUD already draws. Two-part envelope over LEVEL_CALLOUT_SEC: a
+// quick rise to peak alpha (0.85, the spec's ceiling) over the first 15% of
+// the duration, then a fall to exactly 0 by the end -- "must not block the
+// board" is satisfied by alpha reaching 0, not by staying out of the way.
+// Scale grows across the whole duration under normal motion; under
+// prefers-reduced-motion it holds at 1 and only the fade plays, per
+// docs/phase15-spec.md section 6.3.
+function levelCalloutEnvelope(p) {
+  if (p < 0.15) return p / 0.15;
+  return 1 - (p - 0.15) / 0.85;
+}
+
+// Called from drawFrame, not drawBoard -- "under nothing" (docs/phase15-spec.md
+// section 6.3) means after drawParticles/drawBombRings too, which run outside
+// drawBoard's own clip. Does its own HUD_HEIGHT translate for the same reason
+// those two already do (see their own comments): board-local coordinates,
+// computed independently of drawBoard's internal state.
+function drawLevelCallout(ctx, fx, width, height, theme) {
+  const callout = fx.levelCallout;
+  if (!callout) return;
+  const p = Math.min(1, callout.t / LEVEL_CALLOUT_SEC);
+  const alpha = levelCalloutEnvelope(p) * 0.85;
+  if (alpha <= 0.002) return;
+  const scale = isReducedMotion() ? 1 : 1 + 0.5 * p;
+
+  ctx.save();
+  ctx.translate(0, HUD_HEIGHT);
+  ctx.globalAlpha = alpha;
+  ctx.translate(width / 2, height / 2);
+  ctx.scale(scale, scale);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `48px ${DISPLAY_FONT_FAMILY}`;
+  ctx.shadowColor = 'rgba(0,0,0,0.4)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = theme.accent;
+  ctx.fillText(`LEVEL ${callout.level}`, 0, 0);
   ctx.restore();
 }
 
