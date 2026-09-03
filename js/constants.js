@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.02-20';
+export const BUILD_VERSION = '2026.09.03-21';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -263,6 +263,42 @@ export const LEVEL_SPEED_CAP_LEVEL = 10;
 // column fills, so any column can be the one that ends it, and there is no
 // single column to warn about.
 export const DANGER_ROWS_REMAINING = 2;
+
+// --- Rising floor (17): the mechanic that makes a run actually END ----------
+// Before this, a careful player could not lose. Speed caps at level 10
+// (LEVEL_SPEED_CAP_LEVEL), the spawn pool is flat from level 13 (the last band
+// of SPAWN_POOL_BY_BAND), and isGameOver fires only when EVERY column is full
+// -- so a competent merger holds a low board indefinitely. Measured on a real
+// phone: a played run reached level 171 and was still going, almost all of it
+// past the point where nothing in the game escalates any further. "How long
+// can you last" has no answer if the answer is "forever."
+//
+// The floor is a guaranteed, skill-RESISTANT fill. Every so often a new row of
+// low fruit is pushed up from the bottom, raising every column by one. Good
+// play (merges, watermelon clears) DELAYS it; nothing cancels it, so the board
+// trends to full and the run ends. Skill still decides HOW LONG -- a better
+// player survives more rises -- which is exactly the contest the mechanic is
+// there to create.
+//
+// DROP-INDEXED, not wall-clock, and that is the load-bearing choice. The
+// level-171 run was reached partly by pausing to think between moves; a
+// time-based floor would reward that, and a drop-based one is immune to it --
+// a rise costs the same number of placements however long you deliberate. It
+// also makes the whole mechanic deterministic to test. See
+// floorRiseCadenceDrops in js/state.js, raiseFloor in js/physics.js,
+// unit-tests/floor-rise.js, and docs/phase17brief.md.
+//
+// The four numbers below are TUNED, not chosen by taste. Measured with a
+// headless greedy bot over 400 runs each (tools/tune-floor-rise.mjs): a careful
+// run lasts a median ~167 drops (~level 17), a careless one ~132 (~level 14),
+// and NOT ONE of 800 runs failed to end -- the whole point. A single
+// exceptional careful run still tops out near level 40, the bounded "how far
+// can you go" ceiling, not the old unbounded one. See docs/phase17brief.md for
+// the full distributions and the sweep behind these.
+export const FLOOR_RISE_START_LEVEL = 3;        // grace: no rises during levels 1-2
+export const FLOOR_RISE_DROPS_START = 16;       // at the start level, one rise per this many drops
+export const FLOOR_RISE_DROPS_MIN = 5;          // the tightest cadence, reached late in a run
+export const FLOOR_RISE_TIGHTEN_PER_LEVEL = 1;  // drops shaved off the cadence each level
 
 // --- Where a fruit comes from (12.2, revised by 14) ------------------------
 // Two separate rules, changed together in 12.2 and separated again in 14.

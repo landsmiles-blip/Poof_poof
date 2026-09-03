@@ -9,6 +9,7 @@ import {
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
+  floorRiseCadenceDrops,
 } from './state.js';
 
 // Tier lookup that also answers for the rainbow and bomb sentinels, so
@@ -89,15 +90,14 @@ function spawnHangSecFor(state, col) {
 }
 
 export function spawnFruit(state) {
-  // Bail before consuming anything. A blocked spawn ends the run, and eating a
-  // scheduled wild (or advancing the index) on the way out would silently
-  // destroy a charge the player paid for.
+  // Terminal bail before consuming anything. A blocked spawn ends the run, and
+  // eating a scheduled wild (or advancing the index) on the way out would
+  // silently destroy a charge the player paid for.
   //
   // 12.2: "blocked" now means every column is full, not that one nominated
   // column is. Five empty columns no longer count for nothing. 14 restored
   // the fixed spawn column but kept this rule -- see js/constants.js.
-  const startCol = spawnColumnFor(state);
-  if (startCol < 0) {
+  if (spawnColumnFor(state) < 0) {
     return { blocked: true };
   }
 
@@ -118,10 +118,6 @@ export function spawnFruit(state) {
     }
   }
 
-  // Computed before nextTier is consumed below -- it needs the radius of the
-  // fruit that is about to spawn, which is still state.nextTier at this point.
-  const hangSec = spawnHangSecFor(state, startCol);
-
   // state.nextTier was decided one spawn ahead of time (in nextTierFor, called
   // from here and from startRun) specifically so the HUD's "Next" preview is
   // never a lie -- nothing here is allowed to override it.
@@ -133,11 +129,9 @@ export function spawnFruit(state) {
     state.rainbowDelivered = (state.rainbowDelivered || 0) + 1;
   }
   // 15: the only place spawnIndex increments, so the only place a level
-  // boundary can be crossed. Compared against the PRE-increment value rather
-  // than caching levelFor(state.spawnIndex) from the top of this function --
-  // spawnIndex is the single source of truth for both, and computing the
-  // "before" from it here (one subtraction) needs no second variable to keep
-  // in sync with the increment below.
+  // boundary -- and, since 17, a rising-floor push -- can be crossed. Compared
+  // against the PRE-increment value rather than caching levelFor from the top
+  // of this function: spawnIndex is the single source of truth for both.
   const levelBefore = levelFor(state.spawnIndex);
   state.spawnIndex += 1;
   if (levelFor(state.spawnIndex) > levelBefore) {
@@ -146,6 +140,30 @@ export function spawnFruit(state) {
     // in this game goes through. No audio/effects/DOM call from here.
     state.events.push({ type: 'levelUp', level: levelFor(state.spawnIndex) });
   }
+
+  // 17: the rising floor, drop-indexed off the count just incremented. A rise
+  // can top the board out; that ends the run, and consuming `tier` above is
+  // fine because a top-out is terminal (endRun resets everything regardless).
+  // Deliberately AFTER the level bump so a rise uses the level it belongs to.
+  state.dropsSinceFloorRise += 1;
+  if (state.dropsSinceFloorRise >= floorRiseCadenceDrops(levelFor(state.spawnIndex))) {
+    state.dropsSinceFloorRise = 0;
+    if (raiseFloor(state).toppedOut) {
+      return { blocked: true };
+    }
+  }
+
+  // startCol and hangSec are computed HERE, after the rise -- the rise shifted
+  // every column up by one, so a value read before it would be stale. hangSec
+  // still reads state.nextTier (=== tier), so it must run before the reassign
+  // just below. spawnColumnFor can now come back -1 if the rise itself filled
+  // the last open column, which is simply the run ending on this drop.
+  const startCol = spawnColumnFor(state);
+  if (startCol < 0) {
+    return { blocked: true };
+  }
+  const hangSec = spawnHangSecFor(state, startCol);
+
   state.nextTier = nextTierFor(state);
 
   state.active = {
@@ -448,6 +466,61 @@ export function swapFruits(state, r1, c1, r2, c2) {
   state.grid[r2][c2] = tierA;
   resolveMerges(state);
   return true;
+}
+
+// 17: the rising floor -- push a new bottom row up across the whole board,
+// lifting every column by one. This is the pressure that makes a run END:
+// speed and the spawn pool both stop escalating (see constants.js), so without
+// it a careful merger holds a low board forever and "how long can you last"
+// has no answer.
+//
+// Returns { toppedOut } rather than setting a flag: a rise cannot proceed if
+// any column already reaches the ceiling -- the shift would push its top fruit
+// off the board -- and that IS the loss. Checked first, before any mutation,
+// so a topping-out rise leaves the board untouched for endRun to read.
+//
+// No active fruit exists when this runs: it is called only from spawnFruit,
+// after the previous fruit has locked and before the next is placed, so there
+// is never a mid-air fruit whose coordinates a shift would invalidate.
+export function raiseFloor(state) {
+  const rows = state.grid.length;
+  for (let c = 0; c < COLS; c++) {
+    if (state.stackHeight[c] >= rows) return { toppedOut: true };
+  }
+
+  const newBottom = riseRowTiers();
+  for (let c = 0; c < COLS; c++) {
+    // Shift the column up one cell (row r takes what was below it). Row 0 is
+    // guaranteed null for every column here -- no column was full -- so the
+    // cell that falls off the top is always empty.
+    for (let r = 0; r < rows - 1; r++) state.grid[r][c] = state.grid[r + 1][c];
+    state.grid[rows - 1][c] = newBottom[c];
+    state.stackHeight[c] += 1;
+  }
+
+  // Pushed before resolveMerges so a floorRose cue fires even when the new row
+  // sets off a cascade. main.js turns it into sound/haptics -- physics stays
+  // free of audio/DOM, as everywhere else here.
+  state.events.push({ type: 'floorRose' });
+
+  // The new row can sit under a matching fruit, or a settling cascade can bring
+  // matches together -- resolve them. This is the seam that lets a good player
+  // FIGHT the floor: a well-built bottom row eats part of the rise. It can
+  // never eat all of it forever, which is the whole point.
+  resolveMerges(state);
+  return { toppedOut: false };
+}
+
+// The fruit that fills a freshly-risen bottom row: the two lowest tiers in an
+// alternating pattern with a random phase. Alternating guarantees no two
+// horizontal neighbours match, so the row cannot simply evaporate on arrival
+// -- a uniform row would horizontally self-merge and defeat the very pressure
+// it exists to create. Low tiers keep it fair: the row is fightable, not junk.
+function riseRowTiers() {
+  const phase = Math.random() < 0.5 ? 0 : 1;
+  const out = [];
+  for (let c = 0; c < COLS; c++) out.push((c + phase) % 2 === 0 ? 0 : 1);
+  return out;
 }
 
 // 12.2: the board is over when there is nowhere left to put anything, not

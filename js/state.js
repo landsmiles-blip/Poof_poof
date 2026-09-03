@@ -8,6 +8,7 @@ import {
   RAINBOW_TIER, RAINBOW_DEF, RAINBOW_SCHEDULE, BOMB_TIER, BOMB_DEF,
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, LEVEL_DROPS, LEVEL_SPEED_START, LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL,
+  FLOOR_RISE_START_LEVEL, FLOOR_RISE_DROPS_START, FLOOR_RISE_DROPS_MIN, FLOOR_RISE_TIGHTEN_PER_LEVEL,
 } from './constants.js';
 
 // --- Levels / difficulty ramp (15) ------------------------------------------
@@ -36,6 +37,18 @@ export function gravityRampMultiplier(spawnIndex) {
 
 export function currentGravityPxPerSec(state) {
   return GRAVITY_PX_PER_SEC * gravityRampMultiplier(state.spawnIndex);
+}
+
+// 17: how many drops between rising-floor pushes at a given level. Infinity
+// during the opening grace (levels below FLOOR_RISE_START_LEVEL), then
+// FLOOR_RISE_DROPS_START tightening by FLOOR_RISE_TIGHTEN_PER_LEVEL each level
+// down to a floor of FLOOR_RISE_DROPS_MIN. A pure function of level, keyed off
+// spawnIndex exactly like levelFor -- no state field of its own, no clock. See
+// constants.js for why the whole mechanic is drop-indexed and not time-indexed.
+export function floorRiseCadenceDrops(level) {
+  if (level < FLOOR_RISE_START_LEVEL) return Infinity;
+  const tightened = FLOOR_RISE_DROPS_START - (level - FLOOR_RISE_START_LEVEL) * FLOOR_RISE_TIGHTEN_PER_LEVEL;
+  return Math.max(FLOOR_RISE_DROPS_MIN, tightened);
 }
 
 // Time for a fruit to fall the full board height at a given gravity -- the
@@ -166,6 +179,10 @@ export function createInitialState(save) {
     rainbowChargeSpent: false,
     rainbowDelivered: 0,
     spawnIndex: 0,
+    // 17: drops placed since the last rising-floor push. Reset to 0 on each
+    // rise (js/physics.js spawnFruit) and at startRun; never persisted -- a
+    // resumed save begins its floor cadence fresh, same as spawnIndex.
+    dropsSinceFloorRise: 0,
     lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
 
     // 8.1: fills as you merge (see fillMergeMeter) and grants a free,
@@ -492,6 +509,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.rainbowDelivered = 0;
   if (state.rainbowChargeSpent) state.inventory.rainbow -= 1;
   state.spawnIndex = 0;
+  state.dropsSinceFloorRise = 0;
 
   state.removerArmed = false;
   state.bombInPlay = false;

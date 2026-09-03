@@ -378,6 +378,15 @@ function drainEvents() {
         playLevelUp();
         vibrate(HAPTIC_LEVEL_UP_MS);
         triggerLevelUp(fx, event.level);
+      } else if (event.type === 'floorRose') {
+        // 17: the rising floor just pushed a new row up. The board visibly
+        // jumping is the main telegraph; this adds a light tick + haptic so a
+        // rise is felt, not only seen. Reuses the level-up haptic weight -- a
+        // rise is the same "it just got harder" beat -- and playUiTick rather
+        // than a merge/clear sound so it reads as pressure, not reward. A
+        // bespoke rise cue could replace playUiTick later.
+        playUiTick();
+        vibrate(HAPTIC_LEVEL_UP_MS);
       }
     }
   } finally {
