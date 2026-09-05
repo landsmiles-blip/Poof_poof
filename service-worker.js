@@ -24,7 +24,7 @@
 
 // Derived from BUILD_VERSION so the cache name can never be forgotten again.
 // Keep in sync with js/constants.js BUILD_VERSION.
-const BUILD_VERSION = '2026.09.03-21';
+const BUILD_VERSION = '2026.09.03-22';
 const CACHE_NAME = `poofpoof-${BUILD_VERSION}`;
 
 const ASSETS = [
@@ -39,6 +39,11 @@ const ASSETS = [
   './js/effects.js',
   './js/theme.js',
   './js/icons.js',
+  // 18: found missing during Phase 18 verification -- present since Phase
+  // 11.2 (aa7989a) but never added here, so a first-ever visit followed
+  // immediately by an offline reload could 503 on this file instead of
+  // serving it from cache.
+  './js/background.js',
   './js/state.js',
   './js/physics.js',
   './js/render.js',

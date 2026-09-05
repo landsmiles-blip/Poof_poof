@@ -9,7 +9,7 @@ import {
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
-  floorRiseCadenceDrops,
+  floorRiseCadenceDrops, expireArmedPowerUp,
 } from './state.js';
 
 // Tier lookup that also answers for the rainbow and bomb sentinels, so
@@ -122,12 +122,6 @@ export function spawnFruit(state) {
   // from here and from startRun) specifically so the HUD's "Next" preview is
   // never a lie -- nothing here is allowed to override it.
   const tier = state.nextTier;
-  if (tier === RAINBOW_TIER) {
-    // Counted at actual spawn, not at the earlier scheduling decision: a run
-    // that ends before this fruit ever drops must still read as undelivered,
-    // so endRun's refund check is correct.
-    state.rainbowDelivered = (state.rainbowDelivered || 0) + 1;
-  }
   // 15: the only place spawnIndex increments, so the only place a level
   // boundary -- and, since 17, a rising-floor push -- can be crossed. Compared
   // against the PRE-increment value rather than caching levelFor from the top
@@ -141,9 +135,14 @@ export function spawnFruit(state) {
     state.events.push({ type: 'levelUp', level: levelFor(state.spawnIndex) });
   }
 
+  // 18: hand control back if an armed Remover/Swap was never used. Drop-indexed
+  // here for the same reason the floor is -- one counter, no clock, immune to
+  // pausing. See ARM_EXPIRY_DROPS in js/constants.js for the dead-run bug this
+  // closes.
+  expireArmedPowerUp(state);
+
   // 17: the rising floor, drop-indexed off the count just incremented. A rise
-  // can top the board out; that ends the run, and consuming `tier` above is
-  // fine because a top-out is terminal (endRun resets everything regardless).
+  // can top the board out, which ends the run.
   // Deliberately AFTER the level bump so a rise uses the level it belongs to.
   state.dropsSinceFloorRise += 1;
   if (state.dropsSinceFloorRise >= floorRiseCadenceDrops(levelFor(state.spawnIndex))) {
@@ -163,6 +162,22 @@ export function spawnFruit(state) {
     return { blocked: true };
   }
   const hangSec = spawnHangSecFor(state, startCol);
+
+  // 18 (was 17.1): counted HERE, past every `return { blocked: true }` above,
+  // not up where `tier` is read. The original code had exactly one bail point
+  // and it sat before this line -- "bail before consuming anything", as its own
+  // comment said -- so a run that ended on this drop could never mark a wild as
+  // delivered without delivering it. Phase 17 added two bail points AFTER it
+  // (the floor top-out and the post-rise full board), quietly breaking that
+  // guarantee: endRun refunds the charge only when rainbowDelivered is still 0,
+  // and it reads that BEFORE resetting, so a coincidence would have silently
+  // eaten a charge the player paid for. Unreachable with today's constants
+  // (RAINBOW_SCHEDULE resolves by drop 8, the earliest rise is drop 20) -- but
+  // that is two independently-tunable numbers apart, and we just spent a phase
+  // tuning one of them. Restored by structure instead of by luck.
+  if (tier === RAINBOW_TIER) {
+    state.rainbowDelivered = (state.rainbowDelivered || 0) + 1;
+  }
 
   state.nextTier = nextTierFor(state);
 

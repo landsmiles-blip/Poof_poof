@@ -512,6 +512,17 @@ function pauseRun() {
   suspendAudio();
   pauseMusicScheduler();
   state.paused = true;
+  // 18: pausing cancels any half-finished power-up aim. A player who armed the
+  // Remover or Swap and then got stuck (see ARM_EXPIRY_DROPS) reaches for pause
+  // first -- it is the instinctive escape hatch, and before this it did nothing
+  // at all, because none of these flags were touched here. Clearing them means
+  // the player comes back to a clean board and full control of the fruit. No
+  // charge is spent: arming never cost one, so cancelling refunds nothing.
+  state.removerArmed = false;
+  state.swapArmed = false;
+  state.swapSelectedCell = null;
+  state.armPreviewCell = null;
+  state.armedAtSpawnIndex = null;
   persistNow();
   // 12.1(c): armed for exactly as long as the game claims to be paused --
   // stopWatchdog() (in startLoop) disarms it the moment the loop is

@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.03-21';
+export const BUILD_VERSION = '2026.09.03-22';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -299,6 +299,30 @@ export const FLOOR_RISE_START_LEVEL = 3;        // grace: no rises during levels
 export const FLOOR_RISE_DROPS_START = 16;       // at the start level, one rise per this many drops
 export const FLOOR_RISE_DROPS_MIN = 5;          // the tightest cadence, reached late in a run
 export const FLOOR_RISE_TIGHTEN_PER_LEVEL = 1;  // drops shaved off the cadence each level
+
+// --- Armed power-up expiry (18) --------------------------------------------
+// The Remover and Swap are "aiming mode" tools: while one is armed, every
+// board gesture is read as aiming at a cell, and js/input.js returns before it
+// ever reaches the code that steers the falling fruit. That is correct while
+// you are actually aiming -- and a trap the moment you stop.
+//
+// The bug this fixes, reproduced in a real browser: arm the Remover, tap an
+// empty cell. The removal fails, so consumeRemover never runs, so the tool
+// stays armed BY DESIGN (tapping empty space must not cost a charge -- see
+// unit-tests/input-callbacks.js, which asserts exactly that). But now every
+// drag is swallowed by aiming mode: the fruit keeps falling and cannot be
+// steered at all. pauseRun did not clear it either, so pausing and resuming --
+// the first thing a player tries -- changed nothing. The only escapes were
+// re-tapping the chip (not discoverable) or pressing Escape, and a phone has
+// no Escape key. On mobile that is a dead run.
+//
+// The fix is a bound, not a behaviour change: an arm that goes unused expires
+// after this many drops and hands control back. Three is deliberate -- Swap is
+// a TWO-tap tool and a player needs room to take those taps across a couple of
+// drops without the tool evaporating mid-gesture, while still capping the
+// worst case at a few seconds of lost steering instead of the whole run.
+// pauseRun also clears it now, so the instinctive escape works too.
+export const ARM_EXPIRY_DROPS = 3;
 
 // --- Where a fruit comes from (12.2, revised by 14) ------------------------
 // Two separate rules, changed together in 12.2 and separated again in 14.

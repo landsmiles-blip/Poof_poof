@@ -9,6 +9,7 @@ import {
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, LEVEL_DROPS, LEVEL_SPEED_START, LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL,
   FLOOR_RISE_START_LEVEL, FLOOR_RISE_DROPS_START, FLOOR_RISE_DROPS_MIN, FLOOR_RISE_TIGHTEN_PER_LEVEL,
+  ARM_EXPIRY_DROPS,
 } from './constants.js';
 
 // --- Levels / difficulty ramp (15) ------------------------------------------
@@ -174,6 +175,9 @@ export function createInitialState(save) {
     // and a second tap on an adjacent occupied cell performs the swap.
     swapArmed: false,
     swapSelectedCell: null,
+    // 18: the spawnIndex at which the Remover/Swap was armed, so an unused arm
+    // can expire (see expireArmedPowerUp). null whenever nothing is armed.
+    armedAtSpawnIndex: null,
 
     rainbowSchedule: [],
     rainbowChargeSpent: false,
@@ -516,6 +520,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.bombFuseDrops = null;
   state.swapArmed = false;
   state.swapSelectedCell = null;
+  state.armedAtSpawnIndex = null;
   state.lockedFlash = null;
   state.paused = false;
 
@@ -650,6 +655,10 @@ function consumeCharge(state, id) {
 export function armRemover(state, armed) {
   if (armed && totalCharges(state, 'remover') <= 0) return false;
   state.removerArmed = armed;
+  // 18: stamp when aiming mode began so an arm that is never used can expire
+  // instead of holding the falling fruit hostage forever -- see
+  // ARM_EXPIRY_DROPS in js/constants.js for the bug this closes.
+  state.armedAtSpawnIndex = armed ? state.spawnIndex : null;
   if (armed) {
     state.swapArmed = false;
     state.swapSelectedCell = null;
@@ -660,6 +669,7 @@ export function armRemover(state, armed) {
 export function consumeRemover(state) {
   if (!consumeCharge(state, 'remover')) return false;
   state.removerArmed = false;
+  state.armedAtSpawnIndex = null;
   return true;
 }
 
@@ -674,6 +684,8 @@ export function armSwap(state, armed) {
   if (armed && totalCharges(state, 'swap') <= 0) return false;
   state.swapArmed = armed;
   state.swapSelectedCell = null;
+  // 18: same expiry stamp as armRemover -- see its comment.
+  state.armedAtSpawnIndex = armed ? state.spawnIndex : null;
   if (armed) state.removerArmed = false;
   return true;
 }
@@ -682,6 +694,25 @@ export function consumeSwap(state) {
   if (!consumeCharge(state, 'swap')) return false;
   state.swapArmed = false;
   state.swapSelectedCell = null;
+  state.armedAtSpawnIndex = null;
+  return true;
+}
+
+// 18: hand control back if an armed tool was never used. Called once per drop
+// from js/physics.js's spawnFruit (the single place spawnIndex advances), so
+// it is drop-indexed and deterministic like every other timer in this game --
+// no clock, and immune to pausing. A player mid-gesture is unaffected: three
+// drops is plenty for Swap's two taps. Returns true if it actually disarmed,
+// so a caller could announce it; nothing does yet.
+export function expireArmedPowerUp(state) {
+  if (!state.removerArmed && !state.swapArmed) return false;
+  if (state.armedAtSpawnIndex === null || state.armedAtSpawnIndex === undefined) return false;
+  if (state.spawnIndex - state.armedAtSpawnIndex < ARM_EXPIRY_DROPS) return false;
+  state.removerArmed = false;
+  state.swapArmed = false;
+  state.swapSelectedCell = null;
+  state.armPreviewCell = null;
+  state.armedAtSpawnIndex = null;
   return true;
 }
 
