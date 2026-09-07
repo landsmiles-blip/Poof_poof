@@ -37,6 +37,9 @@ export function createEffects() {
     squashes: [], // { row, col, t, duration, amount }
     particles: [], // { x, y, vx, vy, t, life, color, size }
     shake: { t: 0, duration: 0, magnitude: 0 },
+    // 21: fruit that have already left the grid but have not popped yet --
+    // see spawnGhost and js/render.js's drawGhosts.
+    ghosts: [],
     bombRings: [], // { x, y, t, duration } -- 7.3
     levelCallout: null, // { level, t } -- 15, see triggerLevelUp
   };
@@ -82,6 +85,20 @@ export function triggerUnlock(fx, name) {
 
 // Expanding ring on a bomb detonation -- the loudest action in the game
 // otherwise had no visual beyond the particle bursts per cleared cell.
+// 21: a fruit that a merge has already removed from the grid, still drawn at
+// the spot it was in, until its link of the chain actually pops.
+//
+// This is the half of the cascade fix that matters. The grid still resolves a
+// whole chain inside one frame -- physics stays synchronous and the entire
+// difficulty design depends on it -- but the PLAYER now sees the chain travel,
+// because each fruit waits its turn to disappear instead of all of them going
+// at once. `delay` is the same staged offset the burst uses, so a fruit and
+// its own confetti always leave together.
+export function spawnGhost(fx, { x, y, tier, color, delay }) {
+  if (delay <= 0) return;            // nothing to hold back
+  fx.ghosts.push({ x, y, tier, color, t: -delay });
+}
+
 export function spawnBombRing(fx, x, y) {
   fx.bombRings.push({ x, y, t: 0, duration: BOMB_RING_DURATION_SEC });
 }
@@ -251,6 +268,13 @@ export function updateEffects(fx, dt) {
     p.vy += PARTICLE_GRAVITY * dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+  }
+
+  // A ghost lives only until its own pop -- t reaching zero IS the pop, and
+  // the burst it was waiting for fires on the same frame.
+  for (let i = fx.ghosts.length - 1; i >= 0; i--) {
+    fx.ghosts[i].t += dt;
+    if (fx.ghosts[i].t >= 0) fx.ghosts.splice(i, 1);
   }
 
   if (fx.shake.t < fx.shake.duration) {

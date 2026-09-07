@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.07-24';
+export const BUILD_VERSION = '2026.09.07-25';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -611,35 +611,32 @@ export const COMBO_MAX_MULTIPLIER = 3;
 // lengthen runs and therefore raise every score in the game. These four
 // numbers must be re-checked against real scores once that lands, not left
 // to drift. They are deliberately one line so that re-check is cheap.
-// 20: re-spaced against MEASURED scores, and split away from the power-up
-// ladder it used to share.
+// Re-spaced against MEASURED scores, and split away from the power-up ladder
+// it used to share.
 //
-// Reported after real play: two runs of 4,447 and 6,039 each unlocked SIX
-// things at once. The cause was not that the numbers were too low -- it was
-// that skins and power-ups sat on the SAME three thresholds (500 / 1500 /
-// 4000), so every milestone fired two rewards, and all three fell inside a
-// single good run. Six rewards, three moments, one sitting.
+// Reported after real play: two runs each unlocked SIX things at once. The
+// cause was not that the numbers were too low -- skins and power-ups sat on
+// the SAME three thresholds, so every milestone fired two rewards, and all
+// three fell inside one good run.
 //
-// Measured with tools/measure-scores.mjs, 300 greedy bot runs each and no
-// power-ups at all, so every figure is a LOWER bound on a real player:
-//     careless  p10 2318  med 6435   p75 9578   p90 13078  p99 22736
-//     careful   p10 6581  med 11430  p75 15554  p90 20206  p99 29124
-// The "careless" column is the one to read: it is the bot that never plans a
-// merge, and it lands closest to the two real runs above.
+// 21 re-measures because the stone changed what a run scores. With
+// tools/measure-scores.mjs, 200 greedy bot runs each and no power-ups at all,
+// so every figure is a LOWER bound on a real player:
+//     careless  p10 2744  med  7276  p90 11806  p99 13878  max 16064
+//     careful   p10 8638  med 12149  p90 15024  p99 17917  max 18013
 //
-// The ladders now INTERLEAVE, so no two rewards ever share a score:
+// The ladders INTERLEAVE, so no two rewards ever share a score:
 //     1,500 palette | 3,000 Swap | 6,000 palette | 9,000 Bomb
-//     15,000 palette | 22,000 Rainbow
-// Against the distribution that is one or two unlocks in a typical run, the
-// last palette a genuinely strong one, and the Rainbow a real chase -- which
-// is what "an exceptional player should unlock all the skins after a couple
-// of runs" has to mean if an unlock is to be worth anything.
-export const MILESTONE_SCORES = [0, 1500, 6000, 15000];
+//     13,000 palette | 18,000 Rainbow
+// One or two unlocks in a typical run, the last palette a genuinely strong
+// one, and the Rainbow at the very top of what a bot can reach -- a real
+// chase, but not a locked door.
+export const MILESTONE_SCORES = [0, 1500, 6000, 13000];
 
 // The power-up ladder, deliberately offset from MILESTONE_SCORES above so a
 // palette and a power-up never arrive together. Each sits between two palette
 // milestones.
-export const POWERUP_UNLOCK_SCORES = [3000, 9000, 22000];
+export const POWERUP_UNLOCK_SCORES = [3000, 9000, 18000];
 
 // --- Skins ---------------------------------------------------------------
 // Each skin supplies one color per tier, in tier order. Unlocks are checked
@@ -767,6 +764,54 @@ export const BOMB_RADIUS = 1; // Chebyshev radius: 1 => up to a 3x3 clear
 export const BOMB_TIER = 98;
 export const BOMB_DEF = { name: 'bomb', color: '#2b2118', radius: 27, points: 0, shape: 'bomb' };
 export const BOMB_FUSE_DROPS = 4;
+
+// --- The Stone (21) --------------------------------------------------------
+// A third sentinel, and the one that makes the rising floor actually pressure
+// the board. Same landmine as the bomb: pairTier must reject it BEFORE the
+// rainbow wildcard check, or a wild would treat a stone as mergeable.
+//
+// WHY IT EXISTS, because it is a real addition to the game and the reason
+// needs to survive:
+//
+// 21 rebuilt the ending on one rule -- the run is over when there is no move
+// left, meaning every cell taken. That rule is right and it is what the game
+// always should have had. But measuring it exposed something none of us saw:
+// with the old rising row, the difficulty curve went completely INERT.
+// Survival from an empty board was ~180-230 drops at EVERY cadence from 16
+// down to 1. Level 3 played exactly like level 60.
+//
+// The cause is the thing the floor was made of. A row of tier 0 and tier 1
+// fruit is the cheapest material on the board to clear, so a faster floor was
+// not applying pressure, it was delivering AMMUNITION. Two attempts to fix it
+// by rearranging that row failed, one of them inverting the curve outright
+// (tighter cadence, LONGER runs, and half of them never ending).
+//
+// So the floor delivers something that cannot be merged away. Measured with
+// the stone in place, the curve came straight back and stayed monotone:
+//
+//     cadence 16 -> 88 drops    cadence 4 -> 35
+//     cadence 11 -> 63          cadence 3 -> 26
+//     cadence  5 -> 39          cadence 2 -> 19
+//                               cadence 1 ->  9
+//
+// A wall you cannot touch is not a game, so a stone CRACKS when a merge
+// happens orthogonally beside it (see crackStonesAround in js/physics.js).
+// That keeps skill in the loop, makes merging next to the floor the correct
+// play, and finally gives the Remover and the Bomb a job worth 20 and 60
+// coins -- the shop being pointless was a separate complaint, fixed here by
+// accident and kept on purpose.
+export const STONE_TIER = 97;
+export const STONE_DEF = { name: 'stone', color: '#8d8579', radius: 26, points: 0, shape: 'stone' };
+export const STONE_CRACK_POINTS = 12; // a small score for clearing one -- it is real work
+
+// How many of a rising row's COLS cells arrive as stone, by level. Starts at
+// one so the early game is very close to what it always was, and climbs to a
+// full row late. This is the second difficulty lever the game has been
+// missing since 17: cadence controls HOW OFTEN the floor comes, this controls
+// HOW MUCH of it you cannot merge away.
+export const STONE_START_LEVEL = 3;      // matches FLOOR_RISE_START_LEVEL -- no floor, no stones
+export const STONE_START_COUNT = 1;      // ...and it starts as a single stone in the row
+export const STONE_LEVELS_PER_EXTRA = 4; // one more stone every this many levels
 
 // --- Rainbow -------------------------------------------------------------
 // Sentinel stored in the grid alongside normal tier indices. Chosen well past

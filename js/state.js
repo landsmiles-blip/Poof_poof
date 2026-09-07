@@ -10,6 +10,7 @@ import {
   GRAVITY_PX_PER_SEC, LEVEL_DROPS, LEVEL_SPEED_START, LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL,
   FLOOR_RISE_START_LEVEL, FLOOR_RISE_DROPS_START, FLOOR_RISE_DROPS_MIN, FLOOR_RISE_TIGHTEN_PER_LEVEL,
   FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_SLOW_LEVELS,
+  STONE_TIER, STONE_DEF, STONE_START_LEVEL, STONE_START_COUNT, STONE_LEVELS_PER_EXTRA,
   ARM_EXPIRY_DROPS,
 } from './constants.js';
 
@@ -66,6 +67,21 @@ export function floorRiseCadenceDrops(level) {
   const levelsPastFloor = level - stageOneFloorLevel();
   const slowShave = Math.floor(levelsPastFloor / FLOOR_RISE_SLOW_LEVELS);
   return Math.max(FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_DROPS_MIN - slowShave);
+}
+
+// 21: how many of a rising row's COLS cells arrive as stone at a given level.
+// A pure function of level, exactly like floorRiseCadenceDrops, so it stays
+// deterministic and immune to pausing. See STONE_TIER in constants.js for why
+// the stone exists at all -- the short version is that a floor made of tier 0
+// and 1 fruit is ammunition, not pressure, and the difficulty curve measured
+// completely flat without this.
+export function stonesPerRise(level) {
+  if (level < STONE_START_LEVEL) return 0;
+  const extra = Math.floor((level - STONE_START_LEVEL) / STONE_LEVELS_PER_EXTRA);
+  // Capped one BELOW a full row on purpose: a rise must always bring at
+  // least one real fruit, or the late game starves the player of the very
+  // material they need to crack the stone with.
+  return Math.min(COLS - 1, STONE_START_COUNT + extra);
 }
 
 // The first level at which stage one has bottomed out -- derived, never
@@ -157,6 +173,10 @@ export function createInitialState(save) {
     inventory,
     // 20: persisted, so the starter Remover is granted exactly once in a
     // save's life. See startingInventory.
+    // 21: ids of rewards the player has actually been shown. Absent in a
+    // save written before 21, which is exactly right -- none of those were
+    // ever announced, so the menu owes them all. See markAnnounced.
+    announcedUnlocks: Array.isArray(blob.announcedUnlocks) ? [...blob.announcedUnlocks] : [],
     starterGranted: freshGrant || storedStarterGranted === true
       || !(Object.values(storedInventory).every((n) => !n) && storedHigh === 0),
     // Only true when this boot just granted the starter Remover -- nothing
@@ -224,10 +244,6 @@ export function createInitialState(save) {
     // rise (js/physics.js spawnFruit) and at startRun; never persisted -- a
     // resumed save begins its floor cadence fresh, same as spawnIndex.
     dropsSinceFloorRise: 0,
-    // 20: per column -- was THIS column at the ceiling at the last floor
-    // rise? One flag for the whole board let a newly-capped column inherit
-    // another column's armed deadline and die with no grace. See raiseFloor.
-    ceilingWarned: new Array(COLS).fill(false),
     lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
 
     // 8.1: fills as you merge (see fillMergeMeter) and grants a free,
@@ -302,6 +318,7 @@ export function toSaveBlob(state, { musicOn, sfxOn, hapticsOn }) {
     coins: state.coins,
     inventory: state.inventory,
     starterGranted: state.starterGranted === true,
+    announcedUnlocks: Array.isArray(state.announcedUnlocks) ? state.announcedUnlocks : [],
     unlockedSkins: state.unlockedSkins,
     selectedSkin: state.selectedSkin,
     musicOn,
@@ -432,6 +449,11 @@ export function skinColor(state, tierIndex) {
 export function tierColor(state, tierIndex) {
   if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF.color;
   if (tierIndex === BOMB_TIER) return BOMB_DEF.color;
+  // 21: fixed, and deliberately NOT skinned. A stone is the one thing on the
+  // board that is not fruit, and it has to stay legible as such on every
+  // palette -- if it took the skin's colours it would read as just another
+  // fruit you had somehow failed to merge.
+  if (tierIndex === STONE_TIER) return STONE_DEF.color;
   return skinColor(state, tierIndex);
 }
 
@@ -572,7 +594,6 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   if (state.rainbowChargeSpent) state.inventory.rainbow -= 1;
   state.spawnIndex = 0;
   state.dropsSinceFloorRise = 0;
-  state.ceilingWarned = new Array(COLS).fill(false);
 
   state.removerArmed = false;
   state.bombInPlay = false;
@@ -704,7 +725,46 @@ function announceUnlocks(state, before) {
     if (state.highScore >= at) continue;   // they already had it
     if (before >= at || state.score < at) continue; // not crossed on this very change
     state.events.push({ type: 'unlocked', kind: item.kind, id: item.id, name: item.name, score: at });
+    markAnnounced(state, item.id);
+    // 21: a power-up's entrance is the CHIP, not a line of text. Pulsing its
+    // slot in the bar is the game pointing at where the thing lives and how
+    // it is used, in the same beat as telling the player they earned it.
+    if (item.kind === 'powerup') state.chipPulse = { id: item.id, t: 0 };
   }
+}
+
+// 21: which rewards the player has actually been TOLD about.
+//
+// The gap this closes was found the hard way. When 20 re-spaced the
+// milestones, every existing save woke up already past thresholds it had
+// never celebrated -- one real player loaded the new build already owning
+// five of the six unlocks, silently, and then quite reasonably asked why the
+// power-ups never announced themselves. Ownership was derived from highScore
+// and nothing recorded whether the moment had ever been shown, so there was
+// no way for the game to know it owed anyone anything.
+//
+// Recording it costs one array in the save and makes the debt visible: see
+// pendingUnlocks, which the menu uses to pay it. It also means any future
+// change to the ladder repays itself automatically instead of quietly
+// swallowing a reward.
+function markAnnounced(state, id) {
+  if (!Array.isArray(state.announcedUnlocks)) state.announcedUnlocks = [];
+  if (state.announcedUnlocks.includes(id)) return;
+  state.announcedUnlocks.push(id);
+  state.dirty = true;
+}
+
+// Everything the player owns by score but has never been shown. A legacy save
+// has no record at all, so it returns everything they have earned -- which is
+// correct: none of it was ever announced.
+export function pendingUnlocks(state) {
+  const seen = Array.isArray(state.announcedUnlocks) ? state.announcedUnlocks : [];
+  return UNLOCKABLES.filter((i) => state.highScore >= i.unlockScore && !seen.includes(i.id));
+}
+
+// Called once the menu has shown them, so the debt is paid exactly once.
+export function clearPendingUnlocks(state) {
+  for (const item of pendingUnlocks(state)) markAnnounced(state, item.id);
 }
 
 // --- In-run power-up activation -----------------------------------------

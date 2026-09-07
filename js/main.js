@@ -5,6 +5,7 @@ import {
   CANVAS_WIDTH, TIERS, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, HAPTIC_LEVEL_UP_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
   CASCADE_STEP_SEC, CASCADE_STEP_MAX,
+  STONE_DEF, HAPTIC_MERGE_MS,
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, tierColor, devModeEnabled,
@@ -27,7 +28,7 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp, triggerUnlock,
+  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp, triggerUnlock, spawnGhost,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 import { initBackground, setBoardRect, drawBackground } from './background.js';
@@ -317,6 +318,12 @@ function drainEvents() {
         // in a single frame -- only the feedback is staged.
         const delay = Math.min(event.step || 0, CASCADE_STEP_MAX) * CASCADE_STEP_SEC;
         playMerge(event.tier);
+        // 21: hold the two consumed fruit on screen until this link pops.
+        // Staging only the burst left every fruit vanishing in the same
+        // frame -- see spawnGhost in js/effects.js.
+        for (const c of event.consumed || []) {
+          spawnGhost(fx, { x: c.x, y: c.y, tier: c.tier, color: colorForTier(c.tier), delay });
+        }
         spawnMergeEffects(fx, {
           row: event.row,
           col: event.col,
@@ -329,6 +336,9 @@ function drainEvents() {
         });
       } else if (event.type === 'reachedTop' || event.type === 'topTier') {
         const delay = Math.min(event.step || 0, CASCADE_STEP_MAX) * CASCADE_STEP_SEC;
+        for (const c of event.consumed || []) {
+          spawnGhost(fx, { x: c.x, y: c.y, tier: c.tier, color: colorForTier(c.tier), delay });
+        }
         playCelebration();
         spawnMergeEffects(fx, {
           row: event.row,
@@ -415,6 +425,41 @@ function drainEvents() {
         // bespoke rise cue could replace playUiTick later.
         playUiTick();
         vibrate(HAPTIC_LEVEL_UP_MS);
+      } else if (event.type === 'crushed') {
+        // 21: a fruit at the top of a full column had nowhere to go and was
+        // crushed off the board. This is the one thing in the game that
+        // removes a fruit without the player doing anything, so it gets a
+        // burst of its own -- an unexplained disappearance is exactly the
+        // confusion this phase exists to remove. Drawn at the top of that
+        // column, where it actually happened.
+        if (event.tier !== null && event.tier !== undefined) {
+          spawnMergeEffects(fx, {
+            row: 0,
+            col: event.col,
+            x: event.col * CELL + CELL / 2,
+            y: CELL / 2,
+            tier: event.tier,
+            color: colorForTier(event.tier),
+            bright,
+            silent: true,
+          });
+        }
+      } else if (event.type === 'stoneCracked') {
+        // 21: a merge landed beside a stone and broke it. The reward for the
+        // one play that clears stone without spending a charge, so it is
+        // audible and felt, not just a cell going empty.
+        playUiTick();
+        vibrate(HAPTIC_MERGE_MS);
+        spawnMergeEffects(fx, {
+          row: event.row,
+          col: event.col,
+          x: event.x,
+          y: event.y,
+          tier: 2,
+          color: STONE_DEF.color,
+          bright,
+          silent: true,
+        });
       }
     }
   } finally {

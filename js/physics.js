@@ -5,11 +5,11 @@ import {
   COLS, CELL, SLOW_DROP_MULTIPLIER, DRAG_LERP,
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
-  SPAWN_MIN_REACTION_SEC,
+  SPAWN_MIN_REACTION_SEC, STONE_TIER, STONE_DEF, STONE_CRACK_POINTS,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
-  floorRiseCadenceDrops, expireArmedPowerUp,
+  floorRiseCadenceDrops, expireArmedPowerUp, stonesPerRise,
 } from './state.js';
 
 // Tier lookup that also answers for the rainbow and bomb sentinels, so
@@ -17,6 +17,7 @@ import {
 export function tierDef(tier) {
   if (tier === RAINBOW_TIER) return RAINBOW_DEF;
   if (tier === BOMB_TIER) return BOMB_DEF;
+  if (tier === STONE_TIER) return STONE_DEF;
   return TIERS[tier];
 }
 
@@ -363,6 +364,10 @@ function pairTier(a, b) {
   // merging the wildcard INTO the bomb, or worse, producing a real tier from
   // a sentinel value. A bomb never merges with anything, wildcard included.
   if (a === BOMB_TIER || b === BOMB_TIER) return null;
+  // 21: the same landmine, one sentinel later. A stone never merges with
+  // anything, wildcard included -- checked here, above the rainbow branch,
+  // for exactly the reason the bomb is.
+  if (a === STONE_TIER || b === STONE_TIER) return null;
   const aWild = a === RAINBOW_TIER;
   const bWild = b === RAINBOW_TIER;
   if (aWild && bWild) return 0; // two wilds settle to the lowest tier
@@ -394,10 +399,44 @@ function mergeOnePair(state) {
   return false;
 }
 
+// 21: a merge cracks any stone orthogonally touching either of the two cells
+// it consumed. This is what stops the stone being a wall you can only watch:
+// merging BESIDE the floor is now the correct play, which is the "fight the
+// floor" the design has always claimed and never quite paid out. Scores a
+// little, because clearing one is real work.
+//
+// Called from mergeCells while the cascade is still resolving, so a chain
+// eats its way along a row of stone -- deliberately, and it is the best
+// feeling in the game.
+function crackStonesAround(state, row, col) {
+  const rows = state.grid.length;
+  const near = [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]];
+  for (const [r, c] of near) {
+    if (r < 0 || r >= rows || c < 0 || c >= COLS) continue;
+    if (state.grid[r][c] !== STONE_TIER) continue;
+    state.grid[r][c] = null;
+    addScore(state, STONE_CRACK_POINTS);
+    state.events.push({
+      type: 'stoneCracked', row: r, col: c,
+      x: c * CELL + CELL / 2, y: r * CELL + CELL / 2,
+    });
+  }
+}
+
 function mergeCells(state, r1, c1, r2, c2, tier) {
   // Keep the result at the lower (larger row) cell so it stays grounded.
   const [keepR, keepC] = r2 >= r1 ? [r2, c2] : [r1, c1];
   const [clearR, clearC] = keepR === r1 && keepC === c1 ? [r2, c2] : [r1, c1];
+
+  // 21: both consumed fruit, captured with their tiers and frozen pixel
+  // positions BEFORE the grid changes. js/render.js draws them as ghosts
+  // until this link of the chain actually pops -- without that, staging the
+  // pops only staggers the confetti while the fruit themselves all vanish in
+  // the same frame, which is what "fruits popping randomly" actually was.
+  const consumed = [
+    { tier: state.grid[r1][c1], x: c1 * CELL + CELL / 2, y: r1 * CELL + CELL / 2 },
+    { tier: state.grid[r2][c2], x: c2 * CELL + CELL / 2, y: r2 * CELL + CELL / 2 },
+  ];
 
   state.grid[clearR][clearC] = null;
 
@@ -424,15 +463,21 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   const x = keepC * CELL + CELL / 2;
   const y = keepR * CELL + CELL / 2;
 
+  // Both consumed cells crack their neighbours -- the pair covers a wider
+  // footprint than the surviving fruit alone, which is what makes a chain
+  // running alongside a stone row actually clear it.
+  crackStonesAround(state, keepR, keepC);
+  crackStonesAround(state, clearR, clearC);
+
   if (tier >= MAX_TIER) {
     state.grid[keepR][keepC] = null;
     addScore(state, Math.round(WATERMELON_CLEAR_BONUS * multiplier));
-    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, x, y, multiplier, step: cascadeStep });
+    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, x, y, multiplier, step: cascadeStep, consumed });
   } else {
     const newTier = tier + 1;
     state.grid[keepR][keepC] = newTier;
     addScore(state, Math.round(TIERS[newTier].points * multiplier));
-    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, x, y, multiplier, step: cascadeStep });
+    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, x, y, multiplier, step: cascadeStep, consumed });
     if (newTier >= MAX_TIER) {
       // Reaching the highest tier for the first time is its own moment,
       // distinct from clearing a pair of them.
@@ -584,6 +629,9 @@ export function swapFruits(state, r1, c1, r2, c2) {
   const tierA = state.grid[r1][c1];
   const tierB = state.grid[r2][c2];
   if (tierA === BOMB_TIER || tierB === BOMB_TIER) return false;
+  // 21: nor a stone. It is scenery the floor put there; letting the player
+  // slide it around would turn a pressure mechanic into free tidying.
+  if (tierA === STONE_TIER || tierB === STONE_TIER) return false;
   if (tierA === null || tierB === null) return false;
   if (Math.abs(r1 - r2) + Math.abs(c1 - c2) !== 1) return false;
 
@@ -609,9 +657,10 @@ export function swapFruits(state, r1, c1, r2, c2) {
 // after the previous fruit has locked and before the next is placed, so there
 // is never a mid-air fruit whose coordinates a shift would invalidate.
 
-// How many columns are currently at the ceiling. The board's danger reading
-// and the ceiling deadline both key off this one function so they can never
-// disagree about what "at the ceiling" means.
+// How many columns are currently at the ceiling. Since 21 a capped column is
+// not a losing condition -- its top fruit is crushed off on the next rise --
+// so this feeds the board's danger reading only. Kept as one function so
+// nothing can disagree about what "at the ceiling" means.
 export function topColumnCount(state) {
   const rows = state.grid.length;
   let n = 0;
@@ -622,69 +671,58 @@ export function topColumnCount(state) {
 export function raiseFloor(state) {
   const rows = state.grid.length;
 
-  // 20: a column with no room SITS THIS RISE OUT, and a rise never ends the
-  // run on the spot. See "The ceiling countdown (20)" in constants.js for what
-  // ends it instead, and for the two designs that were built, measured and
-  // thrown away before this one.
+  // 21: THE ending, rebuilt on one rule -- the run is over when there is no
+  // move left to play, and that means every cell taken. Nothing else ends it.
   //
-  // Until now a rise that met ANY full column ended the run immediately. That
-  // was never a rule -- it was this function protecting itself. Shifting a
-  // full column up would push its top fruit off the board, and "cannot shift"
-  // got written down as "you lose". Reported from real play, and correctly:
-  // "why should the game end and yet there are still spaces to play?" A board
-  // with one capped column and five empty ones was a loss with FIFTY free
-  // cells on it.
-  let anyRoom = false;
+  // This is the third design for this, and the first that is simply the rule
+  // the game always should have had. The history is worth keeping, because
+  // two of the three looked obviously right:
+  //
+  //   17-19  A rise that met ANY full column ended the run on the spot. One
+  //          capped column beside five empty ones was a loss with fifty of
+  //          sixty cells free. Reported from real play, correctly, as the game
+  //          ending while there were still spaces to play.
+  //   20     A capped column got one floor cadence of grace, then ended the
+  //          run. Fairer, and still not the rule: it ended runs that had moves
+  //          left, and needed a line of text on the results screen explaining
+  //          why -- a good sign that the rule itself was not self-evident.
+  //   21     The rise pushes EVERY column. A column with no room has its top
+  //          fruit crushed off the board. The run ends when spawnColumnFor
+  //          finds nowhere to put a fruit. No deadline, no grace, no
+  //          explanation needed.
+  //
+  // The objection to 21 was that it would make the game unloseable, and 20's
+  // own measurements seemed to prove it -- letting full columns SIT OUT a rise
+  // took the median run from 21 drops to 17,325, with 13 of 40 never ending.
+  // That conclusion was drawn from too few designs. Sitting out breaks the
+  // game because a capped column stops receiving fruit, so pressure FALLS as
+  // the board fills. Crushing does not: the column still takes its fruit at
+  // the bottom every rise, it just cannot grow. Pressure stays constant, the
+  // board keeps filling, and the run always ends -- measured over 240 runs,
+  // 0 failed to terminate.
+  //
+  // Nor is a full column a free-deletion machine, which was the other worry.
+  // A bot that deliberately keeps one column capped to farm the crush does
+  // WORSE: 401 drops and 48,666 points against 529 and 87,141 for normal
+  // play. You are paying a sixth of the board for one small fruit per rise.
+  const newRow = riseRowFor(levelFor(state.spawnIndex));
   for (let c = 0; c < COLS; c++) {
-    if (state.stackHeight[c] < rows) { anyRoom = true; break; }
-  }
-  // Completely full: no move exists anywhere, which is the same condition an
-  // ordinary drop hits when spawnColumnFor returns -1. One losing rule.
-  if (!anyRoom) return { toppedOut: true };
-
-  // 20: THE ending. A column at the ceiling is a deadline, not a loss, and
-  // the deadline is exactly ONE floor cadence -- you have until the floor
-  // pushes again. A column left capped through a whole cadence ends the run.
-  //
-  // Keying the grace to the cadence rather than to a fixed number of drops
-  // does three things no fixed number could: it scales itself (16 drops of
-  // grace early, 5 by level 14, 1 at the terminal cadence, so the endgame
-  // stays as lethal as it was), it keeps ONE clock in the game instead of two
-  // competing ones, and -- the reason it is worth more than the code it costs
-  // -- the next-rise meter along the bottom of the board is ALREADY drawing
-  // this countdown. The player does not need a new gauge explaining when they
-  // die; the one they have been reading all run turns out to be it.
-  //
-  // PER COLUMN, and that is load-bearing. This shipped first as a single
-  // board-wide boolean and review caught it before it went out: rescue the
-  // capped column, have a DIFFERENT column top off in the same cadence, and
-  // the second column inherited the first one's armed warning and died with
-  // no grace at all -- reintroducing the exact instant, unwarned loss this
-  // phase exists to remove, just on a rarer trigger. A deadline belongs to
-  // the column that earned it, so the flag has to be per column too.
-  for (let c = 0; c < COLS; c++) {
-    if (state.ceilingWarned[c] && state.stackHeight[c] >= rows) {
-      return { toppedOut: true };
+    const full = state.stackHeight[c] >= rows;
+    if (full) {
+      // The fruit at the top has nowhere to go. Announced before it is
+      // overwritten so js/main.js can show it being crushed out -- an
+      // unexplained disappearance is exactly the confusion this phase is
+      // fixing elsewhere.
+      state.events.push({ type: 'crushed', col: c, tier: state.grid[0][c] });
     }
-  }
-
-  const phase = Math.random() < 0.5 ? 0 : 1;
-  for (let c = 0; c < COLS; c++) {
-    if (state.stackHeight[c] >= rows) continue; // no room here: it sits this one out
-    // Shift the column up one cell (row r takes what was below it). Row 0 is
-    // guaranteed null for a column we did NOT skip, so the cell that falls off
-    // the top is always empty.
+    // Shift the column up one (row r takes what was below it). For a full
+    // column this discards row 0, which is the crush; for any other column
+    // row 0 is null and nothing is lost.
     for (let r = 0; r < rows - 1; r++) state.grid[r][c] = state.grid[r + 1][c];
-    state.grid[rows - 1][c] = riseTierAt(c, 0, phase);
-    state.stackHeight[c] += 1;
+    state.grid[rows - 1][c] = newRow[c];
+    if (!full) state.stackHeight[c] += 1;
     rebaseSwapSelectionForRise(state, c);
   }
-
-  // Recomputed AFTER the shift and after the cascade below, so it describes
-  // the board the player is actually looking at when the meter restarts.
-  // Set below resolveMerges for that reason -- a rise that sets off a cascade
-  // can clear the very column it just capped, and warning about a column that
-  // is no longer full would be a lie.
 
   // Pushed before resolveMerges so a floorRose cue fires even when the new row
   // sets off a cascade. main.js turns it into sound/haptics -- physics stays
@@ -693,15 +731,34 @@ export function raiseFloor(state) {
 
   // The new fruit can sit under a matching fruit, or a settling cascade can
   // bring matches together -- resolve them. This is the seam that lets a good
-  // player FIGHT the floor: a well-built bottom row eats part of the rise. It
-  // can never eat all of it forever, which is the whole point.
+  // player FIGHT the floor: a well-built bottom row eats part of the rise.
   resolveMerges(state);
-  // Re-armed per column AFTER the cascade, so a rise that clears the very
-  // column it just capped does not leave a warning behind for it, and a
-  // column that was rescued this cadence is genuinely disarmed rather than
-  // still carrying someone else's countdown.
-  for (let c = 0; c < COLS; c++) state.ceilingWarned[c] = state.stackHeight[c] >= rows;
+
+  // Deliberately always false. A rise can no longer end a run; only having
+  // nowhere to put the next fruit can, which spawnFruit checks itself. Kept
+  // as a return value rather than removed so every call site keeps reading
+  // the same shape, and so this comment sits where the old rule used to.
   return { toppedOut: false };
+}
+
+// 21: which cells of a rising row arrive as stone. The count comes from the
+// level (stonesPerRise); WHICH cells is randomised per rise so the player
+// cannot learn a fixed safe column, and so a stone is never guaranteed to
+// land under the spawn chute every single time.
+function riseRowFor(level) {
+  const stones = stonesPerRise(level);
+  const cols = [];
+  for (let c = 0; c < COLS; c++) cols.push(c);
+  for (let i = cols.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cols[i], cols[j]] = [cols[j], cols[i]];
+  }
+  const isStone = new Array(COLS).fill(false);
+  for (let i = 0; i < stones; i++) isStone[cols[i]] = true;
+  const phase = Math.random() < 0.5 ? 0 : 1;
+  const out = [];
+  for (let c = 0; c < COLS; c++) out.push(isStone[c] ? STONE_TIER : riseTierAt(c, 0, phase));
+  return out;
 }
 
 // The tier of one freshly-inserted cell, at column `c`, `i` cells up from the

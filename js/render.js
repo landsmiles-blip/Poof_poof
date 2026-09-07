@@ -2,7 +2,7 @@
 
 import {
   COLS, CELL, HUD_HEIGHT, BOARD_WIDTH, TIERS,
-  RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
+  RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS, STONE_TIER, STONE_DEF,
   powerSlotRect, POWER_SLOT, pauseButtonRect,
   FONT_FAMILY, DISPLAY_FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC,
   MERGE_METER_MAX, DANGER_ROWS_REMAINING, LEVEL_CALLOUT_SEC, COMBO_MAX_MULTIPLIER,
@@ -52,6 +52,7 @@ export function roundRectPath(ctx, x, y, w, h, r) {
 function tierDefFor(tierIndex) {
   if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF;
   if (tierIndex === BOMB_TIER) return BOMB_DEF;
+  if (tierIndex === STONE_TIER) return STONE_DEF;
   return TIERS[tierIndex];
 }
 
@@ -767,6 +768,12 @@ function drawBoard(ctx, state, fx, theme) {
     }
   }
 
+  // 21: fruit a merge has already taken out of the grid, still shown at the
+  // spot they were in until their own link of the chain pops. Drawn AFTER the
+  // grid so a fruit that settled into the vacated cell does not paint over
+  // the one still visibly sitting there. See spawnGhost in js/effects.js.
+  if (fx) drawGhosts(ctx, fx, state);
+
   drawSwapSelection(ctx, state, theme);
   drawRemoverCrosshair(ctx, state, theme);
 
@@ -780,6 +787,21 @@ function drawBoard(ctx, state, fx, theme) {
   drawVignette(ctx, COLS * CELL, rows * CELL, index + t);
 
   ctx.restore();
+}
+
+// 21: see spawnGhost. A ghost is drawn exactly as its fruit was -- full
+// opacity, no fade -- because the point is that it is STILL THERE. It
+// vanishes on the frame its burst fires, which is what makes a chain read as
+// a chain instead of as several cells emptying at once.
+function drawGhosts(ctx, fx, state) {
+  for (const g of fx.ghosts) {
+    if (g.t >= 0) continue;
+    const def = tierDefFor(g.tier);
+    if (!def) continue;
+    drawContactShadow(ctx, g.x, g.y, def.radius);
+    drawFruit(ctx, g.x, g.y, def, g.color || colorFor(state, g.tier), g.tier,
+      bombFuseFractionFor(state, g.tier));
+  }
 }
 
 // Dispatches on the tier's `shape`. Adding a shape means adding a branch here
@@ -803,10 +825,68 @@ export function drawFruit(ctx, x, y, tier, color, tierIndex, fuseFraction) {
   } else if (tier.shape === 'bomb') {
     drawBombShape(ctx, x, y, tier.radius, fuseFraction ?? 1);
     return;
+  } else if (tier.shape === 'stone') {
+    drawStone(ctx, x, y, tier.radius);
+    return;
   } else {
     drawCircle(ctx, x, y, tier.radius, fill, tierIndex);
   }
   drawTierDetail(ctx, x, y, tier.radius, tierIndex);
+}
+
+// 21: the stone. Drawn deliberately unlike every fruit on the board -- an
+// angular slab rather than a circle or a flower, a flat desaturated grey on
+// every palette, a hard shadow instead of the soft contact shadow fruit get,
+// and two chips out of the surface. The player must never spend a second
+// wondering whether this is a fruit they failed to match; it should read as
+// "that is not food, that is rubble" at a glance and at speed.
+function drawStone(ctx, x, y, radius) {
+  const r = radius;
+  ctx.save();
+  // Irregular hexagon -- fixed vertices, not random, so a stone does not
+  // shimmer when the board redraws sixty times a second.
+  const pts = [
+    [-0.86, -0.34], [-0.42, -0.92], [0.44, -0.88],
+    [0.92, -0.22], [0.62, 0.80], [-0.52, 0.90],
+  ];
+  ctx.beginPath();
+  pts.forEach(([px, py], i) => {
+    const vx = x + px * r, vy = y + py * r;
+    if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+  });
+  ctx.closePath();
+  ctx.fillStyle = STONE_DEF.color;
+  ctx.fill();
+  // A lit top-left face and a darker underside: enough to read as solid mass
+  // without turning into a fruit's glossy highlight.
+  ctx.beginPath();
+  ctx.moveTo(x - 0.86 * r, y - 0.34 * r);
+  ctx.lineTo(x - 0.42 * r, y - 0.92 * r);
+  ctx.lineTo(x + 0.44 * r, y - 0.88 * r);
+  ctx.lineTo(x + 0.10 * r, y - 0.30 * r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,0.17)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x + 0.92 * r, y - 0.22 * r);
+  ctx.lineTo(x + 0.62 * r, y + 0.80 * r);
+  ctx.lineTo(x - 0.52 * r, y + 0.90 * r);
+  ctx.lineTo(x + 0.10 * r, y + 0.20 * r);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,0,0.20)';
+  ctx.fill();
+  // Two chips, so it reads as broken rock rather than a placeholder polygon.
+  ctx.fillStyle = 'rgba(0,0,0,0.26)';
+  ctx.beginPath();
+  ctx.arc(x - 0.24 * r, y + 0.10 * r, r * 0.15, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x + 0.34 * r, y + 0.40 * r, r * 0.10, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.32)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
 }
 
 // 7.4: nine tiers used to differ only by hue, size, and a circle/flower

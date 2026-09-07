@@ -97,18 +97,19 @@ function riseMeter(state) {
   assert.ok(Math.abs(maxAlpha - CEILING_LINE_ALPHA_MAX) < 1e-9,
     'a column against the ceiling drives the line to full alpha');
 
-  // 20: full alpha now means "the deadline is running", not "you are already
-  // dead" -- a capped column gets one whole floor cadence to be cleared. The
-  // line is asked to be bright exactly when that deadline is live, and the
-  // rule is asked directly rather than trusted, so this still fails if the
-  // losing condition moves and the line does not follow it.
+  // 21: full alpha means "fruit is being crushed off the top of this column",
+  // not "you are dead". A capped column is no longer a losing condition at
+  // all -- the run ends only when there is no move left. The line is asked to
+  // be bright exactly when the crush is happening, and the rule is asked
+  // directly rather than trusted, so this still fails if the two drift apart.
   const probe = createInitialState();
   startRun(probe, {});
   for (let r = 0; r < rows; r++) probe.grid[r][0] = r % 2 ? 5 : 6;
   probe.stackHeight[0] = rows;
-  assert.equal(raiseFloor(probe).toppedOut, false, 'a capped column is a deadline, not an instant loss');
-  assert.equal(raiseFloor(probe).toppedOut, true,
-    'but the very next rise with it still capped IS the loss -- which is what full alpha is warning about');
+  probe.events.length = 0;
+  assert.equal(raiseFloor(probe).toppedOut, false, 'a capped column is never itself the loss');
+  assert.ok(probe.events.some((e) => e.type === 'crushed' && e.col === 0),
+    'it is a column losing fruit off the top -- which is what full alpha is marking');
 
   // Monotonic in between: a taller pile is never a dimmer warning.
   let prev = -1;

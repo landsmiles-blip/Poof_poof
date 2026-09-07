@@ -9,7 +9,10 @@
 // always unequipped, no matter how full the inventory was.
 
 import { POWERUPS, SKINS, TIERS, BUILD_VERSION, MILESTONE_SCORES } from './constants.js';
-import { buyPowerUp, startRun, selectSkin, isUnlockedByScore, skinColor, levelFor } from './state.js';
+import {
+  buyPowerUp, startRun, selectSkin, isUnlockedByScore, skinColor, levelFor,
+  pendingUnlocks, clearPendingUnlocks,
+} from './state.js';
 import { unlockAudio, toggleMuted, isMuted, playUiTick } from './audio.js';
 import { isMusicOn, toggleMusic } from './music.js';
 import { hasHaptics, isHapticsOn, toggleHaptics } from './effects.js';
@@ -95,6 +98,29 @@ function nextUnlockHTML(state) {
   return `<p class="next-unlock"><strong>${away}</strong> more to unlock ${list}</p>`;
 }
 
+// 21: the arsenal the player owns but was never shown.
+//
+// Ownership is derived from highScore, so when the milestone ladder moved in
+// 20 every existing save silently gained whatever it already qualified for --
+// one real player arrived at the new build owning five of six unlocks having
+// seen none of them arrive. This is the game paying that debt on the next
+// menu it draws, and it pays each one exactly once (see markAnnounced in
+// js/state.js).
+//
+// Deliberately loud and deliberately on the MENU rather than mid-run: these
+// were not earned just now, so faking a live moment for them would be a lie.
+// It is a roll call of what you have, which is what the player asked for --
+// "tell the player that this is what they have in their arsenal".
+function pendingUnlockHTML(state) {
+  const pending = pendingUnlocks(state);
+  if (pending.length === 0) return '';
+  const items = pending.map((p) => `<li>${p.name}</li>`).join('');
+  return `<div class="arsenal-callout">
+      <p class="arsenal-title">In your arsenal</p>
+      <ul class="arsenal-list">${items}</ul>
+    </div>`;
+}
+
 export function renderMenu(root, state, onStart) {
   renderShopScreen(root, state, {
     // The title slot is rendered as HTML (see homeHTML) -- the menu passes a
@@ -114,17 +140,20 @@ export function renderMenu(root, state, onStart) {
     lead: `
       <p class="tagline">Slide. Match. <span class="tagline-pop">Poof</span>.</p>
       <p class="stat">Best score: <strong>${state.highScore}</strong></p>
+      ${pendingUnlockHTML(state)}
     `,
     playLabel: 'Play',
     onStart,
   });
+  // Marked shown only after the markup is actually in the DOM, so a render
+  // that throws cannot swallow the roll call.
+  clearPendingUnlocks(state);
 }
 
 export function renderGameOver(root, state, onPlayAgain) {
   renderShopScreen(root, state, {
     title: 'Game Over',
     lead: `
-      ${state.gameOverReason === 'grid-full' ? '<p class="subtitle">The stack reached the ceiling line.</p>' : ''}
       <p class="stat">Level reached: <strong>${levelFor(state.spawnIndex)}</strong></p>
       <p class="stat">Score: <strong>${state.score}</strong></p>
       <p class="stat">Best: <strong>${state.highScore}</strong></p>

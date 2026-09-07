@@ -618,3 +618,33 @@ button {
   font-size: 14px;
   text-align: left;
 }
+
+/* 21: the arsenal roll call on the menu -- rewards the player owns but was
+   never shown, because the milestone ladder moved under an existing save.
+   Loud on purpose: it is the moment those unlocks never got. Uses the same
+   accent the rest of the menu does, so it reads as part of the game rather
+   than as a system notice. */
+.arsenal-callout {
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent, #ff8a3d) 14%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--accent, #ff8a3d) 45%, transparent);
+  text-align: left;
+}
+
+.arsenal-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent, #ff8a3d);
+}
+
+.arsenal-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 15px;
+  line-height: 1.5;
+}
