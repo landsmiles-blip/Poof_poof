@@ -56,9 +56,13 @@ export function floorRiseCadenceDrops(level) {
   // exactly like level 14. Past the stage-one floor the cadence keeps
   // tightening, just far more slowly (one drop per FLOOR_RISE_SLOW_LEVELS
   // levels), down to FLOOR_RISE_DROPS_HARD_MIN -- which is 1, a rise for every
-  // drop. That end state is unsurvivable by arithmetic (COLS fruit in per one
-  // out), so every run terminates; constants.js has the proof and the sweep
-  // that ruled out escalating the rising row's tier instead.
+  // drop.
+  //
+  // 20 CORRECTION: 19 claimed here that this end state was unsurvivable by
+  // arithmetic and that the run therefore terminated on its own. It is not,
+  // and it does not -- see FLOOR_RISE_DROPS_HARD_MIN in constants.js for the
+  // measurement that disproved it. What ends a run is the ceiling deadline in
+  // raiseFloor; this cadence is what makes that deadline arrive quickly.
   const levelsPastFloor = level - stageOneFloorLevel();
   const slowShave = Math.floor(levelsPastFloor / FLOOR_RISE_SLOW_LEVELS);
   return Math.max(FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_DROPS_MIN - slowShave);
@@ -100,6 +104,15 @@ export function comboWindowSecFor(state) {
   return emptyBoardFallSec(currentGravityPxPerSec(state), effectiveRows(state)) * COMBO_WINDOW_FALL_MULTIPLIER;
 }
 
+// Every score-gated reward in the game, in one list, so the announcement
+// above cannot drift out of step with what the shop and the palette panel
+// actually gate. Built once at module load -- both source arrays are frozen
+// constants.
+const UNLOCKABLES = [
+  ...SKINS.filter((k) => k.unlockScore > 0).map((k) => ({ kind: 'skin', id: k.id, name: `${k.name} palette`, unlockScore: k.unlockScore })),
+  ...POWERUPS.filter((p) => p.unlockScore > 0).map((p) => ({ kind: 'powerup', id: p.id, name: p.name, unlockScore: p.unlockScore })),
+].sort((a, b) => a.unlockScore - b.unlockScore);
+
 const DEFAULT_INVENTORY = {
   slowDrop: 0, remover: 0, extraRow: 0, swap: 0, bomb: 0, rainbow: 0,
 };
@@ -134,13 +147,18 @@ export function createInitialState(save) {
   const storedInventory = (blob.inventory && typeof blob.inventory === 'object')
     ? { ...DEFAULT_INVENTORY, ...blob.inventory }
     : { ...DEFAULT_INVENTORY };
-  const { inventory, freshGrant } = startingInventory(dev, storedInventory, storedHigh);
+  const storedStarterGranted = typeof blob.starterGranted === 'boolean' ? blob.starterGranted : undefined;
+  const { inventory, freshGrant } = startingInventory(dev, storedInventory, storedHigh, storedStarterGranted);
 
   return {
     screen: SCREEN.MENU,
     highScore,
     coins: Number.isFinite(blob.coins) ? blob.coins : 0,
     inventory,
+    // 20: persisted, so the starter Remover is granted exactly once in a
+    // save's life. See startingInventory.
+    starterGranted: freshGrant || storedStarterGranted === true
+      || !(Object.values(storedInventory).every((n) => !n) && storedHigh === 0),
     // Only true when this boot just granted the starter Remover -- nothing
     // else about loading a save is a change that needs writing back out.
     // Every later mutator below sets this the same way; main.js's loop is the
@@ -206,6 +224,10 @@ export function createInitialState(save) {
     // rise (js/physics.js spawnFruit) and at startRun; never persisted -- a
     // resumed save begins its floor cadence fresh, same as spawnIndex.
     dropsSinceFloorRise: 0,
+    // 20: per column -- was THIS column at the ceiling at the last floor
+    // rise? One flag for the whole board let a newly-capped column inherit
+    // another column's armed deadline and die with no grace. See raiseFloor.
+    ceilingWarned: new Array(COLS).fill(false),
     lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
 
     // 8.1: fills as you merge (see fillMergeMeter) and grants a free,
@@ -219,6 +241,7 @@ export function createInitialState(save) {
     comboCount: 0,
     comboTimer: 0,
     bestComboThisRun: 0,
+    bestCascade: 0,   // 20: the most merges one action ever set off this run
     // Set while a bomb's collapse resolves, so those merges score at 1x and do
     // not extend the streak.
     suppressCombo: false,
@@ -241,15 +264,30 @@ export function createInitialState(save) {
 // longer touches storage at all. Returns freshGrant so createInitialState can
 // mark state.dirty -- persisting is conditional on an actual change, not
 // unconditional on every boot.
-function startingInventory(dev, storedInventory, storedHigh) {
+// 20: the grant is RECORDED, not re-inferred.
+//
+// It used to decide "this is a brand-new save" from state alone -- empty
+// inventory and a zero high score. Both of those are true again after a
+// player spends the free Remover on their first fruit and quits before
+// scoring, so the grant re-fired on every boot: found by audit, reproduced
+// over four boot/play/save cycles, a free Remover every time. Small (any
+// merge scores, which pins highScore above zero forever) but it is a
+// repeatable free charge, and "have we done this before?" is a question only
+// a saved flag can answer honestly.
+function startingInventory(dev, storedInventory, storedHigh, starterGranted) {
   const inv = { ...storedInventory };
   if (dev) {
     for (const p of POWERUPS) inv[p.id] = Math.max(inv[p.id] || 0, 5);
     return { inventory: inv, freshGrant: false };
   }
-  const isFreshSave = Object.values(inv).every((n) => !n) && storedHigh === 0;
-  if (isFreshSave) inv.remover = 1;
-  return { inventory: inv, freshGrant: isFreshSave };
+  // A save written before 20 has no flag. Fall back to the old inference for
+  // exactly those, so an existing player is neither re-granted forever nor
+  // silently robbed of a starter they never received.
+  const alreadyGranted = starterGranted === true
+    || (starterGranted === undefined && !(Object.values(inv).every((n) => !n) && storedHigh === 0));
+  if (alreadyGranted) return { inventory: inv, freshGrant: false };
+  inv.remover = (inv.remover || 0) + 1;
+  return { inventory: inv, freshGrant: true };
 }
 
 // The inverse of reading `save` in createInitialState: shapes the current
@@ -263,6 +301,7 @@ export function toSaveBlob(state, { musicOn, sfxOn, hapticsOn }) {
     highScore: state.highScore,
     coins: state.coins,
     inventory: state.inventory,
+    starterGranted: state.starterGranted === true,
     unlockedSkins: state.unlockedSkins,
     selectedSkin: state.selectedSkin,
     musicOn,
@@ -533,6 +572,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   if (state.rainbowChargeSpent) state.inventory.rainbow -= 1;
   state.spawnIndex = 0;
   state.dropsSinceFloorRise = 0;
+  state.ceilingWarned = new Array(COLS).fill(false);
 
   state.removerArmed = false;
   state.bombInPlay = false;
@@ -561,6 +601,7 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   state.newlyUnlockedPowerUps = [];
   state.events.length = 0;
   state.bestComboThisRun = 0;
+  state.bestCascade = 0;
   resetCombo(state);
   state.screen = SCREEN.PLAYING;
   state.dirty = true; // inventory (slowDrop/extraRow/rainbow) may have changed
@@ -634,7 +675,36 @@ export function buyPowerUp(state, key, cost) {
 }
 
 export function addScore(state, points) {
+  const before = state.score;
   state.score += points;
+  announceUnlocks(state, before);
+}
+
+// 20: an unlock is announced the MOMENT it is earned, not on the results
+// screen four minutes later.
+//
+// Reported after real play: "as the power ups unlock, announce it -- give it a
+// glow where the player knows he has access to this arsenal." Until now every
+// unlock was computed in endRun and revealed only afterwards, so the reward
+// for a good run arrived after the run was over, detached from the thing that
+// earned it. Worse, a single run could cross several thresholds and then dump
+// all of them at once on one screen.
+//
+// endRun still owns the real bookkeeping -- what is UNLOCKED is derived from
+// highScore, and highScore is only written at the end of a run, so nothing
+// here grants anything. This only fires the announcement, and only for
+// thresholds this run has genuinely crossed for the first time (highScore is
+// what the player already had; `before` is what they had a moment ago).
+// js/main.js turns the event into the sound, the haptic and the on-board
+// callout, the same seam every other reaction goes through.
+function announceUnlocks(state, before) {
+  for (const item of UNLOCKABLES) {
+    const at = item.unlockScore;
+    if (!(at > 0)) continue;
+    if (state.highScore >= at) continue;   // they already had it
+    if (before >= at || state.score < at) continue; // not crossed on this very change
+    state.events.push({ type: 'unlocked', kind: item.kind, id: item.id, name: item.name, score: at });
+  }
 }
 
 // --- In-run power-up activation -----------------------------------------

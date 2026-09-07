@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.07-23';
+export const BUILD_VERSION = '2026.09.07-24';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -311,13 +311,22 @@ export const FLOOR_RISE_TIGHTEN_PER_LEVEL = 1;  // drops shaved off the cadence 
 // stage-one slope shaves a drop EVERY level, which would bury people if it ran
 // to the end.
 //
-// A cadence of 1 is the terminal state, and it is terminal by arithmetic, not
-// by taste: a rise inserts COLS (6) fruit and the player answers with one
-// drop, so the board gains 6 cells per turn while a merge frees at most 1 (a
-// MAX_TIER merge, 2). No merge rate closes that gap, on any board, with any
-// power-up. So the run ALWAYS ends, and "how far can you go" has an answer
-// instead of an asymptote. Measured: from a clean EMPTY board, a greedy bot
-// pinned at cadence 1 survives a median of 21 drops, max 57.
+// A cadence of 1 is the terminal state: a rise for every drop. From a clean
+// EMPTY board, a greedy bot pinned there survives a median of 22 drops.
+//
+// 20 CORRECTION, and it is worth reading before trusting any claim in this
+// file. 19 wrote here that this end state was "terminal by arithmetic" -- COLS
+// fruit in against one drop out, a merge freeing at most one cell, so no merge
+// rate could close the gap. That was WRONG, and 20 proved it by accident: the
+// moment the one-full-column loss was relaxed, the median run at this very
+// cadence went from 21 drops to 17,325 and 13 of 40 never ended at all.
+// Merges CAN outpace the floor. What was actually ending runs was the losing
+// rule, not the arithmetic.
+//
+// So the run ends because the ceiling deadline (see "The ceiling countdown"
+// below, and raiseFloor in js/physics.js) says it does, and this cadence's job
+// is to make that deadline arrive fast. The two are load-bearing together;
+// neither is on its own.
 //
 // REJECTED, and recorded here so nobody spends the afternoon re-deriving it:
 // escalating the TIER of the rising row -- pushing up peaches instead of
@@ -328,8 +337,66 @@ export const FLOOR_RISE_TIGHTEN_PER_LEVEL = 1;  // drops shaved off the cadence 
 // MAX_TIER vanish, so a high-tier row is a GIFT -- it merges with the big
 // stuff already at the bottom and evaporates. Cadence is the only lever here
 // that actually points the right way; use it, or measure before adding another.
-export const FLOOR_RISE_DROPS_HARD_MIN = 1;   // the terminal cadence: a rise per drop, unsurvivable by arithmetic
+export const FLOOR_RISE_DROPS_HARD_MIN = 1;   // the terminal cadence: a rise for every drop
 export const FLOOR_RISE_SLOW_LEVELS = 5;      // levels per extra drop shaved, past the stage-1 floor
+
+// --- Cascade staging (20) ---------------------------------------------------
+// Reported from real play: "some fruits can start popping randomly... is that
+// a glitch or is that intentional?" It is intentional, and it was invisible.
+//
+// resolveMerges is a synchronous while-loop: it merges one pair, repacks the
+// column, rescans from the top, and repeats until nothing matches -- all of it
+// inside a single update(), before a single frame is drawn. So a chain that
+// travels from the column you dropped into, sideways across the board, arrives
+// on screen as several fruit vanishing at once in places you never touched,
+// with no visible cause. Traced: dropping into column 2 on a board reading
+// `0 / 0 1 2` leaves one tier-3 in COLUMN 4, four fruit gone, one frame.
+//
+// The grid still resolves in one frame -- physics stays synchronous,
+// deterministic and testable, and the difficulty design depends on that. Only
+// the FEEDBACK is staged: each merge carries its step in the chain, and its
+// pop is delayed by that many beats, so the chain plays out in the order it
+// actually happened and you can see it travel.
+export const CASCADE_STEP_SEC = 0.07;   // delay per link in the chain
+export const CASCADE_STEP_MAX = 6;      // ...stop stretching after this many, so a long chain never drags
+
+// --- The ceiling countdown (20) ---------------------------------------------
+// The rule that ends a run. Reported from real play, and correct: "it should
+// not end with one line full... why should the game end and yet there are
+// still spaces to play?" Until 20 a rise that met ANY full column ended the
+// run on the spot -- one capped column beside five empty ones was a loss with
+// fifty of sixty cells free -- while an ordinary drop only ended the run when
+// every single cell was taken. Two rules, disagreeing by fifty cells, and the
+// harsh one was the one in charge because the floor rises constantly.
+//
+// TWO fixes were built, measured, and thrown away before this one. Recording
+// them because both look obviously right and both are wrong:
+//
+//   1. "Full columns sit the rise out." Fair, and it destroys the game: every
+//      capped column stops taking fruit, so the incoming pressure FALLS as the
+//      board fills. The board finds an equilibrium. At the terminal cadence
+//      the median run went from 21 drops to 17,325 and 13 of 40 never ended.
+//   2. "Redistribute -- a rise always brings COLS cells, into whatever columns
+//      have room." Holds the pressure constant on paper. Worse in practice:
+//      34 of 40 runs never ended, because concentrating small fruit into few
+//      columns feeds cascades faster than it fills the board.
+//
+// Both failures taught the same thing, and it corrected a claim 19 made in
+// print: the run was never terminal "by arithmetic". Merges CAN outpace the
+// floor. What actually ended runs was the one-full-column rule. So 20 keeps a
+// terminating rule and makes it fair instead of pretending it isn't needed:
+// a column at the ceiling gets a deadline you can SEE, and the deadline is
+// exactly one floor cadence -- you have until the floor pushes again. Clear
+// the column and the deadline is gone; that is the "fight the floor" the
+// design is built on. It cannot be done forever, because the floor keeps
+// pushing every other column while you do it, and because the cadence itself
+// shrinks to a single drop late in a run.
+//
+// There is deliberately no constant here. Tying the grace to the cadence
+// scales it for free (16 drops early, 5 by level 14, 1 at the end), keeps one
+// clock in the game instead of two, and means the next-rise meter the player
+// has been reading all run IS the countdown -- see raiseFloor in
+// js/physics.js.
 
 // --- Armed power-up expiry (18) --------------------------------------------
 // The Remover and Swap are "aiming mode" tools: while one is armed, every
@@ -455,10 +522,20 @@ export const SPAWN_CHUTE_MARK_INSET = 7; // px from the column's side walls to a
 // ceiling nor the countdown to a rise was drawn anywhere, so the loss arrived
 // with no visible cause. Nothing about the RULES changes here; the two facts
 // the rules already turn on are simply on screen now.
-export const CEILING_LINE_ALPHA = 0.14;       // resting: a rule you can see, not a warning
+// 20: was 0.14, which measured 1.13:1 against the dark palette and 1.20:1
+// against the light ones -- a line you cannot see does not teach you where
+// the limit is, which was its whole job. 0.42 measures 1.75:1 at worst: still
+// clearly quieter than the danger outlines, still unmistakably present.
+export const CEILING_LINE_ALPHA = 0.42;       // resting: a rule you can see, not a warning
 export const CEILING_LINE_ALPHA_MAX = 0.9;    // a column actually against it
 export const CEILING_LINE_DASH = [10, 7];     // dashed so it reads as a limit, not as board furniture
 export const RISE_METER_HEIGHT = 5;           // px, the strip along the board's bottom edge
+// 20: both marks are drawn OUTSIDE the board's shake transform (see
+// drawFrame). They used to ride it: the meter is 5px tall and sat flush
+// against the bottom edge with zero headroom, and SHAKE_MAX_PX is also 5, so
+// every level-up and every big merge clipped it -- partly on most frames,
+// entirely on some -- for about a fifth of a second. A countdown that
+// disappears when things get exciting is worse than no countdown.
 export const RISE_METER_TRACK_ALPHA = 0.10;
 export const RISE_METER_FILL_ALPHA = 0.42;
 export const RISE_METER_IMMINENT_ALPHA = 0.95; // the last drop before a rise
@@ -534,7 +611,35 @@ export const COMBO_MAX_MULTIPLIER = 3;
 // lengthen runs and therefore raise every score in the game. These four
 // numbers must be re-checked against real scores once that lands, not left
 // to drift. They are deliberately one line so that re-check is cheap.
-export const MILESTONE_SCORES = [0, 500, 1500, 4000];
+// 20: re-spaced against MEASURED scores, and split away from the power-up
+// ladder it used to share.
+//
+// Reported after real play: two runs of 4,447 and 6,039 each unlocked SIX
+// things at once. The cause was not that the numbers were too low -- it was
+// that skins and power-ups sat on the SAME three thresholds (500 / 1500 /
+// 4000), so every milestone fired two rewards, and all three fell inside a
+// single good run. Six rewards, three moments, one sitting.
+//
+// Measured with tools/measure-scores.mjs, 300 greedy bot runs each and no
+// power-ups at all, so every figure is a LOWER bound on a real player:
+//     careless  p10 2318  med 6435   p75 9578   p90 13078  p99 22736
+//     careful   p10 6581  med 11430  p75 15554  p90 20206  p99 29124
+// The "careless" column is the one to read: it is the bot that never plans a
+// merge, and it lands closest to the two real runs above.
+//
+// The ladders now INTERLEAVE, so no two rewards ever share a score:
+//     1,500 palette | 3,000 Swap | 6,000 palette | 9,000 Bomb
+//     15,000 palette | 22,000 Rainbow
+// Against the distribution that is one or two unlocks in a typical run, the
+// last palette a genuinely strong one, and the Rainbow a real chase -- which
+// is what "an exceptional player should unlock all the skins after a couple
+// of runs" has to mean if an unlock is to be worth anything.
+export const MILESTONE_SCORES = [0, 1500, 6000, 15000];
+
+// The power-up ladder, deliberately offset from MILESTONE_SCORES above so a
+// palette and a power-up never arrive together. Each sits between two palette
+// milestones.
+export const POWERUP_UNLOCK_SCORES = [3000, 9000, 22000];
 
 // --- Skins ---------------------------------------------------------------
 // Each skin supplies one color per tier, in tier order. Unlocks are checked
@@ -610,17 +715,17 @@ export const POWERUPS = [
     usage: 'run',
   },
   {
-    id: 'swap', name: 'Swap', cost: 40, unlockScore: MILESTONE_SCORES[1], icon: 'swap',
+    id: 'swap', name: 'Swap', cost: 40, unlockScore: POWERUP_UNLOCK_SCORES[0], icon: 'swap',
     desc: 'Tap two adjacent fruit to trade places.',
     usage: 'tap',
   },
   {
-    id: 'bomb', name: 'Bomb', cost: 60, unlockScore: MILESTONE_SCORES[2], icon: 'bomb',
+    id: 'bomb', name: 'Bomb', cost: 60, unlockScore: POWERUP_UNLOCK_SCORES[1], icon: 'bomb',
     desc: 'Plants as your next drop. Clears a 3x3 blast when its fuse ends.',
     usage: 'activate',
   },
   {
-    id: 'rainbow', name: 'Rainbow Fruit', cost: 80, unlockScore: MILESTONE_SCORES[3], icon: 'rainbow',
+    id: 'rainbow', name: 'Rainbow Fruit', cost: 80, unlockScore: POWERUP_UNLOCK_SCORES[2], icon: 'rainbow',
     desc: 'Drops a wild fruit that merges with whatever it touches.',
     usage: 'run',
   },

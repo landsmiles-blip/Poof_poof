@@ -6,7 +6,7 @@
 import {
   CELL, HUD_HEIGHT, COLS, powerSlotRect, pauseButtonRect, CANVAS_WIDTH,
 } from './constants.js';
-import { removeFruitAt, setDragTarget, hardDrop, swapFruits } from './physics.js';
+import { removeFruitAt, setDragTarget, hardDrop, swapFruits, validateSwapSelection } from './physics.js';
 import {
   hudPowerUps, canUsePowerUp, armRemover, consumeRemover, plantBomb, armSwap, consumeSwap,
 } from './state.js';
@@ -209,9 +209,16 @@ export function attachInput(canvas, state) {
       const cell = state.armPreviewCell;
       state.armPreviewCell = null;
       if (cell && state.grid[cell.row][cell.col] !== null) {
+        // 20: the selection carries the TIER it was made on, and physics
+        // rebases it through every rise and settle -- see rebaseSwapSelection
+        // in js/physics.js for the bug that made this necessary. Validated
+        // once more here, at the moment of use, so a board change nobody
+        // anticipated can still only cost an extra tap and never a charge
+        // spent on the wrong fruit.
+        validateSwapSelection(state);
         const selected = state.swapSelectedCell;
         if (!selected) {
-          state.swapSelectedCell = cell;
+          state.swapSelectedCell = { row: cell.row, col: cell.col, tier: state.grid[cell.row][cell.col] };
           playUiTick();
         } else if (selected.row === cell.row && selected.col === cell.col) {
           state.swapSelectedCell = null;
@@ -223,7 +230,7 @@ export function attachInput(canvas, state) {
           }
           state.swapSelectedCell = null;
         } else {
-          state.swapSelectedCell = cell;
+          state.swapSelectedCell = { row: cell.row, col: cell.col, tier: state.grid[cell.row][cell.col] };
           playUiTick();
         }
       }

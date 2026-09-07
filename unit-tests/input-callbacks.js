@@ -4,7 +4,7 @@
 // mutating export itself) so attachInput could go back to exactly the
 // (canvas, state) shape phase 1 already established and tested here.
 import assert from 'node:assert/strict';
-import { MILESTONE_SCORES } from '../js/constants.js';
+import { POWERUP_UNLOCK_SCORES } from '../js/constants.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,19 @@ import {
 import { canvasHeightFor } from '../js/render.js';
 import { startRun } from '../js/state.js';
 import { attachInput } from '../js/input.js';
+
+// 20: the Swap selection now carries the TIER it was made on, so physics can
+// rebase it across a rise or a settle and drop it if the fruit it named is
+// gone -- see rebaseSwapSelectionForRise in js/physics.js. These assertions
+// check the cell AND that the recorded tier matches what is actually there,
+// which is the property the rebasing exists to keep true.
+function assertSelected(state, row, col, message) {
+  const sel = state.swapSelectedCell;
+  assert.ok(sel, message + ' (nothing is selected)');
+  assert.equal(sel.row, row, message + ' (row)');
+  assert.equal(sel.col, col, message + ' (col)');
+  assert.equal(sel.tier, state.grid[row][col], message + ' (the recorded tier must match the board)');
+}
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -51,7 +64,7 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
 {
   const state = freshState();
   state.inventory.bomb = 1;
-  state.highScore = 3000; // bomb unlocks at MILESTONE_SCORES[2]
+  state.highScore = POWERUP_UNLOCK_SCORES[1]; // 20: the Bomb sits on the power-up ladder, not the palette one
   state.active = { tier: 0, col: 3, x: 3 * CELL + CELL / 2, targetX: 3 * CELL + CELL / 2, y: 0 };
   const canvas = makeFakeCanvas(state);
   attachInput(canvas, state);
@@ -183,9 +196,9 @@ assert.equal(attachInput.length, 2, 'attachInput should take exactly (canvas, st
   const events = state.events.filter((e) => e.type === 'lockedPowerUp');
   assert.equal(events.length, 1, 'a lockedPowerUp event should be pushed for a locked/out-of-stock slot');
   assert.equal(events[0].id, 'swap');
-  // Swap unlocks on MILESTONE_SCORES[1] (see constants.POWERUPS); read it
+  // Swap unlocks on POWERUP_UNLOCK_SCORES[0] (see constants.POWERUPS); read it
   // rather than repeating the number, which 13.2 changed.
-  assert.equal(events[0].unlockScore, MILESTONE_SCORES[1]);
+  assert.equal(events[0].unlockScore, POWERUP_UNLOCK_SCORES[0]);
   assert.equal(state.dirty, false, 'a locked-power-up tap changes no persisted field and must not mark state.dirty');
 }
 
@@ -214,7 +227,7 @@ function tapCell(canvas, row, col) {
   attachInput(canvas, state);
 
   tapCell(canvas, 0, 0);
-  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 0 }, 'the first tap should select that fruit');
+  assertSelected(state, 0, 0, 'the first tap should select that fruit');
 
   tapCell(canvas, 0, 1);
   assert.equal(state.grid[0][0], 5, 'the two cells should have traded tiers');
@@ -234,7 +247,7 @@ function tapCell(canvas, row, col) {
   attachInput(canvas, state);
 
   tapCell(canvas, 0, 0);
-  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 0 });
+  assertSelected(state, 0, 0, 'the selection is where it should be');
   tapCell(canvas, 0, 0);
   assert.equal(state.swapSelectedCell, null, 'tapping the same fruit again should deselect');
   assert.equal(state.swapArmed, true, 'deselecting must not consume a charge or un-arm the tool');
@@ -253,7 +266,7 @@ function tapCell(canvas, row, col) {
 
   tapCell(canvas, 0, 0);
   tapCell(canvas, 0, 3);
-  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 3 }, 'the selection should move to the non-adjacent fruit, not fail silently');
+  assertSelected(state, 0, 3, 'the selection should move to the non-adjacent fruit, not fail silently');
   assert.equal(state.grid[0][0], 3, 'nothing should have been swapped');
   assert.equal(state.grid[0][3], 5, 'nothing should have been swapped');
   assert.equal(state.swapArmed, true, 'moving the selection must not consume a charge');
@@ -272,7 +285,7 @@ function tapCell(canvas, row, col) {
 
   tapCell(canvas, 0, 0);
   tapCell(canvas, 0, 1);
-  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 0 }, 'tapping an empty cell must not disturb an existing selection');
+  assertSelected(state, 0, 0, 'tapping an empty cell must not disturb an existing selection');
   assert.equal(state.swapArmed, true, 'tapping an empty cell must not consume a charge');
 }
 
@@ -304,7 +317,7 @@ function tapCell(canvas, row, col) {
 // silently do nothing.
 {
   const state = freshState();
-  state.highScore = 1000; // Swap unlocks at MILESTONE_SCORES[1]
+  state.highScore = POWERUP_UNLOCK_SCORES[0]; // 20: Swap likewise
   state.grid[0][2] = 5;
   state.inventory.swap = 1;
   const canvas = makeFakeCanvas(state);
@@ -317,15 +330,14 @@ function tapCell(canvas, row, col) {
   canvas.fire('pointermove', { clientX: 2 * CELL + CELL / 2, clientY: HUD_HEIGHT + 0 * CELL + CELL / 2 });
   canvas.fire('pointerup', {});
 
-  assert.deepEqual(state.swapSelectedCell, { row: 0, col: 2 },
-    'a continuous press-chip-then-drag-to-board-then-release must still register as a selection');
+  assertSelected(state, 0, 2, 'a continuous press-chip-then-drag-to-board-then-release must still register as a selection');
   assert.equal(state.swapArmed, true, 'a single selection must not consume a charge or un-arm the tool');
 }
 
 // A plain chip tap alone, no drag onto the board, must select nothing.
 {
   const state = freshState();
-  state.highScore = 1000;
+  state.highScore = POWERUP_UNLOCK_SCORES[0];
   state.inventory.swap = 1;
   const canvas = makeFakeCanvas(state);
   attachInput(canvas, state);
@@ -343,7 +355,7 @@ function tapCell(canvas, row, col) {
 // cell (js/state.js's armRemover/armSwap cross-disarm).
 {
   const state = freshState();
-  state.highScore = 1000;
+  state.highScore = POWERUP_UNLOCK_SCORES[0];
   state.inventory.remover = 1;
   state.inventory.swap = 1;
   const canvas = makeFakeCanvas(state);

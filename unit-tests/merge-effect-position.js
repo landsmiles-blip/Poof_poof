@@ -24,8 +24,11 @@
 // and the tail is now generated to whatever height the board is.
 import assert from 'node:assert/strict';
 import { CELL, COLS, ROWS, MAX_TIER } from '../js/constants.js';
-import { createInitialState } from '../js/state.js';
+import { createInitialState, startRun } from '../js/state.js';
 import { resolveMerges } from '../js/physics.js';
+import {
+  createEffects, spawnMergeEffects, updateEffects, squashScaleAt, _setReducedMotion,
+} from '../js/effects.js';
 
 const state = createInitialState(null);
 const col = 3;
@@ -70,5 +73,81 @@ assert.equal(first.x, col * CELL + CELL / 2, 'x must be derived from the merge\'
 assert.equal(first.y, first.row * CELL + CELL / 2, 'y must match the row this event itself recorded, regardless of later shifts');
 assert.equal(second.x, col * CELL + CELL / 2, 'second merge x must also be derived from its own column');
 assert.equal(second.y, second.row * CELL + CELL / 2, 'second merge y must match its own recorded row');
+
+// --- 20: a chain has to be watchable ----------------------------------------
+// resolveMerges is one synchronous loop, so a whole cascade lands in a single
+// frame and the player sees fruit vanish in columns they never touched with
+// no visible cause -- reported as "fruits start popping randomly... is that a
+// glitch?" The grid still resolves in one frame (physics stays deterministic,
+// and the difficulty design depends on that); the FEEDBACK is staged instead.
+// These check the two halves of that: physics numbers the links, and the
+// effects layer actually holds a delayed burst back.
+{
+  const state = createInitialState();
+  startRun(state, {});
+  const rows = state.grid.length;
+  // 0,0 stacked in column 2, a 1 beside it, a 2 beside that: merging the pair
+  // makes a 1, which merges with the 1, which makes a 2, which merges with
+  // the 2 -- a three-link chain that ends two columns away from where it
+  // started, which is exactly the shape that looked like a bug.
+  state.grid[rows - 1][2] = 0;
+  state.grid[rows - 2][2] = 0;
+  state.stackHeight[2] = 2;
+  state.grid[rows - 1][3] = 1;
+  state.stackHeight[3] = 1;
+  state.grid[rows - 1][4] = 2;
+  state.stackHeight[4] = 1;
+  state.events.length = 0;
+
+  resolveMerges(state);
+
+  const merges = state.events.filter((e) => e.type === 'merge' || e.type === 'topTier');
+  assert.ok(merges.length >= 3, `the chain really does travel (got ${merges.length} merges)`);
+  merges.forEach((e, i) => {
+    assert.equal(e.step, i, `merge ${i} must carry its position in the chain, not a bare event`);
+  });
+  const cols = new Set(merges.map((m) => m.col));
+  assert.ok(cols.size > 1, 'and it really does reach columns the player never dropped into');
+
+  // 20: the results screen reports THIS -- the biggest chain one action set
+  // off. It used to report the timer-based combo streak, which does not lapse
+  // between drops and so just counted every merge in the run: a real played
+  // run reported "530x chain". A number that only ever goes up is not a
+  // result, and it told the player something false about what they did.
+  assert.equal(state.bestCascade, merges.length,
+    'the run records the size of the chain, not a streak that never lapses');
+}
+{
+  // A fresh cascade must start numbering from zero, or the second chain of a
+  // run would be delayed by the length of the first.
+  const state = createInitialState();
+  startRun(state, {});
+  const rows = state.grid.length;
+  state.grid[rows - 1][0] = 3;
+  state.grid[rows - 2][0] = 3;
+  state.stackHeight[0] = 2;
+  state.events.length = 0;
+  resolveMerges(state);
+  assert.equal(state.events.find((e) => e.type === 'merge').step, 0,
+    'each cascade is numbered from its own start');
+}
+{
+  // The delay has to actually hold the burst back, and the burst has to be
+  // intact when it arrives -- not aged or drifted while it waited.
+  _setReducedMotion(false);
+  const fx = createEffects();
+  spawnMergeEffects(fx, { row: 1, col: 1, tier: 3, color: '#f00', x: 96, y: 96, delay: 0.14 });
+  const before = fx.particles.length;
+  assert.ok(before > 0, 'particles were created');
+  const startX = fx.particles[0].x;
+
+  updateEffects(fx, 0.05);
+  assert.equal(fx.particles.length, before, 'a waiting burst is not expired early');
+  assert.equal(fx.particles[0].x, startX, 'and does not drift while it waits');
+  assert.equal(squashScaleAt(fx, 1, 1, 3), null, 'and its squash has not started');
+
+  updateEffects(fx, 0.12); // now past the delay
+  assert.ok(squashScaleAt(fx, 1, 1, 3) !== null, 'once the delay passes, the link pops');
+}
 
 console.log('merge-effect-position: a merge event\'s (x, y) stays pinned to where it happened, even after a later merge in the same cascade shifts that cell');

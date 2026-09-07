@@ -6,7 +6,7 @@
 // to) so the cadence can be fit to a target instead of guessed. It is NOT a
 // substitute for a person actually playing the game.
 import { createInitialState, startRun, levelFor } from '../js/state.js';
-import { spawnFruit, hardDrop, isGameOver } from '../js/physics.js';
+import { spawnFruit, hardDrop, isGameOver, setDragTarget } from '../js/physics.js';
 import { CELL, COLS } from '../js/constants.js';
 
 function topTier(state, c) {
@@ -45,7 +45,7 @@ function playOne(strategy) {
     if (res.blocked || isGameOver(state)) break;
     const target = chooseColumn(state, strategy);
     if (target < 0) break;
-    state.active.x = target * CELL + CELL / 2;
+    setDragTarget(state, target * CELL + CELL / 2);
     hardDrop(state);
   }
   return { drops: state.spawnIndex, level: levelFor(state.spawnIndex), capped: state.spawnIndex >= HARD_CAP };

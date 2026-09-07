@@ -4,10 +4,11 @@
 // board). Halfway across that segment, both text and board arrive at the
 // same mid-grey and the score readout disappears. text is now derived from
 // the interpolated board's own relative luminance instead of being lerped;
-// this samples the whole 0-10,000 score range (the milestones sit at
-// 0/1000/3000/8000) and asserts the readout never becomes illegible.
+// this samples the whole score range, out past the last milestone, and
+// asserts the readout never becomes illegible anywhere in it.
 import assert from 'node:assert/strict';
 import { themeForScore, contrastRatio, resetPageTheme } from '../js/theme.js';
+import { MILESTONE_SCORES } from '../js/constants.js';
 
 const MIN_CONTRAST = 4.5; // WCAG AA for normal text
 
@@ -15,7 +16,12 @@ resetPageTheme();
 
 let worst = Infinity;
 let worstScore = 0;
-for (let score = 0; score <= 10000; score += 5) {
+// 20: swept past the LAST milestone, not to a number that used to be past
+// it. The top palette milestone moved from 4,000 to 15,000, so a 0-10,000
+// sweep would have stopped short of the final theme entirely and passed
+// without ever testing it.
+const SWEEP_TO = MILESTONE_SCORES[MILESTONE_SCORES.length - 1] * 2;
+for (let score = 0; score <= SWEEP_TO; score += 5) {
   const theme = themeForScore(score);
   // Text sits on the board's top stop in the HUD (js/render.js draws the HUD
   // text before translating into the board), so that is what must contrast.
@@ -45,4 +51,4 @@ for (let score = 0; score <= 10000; score += 5) {
 // run -- the hysteresis this relies on is keyed on call order, not score
 // alone, precisely so a run's monotonically increasing score can only cross
 // the ink boundary once. See themeForScore's `inkIsDark` comment in theme.js.
-console.log(`theme-contrast: worst contrast across 0-10000 was ${worst.toFixed(2)}:1 at score ${worstScore}, floor is ${MIN_CONTRAST}:1`);
+console.log(`theme-contrast: worst contrast across 0-${SWEEP_TO} (past the last milestone) was ${worst.toFixed(2)}:1 at score ${worstScore}, floor is ${MIN_CONTRAST}:1`);

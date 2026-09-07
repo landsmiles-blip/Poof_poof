@@ -97,17 +97,21 @@ export function spawnFruit(state) {
   // 12.2: "blocked" now means every column is full, not that one nominated
   // column is. Five empty columns no longer count for nothing. 14 restored
   // the fixed spawn column but kept this rule -- see js/constants.js.
-  if (spawnColumnFor(state) < 0) {
-    return { blocked: true };
-  }
-
   // 8.4: the fuse burns down by DROPS, not wall-clock time -- a new spawn is
   // exactly what "a drop" means, so this only ticks while the game is
-  // actually being played. Checked here, before this spawn does anything
-  // else, so a fuse reaching zero detonates before the next fruit exists.
+  // actually being played.
   // findBombCell can legitimately come back empty (the Fruit Remover deleted
   // the bomb tile before the fuse ran out) -- that just means the charge is
   // spent with nothing to show for it, not a bug to guard against further.
+  //
+  // 20 LANDMINE, found by audit: this used to sit AFTER the terminal bail
+  // below, and its own comment claimed the opposite ("checked here, before
+  // this spawn does anything else"). So if the drop that filled the last cell
+  // was also the drop the fuse was going to end on, the bail fired first and
+  // the bomb never went off -- the player paid 60 coins for a rescue the game
+  // then skipped, on the exact board it existed to rescue. Ticking the fuse
+  // FIRST is what the comment always said, and it costs nothing: a detonation
+  // frees cells, so the bail below simply sees the rescued board.
   if (state.bombFuseDrops !== null) {
     state.bombFuseDrops -= 1;
     if (state.bombFuseDrops <= 0) {
@@ -116,6 +120,17 @@ export function spawnFruit(state) {
       state.bombFuseDrops = null;
       state.bombInPlay = false;
     }
+  }
+
+  // Terminal bail before consuming anything else. A blocked spawn ends the
+  // run, and eating a scheduled wild (or advancing the index) on the way out
+  // would silently destroy a charge the player paid for.
+  //
+  // 12.2: "blocked" means every column is full, not that one nominated column
+  // is. Five empty columns no longer count for nothing. 14 restored the fixed
+  // spawn column but kept this rule -- see js/constants.js.
+  if (spawnColumnFor(state) < 0) {
+    return { blocked: true };
   }
 
   // state.nextTier was decided one spawn ahead of time (in nextTierFor, called
@@ -141,14 +156,29 @@ export function spawnFruit(state) {
   // closes.
   expireArmedPowerUp(state);
 
-  // 17: the rising floor, drop-indexed off the count just incremented. A rise
-  // can top the board out, which ends the run.
+  // 17: the rising floor, drop-indexed off the count just incremented.
   // Deliberately AFTER the level bump so a rise uses the level it belongs to.
-  state.dropsSinceFloorRise += 1;
-  if (state.dropsSinceFloorRise >= floorRiseCadenceDrops(levelFor(state.spawnIndex))) {
+  //
+  // 20 LANDMINE, found by audit: the counter used to run during the opening
+  // grace too, where the cadence is Infinity and no rise can happen. By the
+  // time level 3 arrived the counter was already at 20 against a cadence of
+  // 16, so the very first rise of every run fired INSTANTLY at the level
+  // boundary -- with the meter, which draws nothing while the cadence is
+  // infinite, never having appeared. Twenty silent drops, then the floor
+  // jumps with no warning at all: exactly the "it ends like a surprise"
+  // complaint 19 was built to remove, on the one rise a new player meets
+  // first. Holding the counter at zero until the mechanic is actually live
+  // also makes the first gap the 16 drops constants.js claims, instead of 0.
+  const cadence = floorRiseCadenceDrops(levelFor(state.spawnIndex));
+  if (!Number.isFinite(cadence)) {
     state.dropsSinceFloorRise = 0;
-    if (raiseFloor(state).toppedOut) {
-      return { blocked: true };
+  } else {
+    state.dropsSinceFloorRise += 1;
+    if (state.dropsSinceFloorRise >= cadence) {
+      state.dropsSinceFloorRise = 0;
+      if (raiseFloor(state).toppedOut) {
+        return { blocked: true };
+      }
     }
   }
 
@@ -241,7 +271,17 @@ export function stepPhysics(state, dt) {
 export function hardDrop(state) {
   const active = state.active;
   if (!active) return false;
-  const col = columnForX(state, active.x);
+  // 20: keyed to targetX -- where the player AIMED -- not to active.x, where
+  // the fruit has physically eased to.
+  //
+  // The keyboard sets targetX one cell per press (js/input.js), and
+  // stepPhysics eases x toward it at DRAG_LERP, which takes about 167ms to
+  // close a single column. Dropping from active.x meant a player who pressed
+  // right and then dropped inside that window landed in the column they were
+  // leaving. Measured before the fix: 3 of 8 hard drops landed in the wrong
+  // column; waiting out the ease first, 136 of 136 landed correctly. The
+  // command said "put it there", so it goes there.
+  const col = columnForX(state, active.targetX);
   const rows = effectiveRows(state);
   const landingRow = rows - 1 - state.stackHeight[col];
   lockFruit(state, landingRow, col, active.tier);
@@ -286,12 +326,30 @@ function lockFruit(state, row, col, tier) {
 
 // Repeatedly finds one adjacent equal-tier pair, merges it, settles the
 // affected column, and repeats until no merges remain (handles chain reactions).
+// 20: how far into the current cascade we are. Every merge event carries its
+// step so the presentation layer can play the chain out in order -- see
+// CASCADE_STEP_SEC in constants.js for the reported problem this solves.
+// Module-local rather than on `state`: it is meaningless between calls, it is
+// never persisted, and resolveMerges is never re-entrant.
+let cascadeStep = 0;
+
 export function resolveMerges(state) {
+  cascadeStep = 0;
   let mergedSomething = true;
   while (mergedSomething) {
     mergedSomething = mergeOnePair(state);
-    if (mergedSomething) settleColumns(state);
+    if (mergedSomething) {
+      settleColumns(state);
+      cascadeStep += 1;
+    }
   }
+  // 20: the biggest chain a single action set off, which is the number a
+  // player would actually call a "chain". The results screen used to report
+  // state.bestComboThisRun instead -- the timer-based streak, which does not
+  // lapse between drops, so it just counted every merge in the run and
+  // reported things like "530x chain". A number that only ever goes up is not
+  // a result. This one moves: it is typically 1 or 2 and rarely above 5.
+  if (cascadeStep > state.bestCascade) state.bestCascade = cascadeStep;
 }
 
 // Two cells merge when they hold the same tier, OR when either is a rainbow
@@ -369,12 +427,12 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   if (tier >= MAX_TIER) {
     state.grid[keepR][keepC] = null;
     addScore(state, Math.round(WATERMELON_CLEAR_BONUS * multiplier));
-    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, x, y, multiplier });
+    state.events.push({ type: 'topTier', tier, row: keepR, col: keepC, x, y, multiplier, step: cascadeStep });
   } else {
     const newTier = tier + 1;
     state.grid[keepR][keepC] = newTier;
     addScore(state, Math.round(TIERS[newTier].points * multiplier));
-    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, x, y, multiplier });
+    state.events.push({ type: 'merge', tier: newTier, row: keepR, col: keepC, x, y, multiplier, step: cascadeStep });
     if (newTier >= MAX_TIER) {
       // Reaching the highest tier for the first time is its own moment,
       // distinct from clearing a pair of them.
@@ -385,10 +443,20 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
 
 export function settleColumns(state) {
   const rows = state.grid.length;
+  const sel = state.swapSelectedCell;
   for (let c = 0; c < COLS; c++) {
     const values = [];
+    // 20: where the pending Swap selection ends up. See rebaseSwapSelection
+    // for the bug this closes -- a coordinate stored between two taps used to
+    // go stale the moment anything moved, and Swap then acted on a fruit the
+    // player never picked. Captured as an INDEX INTO values (how many fruit
+    // sit above it), which is the one description of "that fruit" this
+    // repack cannot invalidate.
+    let selIndex = -1;
     for (let r = 0; r < rows; r++) {
-      if (state.grid[r][c] !== null) values.push(state.grid[r][c]);
+      if (state.grid[r][c] === null) continue;
+      if (sel && sel.col === c && sel.row === r) selIndex = values.length;
+      values.push(state.grid[r][c]);
     }
     for (let r = 0; r < rows; r++) state.grid[r][c] = null;
     const startRow = rows - values.length;
@@ -396,7 +464,48 @@ export function settleColumns(state) {
       state.grid[startRow + i][c] = values[i];
     }
     state.stackHeight[c] = values.length;
+
+    if (sel && sel.col === c) {
+      // selIndex < 0 means the selected cell held nothing after the merge
+      // that triggered this settle -- the fruit is gone, so the selection is.
+      if (selIndex < 0) state.swapSelectedCell = null;
+      else state.swapSelectedCell = { row: startRow + selIndex, col: c, tier: values[selIndex] };
+    }
   }
+}
+
+// 20: keeps a pending Swap selection pointing at the fruit the player actually
+// tapped, across a board that moves underneath them.
+//
+// The bug, found by audit and reproduced end to end: swapSelectedCell held a
+// raw {row, col} between the two taps a Swap needs, and NOTHING rebased it. A
+// floor rise shifts every row up one; a merge repacks a column downward. Both
+// happen constantly, and both happen in the gap between the taps -- the run
+// does not pause while a power-up is armed. So the second tap swapped whatever
+// had slid into that coordinate, and consumeSwap billed the charge for it.
+// Measured: tap a tier 6, one rise later that cell holds a tier 5, and the
+// game swaps the 5.
+//
+// A rise is a uniform shift, so it rebases exactly. settleColumns rebases
+// itself (above). The tier recorded at selection is the belt to that braces:
+// if what is at the rebased cell is not what the player pointed at, the
+// selection is dropped rather than guessed at. Dropping it costs one extra
+// tap; acting on it costs a charge and a fruit they wanted to keep.
+function rebaseSwapSelectionForRise(state, col) {
+  const sel = state.swapSelectedCell;
+  if (!sel || sel.col !== col) return;
+  const row = sel.row - 1;
+  if (row < 0) { state.swapSelectedCell = null; return; }
+  state.swapSelectedCell = { row, col, tier: sel.tier };
+}
+
+// Called wherever the board changed in a way the rebasing above cannot
+// describe. Cheap, and always safe: the worst case is one extra tap.
+export function validateSwapSelection(state) {
+  const sel = state.swapSelectedCell;
+  if (!sel) return;
+  const inBounds = sel.row >= 0 && sel.row < state.grid.length && sel.col >= 0 && sel.col < COLS;
+  if (!inBounds || state.grid[sel.row][sel.col] !== sel.tier) state.swapSelectedCell = null;
 }
 
 // Removes a single fruit from the board (Fruit Remover power-up), then settles.
@@ -405,6 +514,7 @@ export function removeFruitAt(state, row, col) {
   if (tier === null) return false;
   state.grid[row][col] = null;
   settleColumns(state);
+  validateSwapSelection(state);
   // main.js turns this into a small burst at the removed cell -- see 1.4.
   state.events.push({ type: 'removerUsed', row, col, tier });
   return true;
@@ -489,60 +599,127 @@ export function swapFruits(state, r1, c1, r2, c2) {
 // it a careful merger holds a low board forever and "how long can you last"
 // has no answer.
 //
-// Returns { toppedOut } rather than setting a flag: a rise cannot proceed if
-// any column already reaches the ceiling -- the shift would push its top fruit
-// off the board -- and that IS the loss. Checked first, before any mutation,
-// so a topping-out rise leaves the board untouched for endRun to read.
+// Returns { toppedOut } rather than setting a flag, and 20 changed what that
+// means: it is now true only for a COMPLETELY full board, or for a board that
+// was left with a column at the ceiling through a whole cadence. It used to be
+// true the moment any single column was full. Checked before any mutation, so
+// a topping-out rise leaves the board untouched for endRun to read.
 //
 // No active fruit exists when this runs: it is called only from spawnFruit,
 // after the previous fruit has locked and before the next is placed, so there
 // is never a mid-air fruit whose coordinates a shift would invalidate.
+
+// How many columns are currently at the ceiling. The board's danger reading
+// and the ceiling deadline both key off this one function so they can never
+// disagree about what "at the ceiling" means.
+export function topColumnCount(state) {
+  const rows = state.grid.length;
+  let n = 0;
+  for (let c = 0; c < COLS; c++) if (state.stackHeight[c] >= rows) n += 1;
+  return n;
+}
+
 export function raiseFloor(state) {
   const rows = state.grid.length;
+
+  // 20: a column with no room SITS THIS RISE OUT, and a rise never ends the
+  // run on the spot. See "The ceiling countdown (20)" in constants.js for what
+  // ends it instead, and for the two designs that were built, measured and
+  // thrown away before this one.
+  //
+  // Until now a rise that met ANY full column ended the run immediately. That
+  // was never a rule -- it was this function protecting itself. Shifting a
+  // full column up would push its top fruit off the board, and "cannot shift"
+  // got written down as "you lose". Reported from real play, and correctly:
+  // "why should the game end and yet there are still spaces to play?" A board
+  // with one capped column and five empty ones was a loss with FIFTY free
+  // cells on it.
+  let anyRoom = false;
   for (let c = 0; c < COLS; c++) {
-    if (state.stackHeight[c] >= rows) return { toppedOut: true };
+    if (state.stackHeight[c] < rows) { anyRoom = true; break; }
+  }
+  // Completely full: no move exists anywhere, which is the same condition an
+  // ordinary drop hits when spawnColumnFor returns -1. One losing rule.
+  if (!anyRoom) return { toppedOut: true };
+
+  // 20: THE ending. A column at the ceiling is a deadline, not a loss, and
+  // the deadline is exactly ONE floor cadence -- you have until the floor
+  // pushes again. A column left capped through a whole cadence ends the run.
+  //
+  // Keying the grace to the cadence rather than to a fixed number of drops
+  // does three things no fixed number could: it scales itself (16 drops of
+  // grace early, 5 by level 14, 1 at the terminal cadence, so the endgame
+  // stays as lethal as it was), it keeps ONE clock in the game instead of two
+  // competing ones, and -- the reason it is worth more than the code it costs
+  // -- the next-rise meter along the bottom of the board is ALREADY drawing
+  // this countdown. The player does not need a new gauge explaining when they
+  // die; the one they have been reading all run turns out to be it.
+  //
+  // PER COLUMN, and that is load-bearing. This shipped first as a single
+  // board-wide boolean and review caught it before it went out: rescue the
+  // capped column, have a DIFFERENT column top off in the same cadence, and
+  // the second column inherited the first one's armed warning and died with
+  // no grace at all -- reintroducing the exact instant, unwarned loss this
+  // phase exists to remove, just on a rarer trigger. A deadline belongs to
+  // the column that earned it, so the flag has to be per column too.
+  for (let c = 0; c < COLS; c++) {
+    if (state.ceilingWarned[c] && state.stackHeight[c] >= rows) {
+      return { toppedOut: true };
+    }
   }
 
-  const newBottom = riseRowTiers();
+  const phase = Math.random() < 0.5 ? 0 : 1;
   for (let c = 0; c < COLS; c++) {
+    if (state.stackHeight[c] >= rows) continue; // no room here: it sits this one out
     // Shift the column up one cell (row r takes what was below it). Row 0 is
-    // guaranteed null for every column here -- no column was full -- so the
-    // cell that falls off the top is always empty.
+    // guaranteed null for a column we did NOT skip, so the cell that falls off
+    // the top is always empty.
     for (let r = 0; r < rows - 1; r++) state.grid[r][c] = state.grid[r + 1][c];
-    state.grid[rows - 1][c] = newBottom[c];
+    state.grid[rows - 1][c] = riseTierAt(c, 0, phase);
     state.stackHeight[c] += 1;
+    rebaseSwapSelectionForRise(state, c);
   }
+
+  // Recomputed AFTER the shift and after the cascade below, so it describes
+  // the board the player is actually looking at when the meter restarts.
+  // Set below resolveMerges for that reason -- a rise that sets off a cascade
+  // can clear the very column it just capped, and warning about a column that
+  // is no longer full would be a lie.
 
   // Pushed before resolveMerges so a floorRose cue fires even when the new row
   // sets off a cascade. main.js turns it into sound/haptics -- physics stays
   // free of audio/DOM, as everywhere else here.
   state.events.push({ type: 'floorRose' });
 
-  // The new row can sit under a matching fruit, or a settling cascade can bring
-  // matches together -- resolve them. This is the seam that lets a good player
-  // FIGHT the floor: a well-built bottom row eats part of the rise. It can
-  // never eat all of it forever, which is the whole point.
+  // The new fruit can sit under a matching fruit, or a settling cascade can
+  // bring matches together -- resolve them. This is the seam that lets a good
+  // player FIGHT the floor: a well-built bottom row eats part of the rise. It
+  // can never eat all of it forever, which is the whole point.
   resolveMerges(state);
+  // Re-armed per column AFTER the cascade, so a rise that clears the very
+  // column it just capped does not leave a warning behind for it, and a
+  // column that was rescued this cadence is genuinely disarmed rather than
+  // still carrying someone else's countdown.
+  for (let c = 0; c < COLS; c++) state.ceilingWarned[c] = state.stackHeight[c] >= rows;
   return { toppedOut: false };
 }
 
-// The fruit that fills a freshly-risen bottom row: two ADJACENT tiers in an
-// alternating pattern with a random phase. Alternating guarantees no two
-// horizontal neighbours match, so the row cannot simply evaporate on arrival
-// -- a uniform row would horizontally self-merge and defeat the very pressure
-// it exists to create.
+// The tier of one freshly-inserted cell, at column `c`, `i` cells up from the
+// bottom of this rise's insertion, with a per-rise random `phase`.
 //
-// The row is always the two LOWEST tiers, and 19 measured why that has to stay
-// true: raising it makes the game EASIER, because big fruit sit close to the
+// Always the two LOWEST tiers, and 19 measured why that has to stay true:
+// raising it makes the game EASIER, because big fruit sit close to the
 // MAX_TIER vanish and evaporate against the pile. See constants.js.
-function riseRowTiers() {
-  const lo = 0;
-  const hi = 1;
-  const phase = Math.random() < 0.5 ? 0 : 1;
-  const out = [];
-  for (let c = 0; c < COLS; c++) out.push((c + phase) % 2 === 0 ? lo : hi);
-  return out;
+//
+// The (c + i) parity is what keeps a rise from simply deleting itself. No two
+// horizontal neighbours in the new bottom row match (c differs by one), and
+// no two vertical neighbours within one column's inserted block match (i
+// differs by one) -- so an arriving rise can never self-merge away, which
+// would defeat the very pressure it exists to create.
+function riseTierAt(c, i, phase) {
+  return (c + i + phase) % 2;
 }
+
 
 // 12.2: the board is over when there is nowhere left to put anything, not
 // when one nominated column fills. This is the single line that stopped five

@@ -26,4 +26,17 @@ import { hardDrop } from '../js/physics.js';
   assert.equal(hardDrop(state), false, 'hardDrop must no-op safely with no active fruit');
 }
 
-console.log('hard-drop: hardDrop lands the active fruit at its current column immediately, using the normal landing math');
+// 20: the fruit is mid-slide -- x still at column 2, aim already at column 4.
+// Before this fix hardDrop read x and landed it in column 2, silently
+// discarding the player's last input. See hardDrop's own comment.
+{
+  const state = createInitialState(null);
+  state.active = { tier: 0, col: 2, x: 2 * CELL + CELL / 2, targetX: 4 * CELL + CELL / 2, y: -15 };
+  assert.equal(hardDrop(state), true, 'a mid-slide fruit still drops');
+  const rows = state.grid.length;
+  assert.equal(state.grid[rows - 1][4], 0, 'it lands where the player AIMED, not where the fruit had eased to');
+  assert.equal(state.stackHeight[4], 1, 'the aimed column takes it');
+  assert.equal(state.stackHeight[2], 0, 'and the column it was leaving does not');
+}
+
+console.log('hard-drop: hardDrop lands the active fruit immediately at the column the player AIMED at (targetX), not where the fruit had eased to, using the normal landing math');

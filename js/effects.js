@@ -66,6 +66,20 @@ export function triggerLevelUp(fx, level) {
   fx.levelCallout = { level, t: 0 };
 }
 
+// 20: the same callout, carrying an unlock instead of a level. Reuses the
+// whole envelope, shake and draw path rather than growing a second one -- the
+// only difference on screen is what it says and that it names the reward on a
+// second line. Fired the instant the score crosses the threshold; see
+// announceUnlocks in js/state.js.
+export function triggerUnlock(fx, name) {
+  if (!reducedMotion) {
+    fx.shake.t = 0;
+    fx.shake.duration = SHAKE_DURATION_SEC;
+    fx.shake.magnitude = SHAKE_MAX_PX;
+  }
+  fx.levelCallout = { unlock: name, t: 0 };
+}
+
 // Expanding ring on a bomb detonation -- the loudest action in the game
 // otherwise had no visual beyond the particle bursts per cleared cell.
 export function spawnBombRing(fx, x, y) {
@@ -126,7 +140,12 @@ function tierRatio(tier) {
 // into a single arbitrary-length tick decided by whichever cell the scan
 // visited last. The caller fires one deliberate pulse for the whole batch
 // instead. Mirrors the state.suppressCombo pattern used for the same reason.
-export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y, bright = false }) {
+// 20: `delay` staggers this burst by that many seconds, used to play a merge
+// CHAIN out in the order it happened -- see CASCADE_STEP_SEC in constants.js.
+// Implemented as a negative start time rather than a queue: every effect
+// already has a clock, so "not yet" is just t < 0, and updateEffects/
+// squashScaleAt/drawParticles each skip an effect that has not started.
+export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y, bright = false, delay = 0 }) {
   const ratio = tierRatio(tier);
   const squashScale = reducedMotion ? REDUCED_MOTION_SQUASH_SCALE : 1;
 
@@ -138,7 +157,7 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x
     // has a live squash, and matching on position alone made that fruit inherit
     // a pop it never earned.
     tier,
-    t: 0,
+    t: -delay,
     duration: SQUASH_DURATION_SEC,
     amount: (SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio) * squashScale,
   });
@@ -172,7 +191,7 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x
       y: cy,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed - 40,
-      t: 0,
+      t: -delay,
       life: PARTICLE_LIFE_SEC * lifeScale * (0.7 + 0.6 * Math.random()),
       color: particleColor,
       size: 1.8 + 2.6 * ratio * Math.random() + 1,
@@ -221,6 +240,10 @@ export function updateEffects(fx, dt) {
   for (let i = fx.particles.length - 1; i >= 0; i--) {
     const p = fx.particles[i];
     p.t += dt;
+    // 20: a staggered burst starts at a negative t. It must not drift or age
+    // while it waits, or a delayed pop would arrive already half spent and
+    // in the wrong place.
+    if (p.t < 0) continue;
     if (p.t >= p.life) {
       fx.particles.splice(i, 1);
       continue;
@@ -254,6 +277,7 @@ export function squashScaleAt(fx, row, col, tier) {
     if (s.row !== row || s.col !== col) continue;
     // Reject if the cell no longer holds the fruit this pop belongs to.
     if (tier !== undefined && s.tier !== tier) continue;
+    if (s.t < 0) continue; // staggered: this link of the chain has not popped yet
     const p = Math.min(1, s.t / s.duration);
     // One damped oscillation: big overshoot, quick settle.
     const wave = Math.sin(p * Math.PI * 1.5) * (1 - p);
@@ -278,6 +302,7 @@ export function drawParticles(ctx, fx) {
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
   for (const p of fx.particles) {
+    if (p.t < 0) continue; // staggered: not started
     const life = 1 - p.t / p.life;
     ctx.globalAlpha = Math.max(0, life);
     ctx.fillStyle = p.color;

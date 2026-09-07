@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { CANVAS_WIDTH, HUD_HEIGHT, CELL, ARM_EXPIRY_DROPS, powerSlotRect } from '../js/constants.js';
 import { canvasHeightFor } from '../js/render.js';
 import { startRun, armRemover, armSwap, expireArmedPowerUp } from '../js/state.js';
-import { spawnFruit, hardDrop } from '../js/physics.js';
+import { spawnFruit, hardDrop, setDragTarget } from '../js/physics.js';
 import { attachInput } from '../js/input.js';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -48,7 +48,7 @@ function makeFakeCanvas(state) {
 // Place a fruit so spawnIndex advances the way a real drop does.
 function playOneDrop(state) {
   if (spawnFruit(state).blocked) return false;
-  state.active.x = 0 * CELL + CELL / 2;
+  setDragTarget(state, 0 * CELL + CELL / 2);
   hardDrop(state);
   return true;
 }

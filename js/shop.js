@@ -73,8 +73,15 @@ function wordmarkHTML(state) {
 // next milestone above the player's best and names what is waiting there --
 // derived from MILESTONE_SCORES, SKINS and POWERUPS rather than a hand-kept
 // list, so it can never describe a reward that has been renamed or moved.
+// 20: the two ladders interleave now (see MILESTONE_SCORES in constants.js),
+// so "the next milestone" has to be the next threshold from EITHER of them,
+// not the next palette milestone with a power-up assumed alongside it.
 function nextUnlockHTML(state) {
-  const next = MILESTONE_SCORES.find((score) => score > state.highScore);
+  const thresholds = [
+    ...SKINS.map((k) => k.unlockScore),
+    ...POWERUPS.map((p) => p.unlockScore),
+  ].filter((v) => Number.isFinite(v) && v > state.highScore).sort((a, b) => a - b);
+  const next = thresholds[0];
   if (next === undefined) return '';
   const rewards = [
     ...SKINS.filter((k) => k.unlockScore === next).map((k) => `the ${k.name} palette`),
@@ -121,7 +128,7 @@ export function renderGameOver(root, state, onPlayAgain) {
       <p class="stat">Level reached: <strong>${levelFor(state.spawnIndex)}</strong></p>
       <p class="stat">Score: <strong>${state.score}</strong></p>
       <p class="stat">Best: <strong>${state.highScore}</strong></p>
-      ${state.bestComboThisRun >= 2 ? `<p class="stat">Best combo: <strong>${state.bestComboThisRun}x chain</strong></p>` : ''}
+      ${state.bestCascade >= 2 ? `<p class="stat">Biggest chain: <strong>${state.bestCascade} merges from one drop</strong></p>` : ''}
       <p class="stat">Coins earned: <strong>+${state.lastRunCoinsEarned}</strong></p>
       <p class="stat">Coin balance: <strong>${state.coins}</strong></p>
       ${renderUnlockBanner(state)}
@@ -259,7 +266,7 @@ function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onS
   function panelHeaderHTML(label) {
     return `
       <div class="panel-header">
-        <button class="back-btn" id="back-btn"><span class="icon-slot" data-icon="back"></span></button>
+        <button class="back-btn" id="back-btn" aria-label="Back to menu" title="Back to menu"><span class="icon-slot" data-icon="back" aria-hidden="true"></span></button>
         <h1>${label}</h1>
       </div>
     `;
@@ -270,7 +277,7 @@ function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onS
       <div class="screen screen-panel">
         ${panelHeaderHTML('Cart')}
         <p class="coin-balance">Coins: <strong>${state.coins}</strong></p>
-        <p class="hint">Remover, Swap and Bomb are tapped from the bar at the top of the screen during a run.</p>
+        <p class="hint">Remover, Swap and Bomb live in the bar at the top of the screen. Tap a chip to arm it, then tap the fruit on the board you want it to act on. Tap the chip again to cancel.</p>
         <div class="shop-grid">
           ${POWERUPS.map((p) => shopItemHTML(state, p)).join('')}
         </div>
@@ -381,7 +388,8 @@ function renderUnlockBanner(state) {
       .filter(Boolean);
     parts.push(...names.map((n) => `${n} skin`));
   }
-  // A milestone unlocks a skin and a power-up together, so surface both.
+  // Skins and power-ups are separate ladders since 20, but a single run can
+  // still cross one of each -- surface whatever actually landed.
   if (state.newlyUnlockedPowerUps && state.newlyUnlockedPowerUps.length > 0) {
     const names = state.newlyUnlockedPowerUps
       .map((id) => POWERUPS.find((p) => p.id === id)?.name)

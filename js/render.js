@@ -5,7 +5,7 @@ import {
   RAINBOW_TIER, RAINBOW_DEF, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
   powerSlotRect, POWER_SLOT, pauseButtonRect,
   FONT_FAMILY, DISPLAY_FONT_FAMILY, LOCKED_FLASH_DURATION_SEC, CHIP_PULSE_DURATION_SEC,
-  MERGE_METER_MAX, DANGER_ROWS_REMAINING, LEVEL_CALLOUT_SEC,
+  MERGE_METER_MAX, DANGER_ROWS_REMAINING, LEVEL_CALLOUT_SEC, COMBO_MAX_MULTIPLIER,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
   SPAWN_CHUTE_TINT_ALPHA, SPAWN_CHUTE_FADE_ROWS, SPAWN_CHUTE_MARK_ALPHA, SPAWN_CHUTE_MARK_INSET,
   CEILING_LINE_ALPHA, CEILING_LINE_ALPHA_MAX, CEILING_LINE_DASH,
@@ -137,6 +137,16 @@ export function drawFrame(ctx, state, fx) {
     drawLevelCallout(ctx, fx, COLS * CELL, boardHeightFor(state), theme);
   }
   ctx.restore();
+
+  // 19/20: the two marks the player reads the run by, drawn LAST and OUTSIDE
+  // the shake -- see RISE_METER_HEIGHT in constants.js for the clipping this
+  // avoids. Steady on purpose as well as intact: a countdown that jitters is
+  // a countdown you stop reading.
+  ctx.save();
+  ctx.translate(0, HUD_HEIGHT);
+  drawCeilingLine(ctx, state, state.grid.length, theme);
+  drawRiseMeter(ctx, state, state.grid.length, theme);
+  ctx.restore();
 }
 
 function drawHUD(ctx, state, width, theme) {
@@ -160,10 +170,16 @@ function drawHUD(ctx, state, width, theme) {
 
   drawComboMeter(ctx, state, width, theme);
 
+  // 20: the label sits BESIDE the preview, not above it. It used to be
+  // right-aligned at width-10 on the same axis as the fruit, whose centre is
+  // at width-30 -- so every fruit with a radius over 19px (seven of the nine
+  // tiers, five of the seven that can actually be next) was drawn straight
+  // over the word. Ending it at width-64 clears the widest fruit's left edge
+  // with room to spare, and it still reads as belonging to the preview.
   ctx.textAlign = 'right';
   ctx.font = `13px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
-  ctx.fillText('Next', width - 10, 6);
+  ctx.fillText('Next', width - 64, 32);
   const nextDef = tierDefFor(state.nextTier);
   drawFruit(ctx, width - 30, 38, nextDef, colorFor(state, state.nextTier), state.nextTier,
     bombFuseFractionFor(state, state.nextTier));
@@ -189,10 +205,16 @@ function drawComboMeter(ctx, state, width, theme) {
   ctx.font = `bold 19px ${FONT_FAMILY}`;
   ctx.fillText(`${multiplier.toFixed(2)}x`, width / 2, 26);
 
+  // 20: the multiplier stops growing at COMBO_MAX_MULTIPLIER, and the streak
+  // does not lapse between drops, so the raw count climbs all run -- 187 was
+  // measured in a single ordinary run. Presenting an ever-growing number that
+  // has been worth exactly the same since merge nine is telling the player
+  // something false. Past the cap it says MAX, which is the truth.
   ctx.font = `bold 11px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
   ctx.globalAlpha = (0.35 + 0.65 * remaining) * 0.75;
-  ctx.fillText(`COMBO ${state.comboCount}`, width / 2, 48);
+  const atCap = multiplier >= COMBO_MAX_MULTIPLIER;
+  ctx.fillText(atCap ? `COMBO ${state.comboCount} MAX` : `COMBO ${state.comboCount}`, width / 2, 48);
 
   const barW = 68;
   const barX = width / 2 - barW / 2;
@@ -240,11 +262,16 @@ function drawPowerBar(ctx, state, theme) {
     drawIcon(ctx, item.icon, cx, cy, rect.w * 0.72, armed ? theme.boardTop : theme.text);
 
     // Below each slot: the unlock score while locked, otherwise the count.
-    ctx.font = `bold 9px ${FONT_FAMILY}`;
+    // 20: 8px at +1, so the label occupies y+1..y+9 below the chip and the
+    // merge meter can have y+10..y+12 to itself. At 9px and +2 the label ran
+    // to +11 while drawMergeMeter drew its bar at +4..+7 -- INSIDE the text,
+    // and drawn afterwards, so every unlock threshold under a locked chip was
+    // struck through by a solid bar.
+    ctx.font = `bold 8px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = theme.text;
-    ctx.fillText(locked ? `${item.unlockScore}` : `${count}`, cx, rect.y + rect.h + 2);
+    ctx.fillText(locked ? `${item.unlockScore}` : `${count}`, cx, rect.y + rect.h + 1);
     ctx.restore();
 
     // A brief flash when this exact chip was just tapped while locked or out
@@ -313,14 +340,14 @@ function drawPowerBar(ctx, state, theme) {
 // three chips above it so the two visually read as one system.
 function drawMergeMeter(ctx, state, theme) {
   const barX = POWER_SLOT.x0;
-  const barY = POWER_SLOT.y + POWER_SLOT.size + 4;
+  const barY = POWER_SLOT.y + POWER_SLOT.size + 10; // 20: below the chip labels, not through them
   const barW = 3 * POWER_SLOT.size + 2 * POWER_SLOT.gap;
   const pct = Math.max(0, Math.min(1, state.mergeMeter / MERGE_METER_MAX));
   ctx.save();
   ctx.fillStyle = theme.grid;
-  ctx.fillRect(barX, barY, barW, 3);
+  ctx.fillRect(barX, barY, barW, 2);
   ctx.fillStyle = theme.accent;
-  ctx.fillRect(barX, barY, barW * pct, 3);
+  ctx.fillRect(barX, barY, barW * pct, 2);
   ctx.restore();
 }
 
@@ -470,8 +497,12 @@ export function drawCeilingLine(ctx, state, rows, theme) {
   const closeness = Math.max(0, Math.min(1, (tallest - threshold) / DANGER_ROWS_REMAINING));
   let alpha = CEILING_LINE_ALPHA + (CEILING_LINE_ALPHA_MAX - CEILING_LINE_ALPHA) * closeness;
 
-  // A column with no room left is drawn steady, not pulsing -- same rule as
-  // drawDangerState: at that point it is a fact, not a warning.
+  // A column at the ceiling makes the line PULSE. This is the opposite of
+  // drawDangerState's column outlines, which go steady when a column is full,
+  // and it is deliberate since 20: a capped column is no longer an instant
+  // loss, it is a deadline running against the next floor rise (see
+  // raiseFloor). A deadline is exactly the thing that should be blinking.
+  // (The comment here used to claim the reverse of what the code did.)
   if (tallest >= rows && !isReducedMotion()) {
     alpha *= 0.75 + 0.25 * (0.5 + 0.5 * Math.sin(Date.now() / 220));
   }
@@ -568,7 +599,18 @@ function drawLevelCallout(ctx, fx, width, height, theme) {
   ctx.shadowColor = 'rgba(0,0,0,0.4)';
   ctx.shadowBlur = 12;
   ctx.fillStyle = theme.accent;
-  ctx.fillText(`LEVEL ${callout.level}`, 0, 0);
+  if (callout.unlock) {
+    // 20: an unlock says what it is, and says UNLOCKED loudest -- the word is
+    // the reward, the name is the detail. Two lines rather than one long one
+    // so it still fits a 384-wide board at a size that reads as a moment.
+    ctx.font = `40px ${DISPLAY_FONT_FAMILY}`;
+    ctx.fillText('UNLOCKED', 0, -16);
+    ctx.font = `bold 19px ${FONT_FAMILY}`;
+    ctx.fillStyle = theme.text;
+    ctx.fillText(callout.unlock, 0, 22);
+  } else {
+    ctx.fillText(`LEVEL ${callout.level}`, 0, 0);
+  }
   ctx.restore();
 }
 
@@ -736,11 +778,6 @@ function drawBoard(ctx, state, fx, theme) {
 
   const { index, t } = themePosition(state.score);
   drawVignette(ctx, COLS * CELL, rows * CELL, index + t);
-
-  // 19: last, so neither the vignette nor a fruit passing through can dim the
-  // two marks the player reads the run by. See their own comments.
-  drawCeilingLine(ctx, state, rows, theme);
-  drawRiseMeter(ctx, state, rows, theme);
 
   ctx.restore();
 }

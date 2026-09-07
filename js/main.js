@@ -4,6 +4,7 @@
 import {
   CANVAS_WIDTH, TIERS, HAPTIC_BOMB_MS, HAPTIC_CHARGE_EARNED_MS, HAPTIC_LEVEL_UP_MS, CELL,
   MIN_BACKING_SCALE, MAX_BACKING_SCALE,
+  CASCADE_STEP_SEC, CASCADE_STEP_MAX,
 } from './constants.js';
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, tierColor, devModeEnabled,
@@ -26,7 +27,7 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp,
+  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp, triggerUnlock,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 import { initBackground, setBoardRect, drawBackground } from './background.js';
@@ -309,6 +310,12 @@ function drainEvents() {
   try {
     for (const event of state.events) {
       if (event.type === 'merge') {
+        // 20: staged by its position in the chain, so a cascade plays out in
+        // the order it actually happened instead of arriving as one silent
+        // flash of fruit vanishing in columns the player never touched. See
+        // CASCADE_STEP_SEC in js/constants.js. The grid itself still resolves
+        // in a single frame -- only the feedback is staged.
+        const delay = Math.min(event.step || 0, CASCADE_STEP_MAX) * CASCADE_STEP_SEC;
         playMerge(event.tier);
         spawnMergeEffects(fx, {
           row: event.row,
@@ -318,8 +325,10 @@ function drainEvents() {
           tier: event.tier,
           color: colorForTier(event.tier),
           bright,
+          delay,
         });
       } else if (event.type === 'reachedTop' || event.type === 'topTier') {
+        const delay = Math.min(event.step || 0, CASCADE_STEP_MAX) * CASCADE_STEP_SEC;
         playCelebration();
         spawnMergeEffects(fx, {
           row: event.row,
@@ -329,7 +338,17 @@ function drainEvents() {
           tier: TIERS.length - 1,
           color: colorForTier(TIERS.length - 1),
           bright,
+          delay,
         });
+        // 20: a top-tier merge is the ONLY one that leaves nothing behind --
+        // the two fruit vanish instead of becoming a bigger one. Reported as
+        // looking like a bug, reasonably: every other merge you can see the
+        // result of. The expanding ring (the same mark a bomb makes, and for
+        // the same reason) says "something left this square" rather than
+        // "something grew here".
+        if (event.type === 'topTier' && event.x !== undefined) {
+          spawnBombRing(fx, event.x, event.y);
+        }
       } else if (event.type === 'bombCleared') {
         // One max-intensity burst per destroyed fruit, plus one expanding ring
         // centred on the target. Detonation previously produced no visual or
@@ -378,6 +397,15 @@ function drainEvents() {
         playLevelUp();
         vibrate(HAPTIC_LEVEL_UP_MS);
         triggerLevelUp(fx, event.level);
+      } else if (event.type === 'unlocked') {
+        // 20: the reward lands ON the run that earned it. Same three
+        // reactions a level-up gets -- a sound, a haptic, a callout -- but
+        // playCelebration rather than playLevelUp, because this is the bigger
+        // moment of the two and the game already uses that sound to mean
+        // "something rare just happened".
+        playCelebration();
+        vibrate(HAPTIC_LEVEL_UP_MS);
+        triggerUnlock(fx, event.name);
       } else if (event.type === 'floorRose') {
         // 17: the rising floor just pushed a new row up. The board visibly
         // jumping is the main telegraph; this adds a light tick + haptic so a
@@ -631,7 +659,25 @@ async function boot() {
   // block a gesture-less resume.
   if (hostAudio) unlockAudio();
 
+  // 20: measured with the canvas momentarily VISIBLE.
+  //
+  // index.html ships #game-canvas with the `hidden` attribute, and nothing
+  // clears it before this point -- showScreen() below is the first code to
+  // touch it, and for the menu it sets hidden = true again. So this very
+  // first measurement hit handleCanvasMeasurement's zero-viewport guard,
+  // boardRect stayed null, and js/background.js's drawHalo returned
+  // immediately: no accent glow behind the board on the FIRST menu of a
+  // session, appearing only from the first game-over onward. It also left
+  // --canvas-css-width unset, so on a short, wide window the first menu card
+  // was wider than the board and then snapped narrower after a run.
+  //
+  // Unhiding for the measurement and restoring immediately is synchronous --
+  // getBoundingClientRect() flushes layout in the same task -- so nothing is
+  // ever painted in between.
+  const wasHidden = canvas.hidden;
+  canvas.hidden = false;
   syncCanvasAspect();
+  canvas.hidden = wasHidden;
   attachInput(canvas, state);
 
   showScreen();
