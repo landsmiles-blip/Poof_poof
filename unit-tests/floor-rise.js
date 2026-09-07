@@ -7,16 +7,15 @@
 // -- the load-bearing one -- a played run ALWAYS terminates, so the game can
 // never silently drift back to unloseable. See docs/phase17brief.md.
 import assert from 'node:assert/strict';
-import {
-  createInitialState, startRun, floorRiseCadenceDrops,
-} from '../js/state.js';
+import { createInitialState, startRun, floorRiseCadenceDrops } from '../js/state.js';
 import { spawnFruit, hardDrop, isGameOver, raiseFloor } from '../js/physics.js';
 import {
-  COLS, CELL,
+  COLS, CELL, LEVEL_DROPS,
   FLOOR_RISE_START_LEVEL, FLOOR_RISE_DROPS_START, FLOOR_RISE_DROPS_MIN, FLOOR_RISE_TIGHTEN_PER_LEVEL,
+  FLOOR_RISE_DROPS_HARD_MIN,
 } from '../js/constants.js';
 
-// --- 1. floorRiseCadenceDrops: grace, monotonic tightening, and the floor ---
+// --- 1. floorRiseCadenceDrops: grace, monotonic tightening, both floors -----
 {
   for (let lvl = 1; lvl < FLOOR_RISE_START_LEVEL; lvl++) {
     assert.equal(floorRiseCadenceDrops(lvl), Infinity, `level ${lvl} is inside the opening grace, no floor yet`);
@@ -27,14 +26,67 @@ import {
   for (let lvl = FLOOR_RISE_START_LEVEL; lvl <= 300; lvl++) {
     const c = floorRiseCadenceDrops(lvl);
     assert.ok(c <= prev, `cadence must never loosen as level climbs (level ${lvl}: ${c} > ${prev})`);
-    assert.ok(c >= FLOOR_RISE_DROPS_MIN, `cadence must never fall below the floor (level ${lvl}: ${c})`);
+    assert.ok(c >= FLOOR_RISE_DROPS_HARD_MIN, `cadence must never fall below the HARD floor (level ${lvl}: ${c})`);
     prev = c;
   }
 
-  const capLevel = FLOOR_RISE_START_LEVEL
+  // Stage one still bottoms out exactly where it always did...
+  const stageOneFloor = FLOOR_RISE_START_LEVEL
     + Math.ceil((FLOOR_RISE_DROPS_START - FLOOR_RISE_DROPS_MIN) / FLOOR_RISE_TIGHTEN_PER_LEVEL);
-  assert.equal(floorRiseCadenceDrops(capLevel), FLOOR_RISE_DROPS_MIN, 'the min cadence is actually reached');
-  assert.equal(floorRiseCadenceDrops(capLevel + 50), FLOOR_RISE_DROPS_MIN, 'and held for every level after');
+  assert.equal(floorRiseCadenceDrops(stageOneFloor), FLOOR_RISE_DROPS_MIN, 'stage one still reaches its own floor');
+  // ...but 19 no longer STOPS there, which is the whole point of this phase.
+  assert.ok(floorRiseCadenceDrops(stageOneFloor + 50) < FLOOR_RISE_DROPS_MIN,
+    'stage two must keep tightening past the stage-one floor -- 17 flatlined here');
+  assert.equal(floorRiseCadenceDrops(1000), FLOOR_RISE_DROPS_HARD_MIN, 'and it settles on the hard floor eventually');
+}
+
+// --- 1b. THE anti-flatline guard -------------------------------------------
+// 17 shipped a wall: level 40 played EXACTLY like level 14. This is the test
+// that fails if anyone flattens the late curve again.
+{
+  const harder = (a, b) => floorRiseCadenceDrops(b) < floorRiseCadenceDrops(a);
+  assert.ok(harder(14, 20), 'level 20 must be harder than level 14');
+  assert.ok(harder(20, 30), 'level 30 must be harder than level 20');
+  assert.ok(harder(14, 40), 'level 40 must be harder than level 14 -- the 17 flatline must not come back');
+}
+
+// --- 1c. the end of the curve is TERMINAL, by arithmetic --------------------
+// The claim 19 rests on, and the reason "how far can you go" has an answer:
+// at the hard floor the board gains COLS fruit per rise while the player
+// answers with ONE drop, and a merge frees at most one cell. If anyone ever
+// raises the hard floor above 1, or widens the board, this stops being true
+// and a good player can camp at the end of the curve forever -- exactly the
+// bug 19 exists to kill. Proven here as a played run, not asserted.
+{
+  assert.equal(FLOOR_RISE_DROPS_HARD_MIN, 1,
+    'the terminal cadence must be one rise per drop -- anything looser is survivable');
+
+  // An EMPTY board, difficulty clock pinned at the hard floor. If this is
+  // survivable from nothing, it is survivable from anything.
+  const deepLevel = 200; // far past the floor
+  assert.equal(floorRiseCadenceDrops(deepLevel), FLOOR_RISE_DROPS_HARD_MIN, 'level 200 sits on the hard floor');
+  const base = (deepLevel - 1) * LEVEL_DROPS;
+  for (let trial = 0; trial < 20; trial++) {
+    const state = createInitialState();
+    startRun(state, {});
+    state.spawnIndex = base;
+    let drops = 0;
+    let ended = false;
+    while (drops < 500) {
+      if (spawnFruit(state).blocked || isGameOver(state)) { ended = true; break; }
+      let b = -1, bh = Infinity;
+      const rows = state.grid.length;
+      for (let c = 0; c < COLS; c++) if (state.stackHeight[c] < rows && state.stackHeight[c] < bh) { bh = state.stackHeight[c]; b = c; }
+      if (b < 0) { ended = true; break; }
+      state.active.x = b * CELL + CELL / 2;
+      hardDrop(state);
+      drops += 1;
+      // hold the clock at deepLevel without disturbing dropsSinceFloorRise
+      state.spawnIndex = base + (state.spawnIndex - base) % LEVEL_DROPS;
+    }
+    assert.ok(ended, 'the terminal cadence must kill an empty board, not merely pressure it');
+    assert.ok(drops < 200, `the terminal cadence must kill quickly (survived ${drops} drops)`);
+  }
 }
 
 // --- 2. one rise keeps every board invariant intact -------------------------

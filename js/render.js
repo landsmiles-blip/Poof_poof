@@ -8,8 +8,12 @@ import {
   MERGE_METER_MAX, DANGER_ROWS_REMAINING, LEVEL_CALLOUT_SEC,
   REMOVER_CROSSHAIR_SIZE, RAINBOW_SPIN_RADIANS_PER_SEC,
   SPAWN_CHUTE_TINT_ALPHA, SPAWN_CHUTE_FADE_ROWS, SPAWN_CHUTE_MARK_ALPHA, SPAWN_CHUTE_MARK_INSET,
+  CEILING_LINE_ALPHA, CEILING_LINE_ALPHA_MAX, CEILING_LINE_DASH,
+  RISE_METER_HEIGHT, RISE_METER_TRACK_ALPHA, RISE_METER_FILL_ALPHA, RISE_METER_IMMINENT_ALPHA,
 } from './constants.js';
-import { tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor, levelFor } from './state.js';
+import {
+  tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor, levelFor, floorRiseCadenceDrops,
+} from './state.js';
 // The ONE function that decides where the next fruit arrives (js/physics.js).
 // Imported rather than reimplemented here on purpose -- see its own comment.
 // It is a pure read of stackHeight and mutates nothing, so this file's "no
@@ -440,6 +444,93 @@ function drawDangerState(ctx, state, rows, theme) {
   ctx.restore();
 }
 
+// 19: the ceiling. THE reported complaint about the ending was not that it was
+// unfair, it was that it was invisible: "it's like the game ends randomly, it
+// gives the ending like a surprise because you do not even know how the game
+// ended". The rule has always been raiseFloor's first loop -- a rise that
+// finds ANY column already at the top ends the run -- but that top edge was
+// never drawn, so the one line in the game that actually kills you was the one
+// thing not on screen.
+//
+// Drawn at the top of row 0 because that is literally where the check reads:
+// stackHeight[c] >= rows means that column's fruit occupies row 0, and the
+// next rise is fatal. Dashed so it reads as a limit rather than as board
+// furniture, and alpha ramps with how close the tallest column actually is, so
+// it is a quiet rule most of the run and unmissable at the end.
+//
+// This draws no state and changes no rule. It is the same fact, visible.
+export function drawCeilingLine(ctx, state, rows, theme) {
+  let tallest = 0;
+  for (let c = 0; c < COLS; c++) if (state.stackHeight[c] > tallest) tallest = state.stackHeight[c];
+
+  // 0 when the board is empty, 1 when a column is against the ceiling. Keyed
+  // to the same DANGER_ROWS_REMAINING band drawDangerState uses, so the line
+  // brightens in step with the column outlines rather than on its own clock.
+  const threshold = Math.max(1, rows - DANGER_ROWS_REMAINING);
+  const closeness = Math.max(0, Math.min(1, (tallest - threshold) / DANGER_ROWS_REMAINING));
+  let alpha = CEILING_LINE_ALPHA + (CEILING_LINE_ALPHA_MAX - CEILING_LINE_ALPHA) * closeness;
+
+  // A column with no room left is drawn steady, not pulsing -- same rule as
+  // drawDangerState: at that point it is a fact, not a warning.
+  if (tallest >= rows && !isReducedMotion()) {
+    alpha *= 0.75 + 0.25 * (0.5 + 0.5 * Math.sin(Date.now() / 220));
+  }
+
+  ctx.save();
+  ctx.strokeStyle = theme.danger;
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = 2;
+  ctx.setLineDash(CEILING_LINE_DASH);
+  ctx.beginPath();
+  ctx.moveTo(0, 1);
+  ctx.lineTo(COLS * CELL, 1);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// 19: the countdown to the next floor rise, along the bottom edge -- the edge
+// the floor actually pushes from.
+//
+// The rise is drop-indexed, not timed (see FLOOR_RISE_* in constants.js), so
+// this is an exact readout and not an estimate: the fill is
+// dropsSinceFloorRise / cadence, and a full bar means the NEXT fruit you land
+// brings a row up with it. That is the piece of information that turns "the
+// floor moved and I wasn't ready" into a decision about where to put this one.
+//
+// Silent during the opening grace, where the cadence is Infinity and there is
+// nothing to count down to -- drawing an empty bar there would imply a rise
+// that is not coming.
+export function drawRiseMeter(ctx, state, rows, theme) {
+  const cadence = floorRiseCadenceDrops(levelFor(state.spawnIndex));
+  if (!Number.isFinite(cadence) || cadence <= 0) return;
+
+  // +1 because dropsSinceFloorRise counts the fruit you are steering RIGHT NOW
+  // (spawnFruit increments it at spawn, then rises when it reaches the
+  // cadence). So a FULL bar means "place this one and the floor pushes", which
+  // is the reading a player can act on; done/cadence would top out at
+  // (cadence-1)/cadence and the bar would never actually fill.
+  const done = Math.max(0, Math.min(cadence, state.dropsSinceFloorRise));
+  const progress = Math.min(1, (done + 1) / cadence);
+  const imminent = cadence - done <= 1;
+
+  const y = rows * CELL - RISE_METER_HEIGHT;
+  const w = COLS * CELL;
+
+  ctx.save();
+  ctx.fillStyle = theme.danger;
+  ctx.globalAlpha = RISE_METER_TRACK_ALPHA;
+  ctx.fillRect(0, y, w, RISE_METER_HEIGHT);
+
+  let alpha = RISE_METER_FILL_ALPHA;
+  if (imminent) {
+    alpha = RISE_METER_IMMINENT_ALPHA;
+    if (!isReducedMotion()) alpha *= 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(Date.now() / 160));
+  }
+  ctx.globalAlpha = alpha;
+  ctx.fillRect(0, y, w * progress, RISE_METER_HEIGHT);
+  ctx.restore();
+}
+
 // 15: the big centred callout on a level-up, alongside the persistent HUD
 // readout drawHUD already draws. Two-part envelope over LEVEL_CALLOUT_SEC: a
 // quick rise to peak alpha (0.85, the spec's ceiling) over the first 15% of
@@ -645,6 +736,11 @@ function drawBoard(ctx, state, fx, theme) {
 
   const { index, t } = themePosition(state.score);
   drawVignette(ctx, COLS * CELL, rows * CELL, index + t);
+
+  // 19: last, so neither the vignette nor a fruit passing through can dim the
+  // two marks the player reads the run by. See their own comments.
+  drawCeilingLine(ctx, state, rows, theme);
+  drawRiseMeter(ctx, state, rows, theme);
 
   ctx.restore();
 }

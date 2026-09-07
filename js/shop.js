@@ -9,7 +9,7 @@
 // always unequipped, no matter how full the inventory was.
 
 import { POWERUPS, SKINS, TIERS, BUILD_VERSION, MILESTONE_SCORES } from './constants.js';
-import { buyPowerUp, startRun, selectSkin, isUnlockedByScore, skinColor } from './state.js';
+import { buyPowerUp, startRun, selectSkin, isUnlockedByScore, skinColor, levelFor } from './state.js';
 import { unlockAudio, toggleMuted, isMuted, playUiTick } from './audio.js';
 import { isMusicOn, toggleMusic } from './music.js';
 import { hasHaptics, isHapticsOn, toggleHaptics } from './effects.js';
@@ -117,6 +117,8 @@ export function renderGameOver(root, state, onPlayAgain) {
   renderShopScreen(root, state, {
     title: 'Game Over',
     lead: `
+      ${state.gameOverReason === 'grid-full' ? '<p class="subtitle">The stack reached the ceiling line.</p>' : ''}
+      <p class="stat">Level reached: <strong>${levelFor(state.spawnIndex)}</strong></p>
       <p class="stat">Score: <strong>${state.score}</strong></p>
       <p class="stat">Best: <strong>${state.highScore}</strong></p>
       ${state.bestComboThisRun >= 2 ? `<p class="stat">Best combo: <strong>${state.bestComboThisRun}x chain</strong></p>` : ''}

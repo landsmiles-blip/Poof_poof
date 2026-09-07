@@ -9,6 +9,7 @@ import {
   LOCKED_FLASH_DURATION_SEC, SAVE_VERSION, MERGE_METER_MAX, CHIP_PULSE_DURATION_SEC,
   GRAVITY_PX_PER_SEC, LEVEL_DROPS, LEVEL_SPEED_START, LEVEL_SPEED_STEP, LEVEL_SPEED_CAP_LEVEL,
   FLOOR_RISE_START_LEVEL, FLOOR_RISE_DROPS_START, FLOOR_RISE_DROPS_MIN, FLOOR_RISE_TIGHTEN_PER_LEVEL,
+  FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_SLOW_LEVELS,
   ARM_EXPIRY_DROPS,
 } from './constants.js';
 
@@ -49,7 +50,25 @@ export function currentGravityPxPerSec(state) {
 export function floorRiseCadenceDrops(level) {
   if (level < FLOOR_RISE_START_LEVEL) return Infinity;
   const tightened = FLOOR_RISE_DROPS_START - (level - FLOOR_RISE_START_LEVEL) * FLOOR_RISE_TIGHTEN_PER_LEVEL;
-  return Math.max(FLOOR_RISE_DROPS_MIN, tightened);
+  if (tightened > FLOOR_RISE_DROPS_MIN) return tightened;
+
+  // 19: stage two. 17 stopped here and the game flatlined -- level 40 played
+  // exactly like level 14. Past the stage-one floor the cadence keeps
+  // tightening, just far more slowly (one drop per FLOOR_RISE_SLOW_LEVELS
+  // levels), down to FLOOR_RISE_DROPS_HARD_MIN -- which is 1, a rise for every
+  // drop. That end state is unsurvivable by arithmetic (COLS fruit in per one
+  // out), so every run terminates; constants.js has the proof and the sweep
+  // that ruled out escalating the rising row's tier instead.
+  const levelsPastFloor = level - stageOneFloorLevel();
+  const slowShave = Math.floor(levelsPastFloor / FLOOR_RISE_SLOW_LEVELS);
+  return Math.max(FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_DROPS_MIN - slowShave);
+}
+
+// The first level at which stage one has bottomed out -- derived, never
+// hardcoded, so retuning the stage-one numbers cannot silently desync stage two.
+function stageOneFloorLevel() {
+  return FLOOR_RISE_START_LEVEL
+    + Math.ceil((FLOOR_RISE_DROPS_START - FLOOR_RISE_DROPS_MIN) / FLOOR_RISE_TIGHTEN_PER_LEVEL);
 }
 
 // Time for a fruit to fall the full board height at a given gravity -- the

@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.03-22';
+export const BUILD_VERSION = '2026.09.07-23';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -300,6 +300,37 @@ export const FLOOR_RISE_DROPS_START = 16;       // at the start level, one rise 
 export const FLOOR_RISE_DROPS_MIN = 5;          // the tightest cadence, reached late in a run
 export const FLOOR_RISE_TIGHTEN_PER_LEVEL = 1;  // drops shaved off the cadence each level
 
+// --- The escalation past the cadence floor (19) -----------------------------
+// 17 left a wall. The cadence tightens 16 -> 5 and then stops dead at level 14,
+// so level 40 played EXACTLY like level 14 -- the same flatline 15 was supposed
+// to have fixed, just moved further out. It was survivable only because the
+// flat difficulty happens to be lethal; nothing about it actually grew.
+//
+// 19 lets the cadence keep tightening past that floor, one drop shaved every
+// FLOOR_RISE_SLOW_LEVELS levels, all the way down to ONE. Slow on purpose: the
+// stage-one slope shaves a drop EVERY level, which would bury people if it ran
+// to the end.
+//
+// A cadence of 1 is the terminal state, and it is terminal by arithmetic, not
+// by taste: a rise inserts COLS (6) fruit and the player answers with one
+// drop, so the board gains 6 cells per turn while a merge frees at most 1 (a
+// MAX_TIER merge, 2). No merge rate closes that gap, on any board, with any
+// power-up. So the run ALWAYS ends, and "how far can you go" has an answer
+// instead of an asymptote. Measured: from a clean EMPTY board, a greedy bot
+// pinned at cadence 1 survives a median of 21 drops, max 57.
+//
+// REJECTED, and recorded here so nobody spends the afternoon re-deriving it:
+// escalating the TIER of the rising row -- pushing up peaches instead of
+// cherries -- reads like an obvious second lever and measures BACKWARDS. Over
+// a 4x5 sweep (cadence 5..2 x base tier 0..4, 250 runs each) survival rose
+// monotonically with tier at every cadence: at cadence 5 the median went
+// 109 -> 134 drops and the max 299 -> 809. Bigger fruit sit closer to the
+// MAX_TIER vanish, so a high-tier row is a GIFT -- it merges with the big
+// stuff already at the bottom and evaporates. Cadence is the only lever here
+// that actually points the right way; use it, or measure before adding another.
+export const FLOOR_RISE_DROPS_HARD_MIN = 1;   // the terminal cadence: a rise per drop, unsurvivable by arithmetic
+export const FLOOR_RISE_SLOW_LEVELS = 5;      // levels per extra drop shaved, past the stage-1 floor
+
 // --- Armed power-up expiry (18) --------------------------------------------
 // The Remover and Swap are "aiming mode" tools: while one is armed, every
 // board gesture is read as aiming at a cell, and js/input.js returns before it
@@ -412,6 +443,25 @@ export const SPAWN_CHUTE_TINT_ALPHA = 0.055; // column wash at the top edge, fad
 export const SPAWN_CHUTE_FADE_ROWS = 2; // ...over this many rows
 export const SPAWN_CHUTE_MARK_ALPHA = 0.30; // the chevron and the two lip ticks
 export const SPAWN_CHUTE_MARK_INSET = 7; // px from the column's side walls to a lip tick
+
+// --- The ceiling line and the next-rise meter (19) --------------------------
+// Two marks that answer the two questions a player could not answer by
+// looking at the board: WHERE do I lose, and WHEN does the floor push again.
+//
+// Both were reported as the same complaint -- "it's like the game ends
+// randomly, it gives the ending like a surprise because you do not even know
+// how the game ended". The run has always ended for a reason (a rise that
+// finds any column already at the ceiling, see raiseFloor), but neither the
+// ceiling nor the countdown to a rise was drawn anywhere, so the loss arrived
+// with no visible cause. Nothing about the RULES changes here; the two facts
+// the rules already turn on are simply on screen now.
+export const CEILING_LINE_ALPHA = 0.14;       // resting: a rule you can see, not a warning
+export const CEILING_LINE_ALPHA_MAX = 0.9;    // a column actually against it
+export const CEILING_LINE_DASH = [10, 7];     // dashed so it reads as a limit, not as board furniture
+export const RISE_METER_HEIGHT = 5;           // px, the strip along the board's bottom edge
+export const RISE_METER_TRACK_ALPHA = 0.10;
+export const RISE_METER_FILL_ALPHA = 0.42;
+export const RISE_METER_IMMINENT_ALPHA = 0.95; // the last drop before a rise
 
 // prefers-reduced-motion (js/effects.js): shake and particles are cut
 // entirely, but a merge should still read as a merge, so squash is scaled

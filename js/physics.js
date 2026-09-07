@@ -526,15 +526,21 @@ export function raiseFloor(state) {
   return { toppedOut: false };
 }
 
-// The fruit that fills a freshly-risen bottom row: the two lowest tiers in an
+// The fruit that fills a freshly-risen bottom row: two ADJACENT tiers in an
 // alternating pattern with a random phase. Alternating guarantees no two
 // horizontal neighbours match, so the row cannot simply evaporate on arrival
 // -- a uniform row would horizontally self-merge and defeat the very pressure
-// it exists to create. Low tiers keep it fair: the row is fightable, not junk.
+// it exists to create.
+//
+// The row is always the two LOWEST tiers, and 19 measured why that has to stay
+// true: raising it makes the game EASIER, because big fruit sit close to the
+// MAX_TIER vanish and evaporate against the pile. See constants.js.
 function riseRowTiers() {
+  const lo = 0;
+  const hi = 1;
   const phase = Math.random() < 0.5 ? 0 : 1;
   const out = [];
-  for (let c = 0; c < COLS; c++) out.push((c + phase) % 2 === 0 ? 0 : 1);
+  for (let c = 0; c < COLS; c++) out.push((c + phase) % 2 === 0 ? lo : hi);
   return out;
 }
 
