@@ -41,8 +41,46 @@ export function createEffects() {
     // see spawnGhost and js/render.js's drawGhosts.
     ghosts: [],
     bombRings: [], // { x, y, t, duration } -- 7.3
-    levelCallout: null, // { level, t } -- 15, see triggerLevelUp
+    levelCallout: null, // the callout SHOWING now -- 15, see triggerLevelUp
+    // 21.1: the ones waiting their turn. Until now this was a single slot and
+    // every trigger simply assigned to it, so two callouts in one event batch
+    // meant one of them was never seen. Proven, not theorised: a drop that
+    // both levels up and crosses a milestone puts levelUp and unlocked in the
+    // SAME batch, main.js drains them in order, and the unlock silently ate
+    // the level-up. Level 3 makes it worse -- the floor starts, the first
+    // stone arrives and the level-up fires together.
+    calloutQueue: [], // [{ callout, priority }]
   };
+}
+
+// 21.1: how a callout gets in line.
+//
+// The shake is deliberately NOT queued -- it stays on the event that caused
+// it, because a jolt arriving 1.2s after the board moved would read as a
+// glitch. Only the words wait.
+//
+// Priority decides who loses when several arrive at once. A level-up happens
+// again next level; an unlock or a teach happens ONCE in the player's life,
+// so those must never be the ones dropped.
+const CALLOUT_PRIORITY = { level: 0, unlock: 1, teach: 2 };
+const CALLOUT_QUEUE_MAX = 2; // pending, so at most 3 x 1.2s of callout in a row
+
+function pushCallout(fx, callout) {
+  const entry = { callout, priority: CALLOUT_PRIORITY[callout.kind] ?? 0 };
+  if (!fx.levelCallout) {
+    fx.levelCallout = callout;
+    return;
+  }
+  fx.calloutQueue.push(entry);
+  while (fx.calloutQueue.length > CALLOUT_QUEUE_MAX) {
+    // Drop the least important thing waiting -- which may be the one just
+    // added. Last index among equals, so the oldest of a tie survives.
+    let worst = 0;
+    for (let i = 1; i < fx.calloutQueue.length; i++) {
+      if (fx.calloutQueue[i].priority <= fx.calloutQueue[worst].priority) worst = i;
+    }
+    fx.calloutQueue.splice(worst, 1);
+  }
 }
 
 // 15: the level-up reaction's two purely-visual pieces (the sound and the
@@ -66,7 +104,7 @@ export function triggerLevelUp(fx, level) {
     fx.shake.duration = SHAKE_DURATION_SEC;
     fx.shake.magnitude = SHAKE_MAX_PX;
   }
-  fx.levelCallout = { level, t: 0 };
+  pushCallout(fx, { kind: 'level', level, t: 0 });
 }
 
 // 20: the same callout, carrying an unlock instead of a level. Reuses the
@@ -80,7 +118,22 @@ export function triggerUnlock(fx, name) {
     fx.shake.duration = SHAKE_DURATION_SEC;
     fx.shake.magnitude = SHAKE_MAX_PX;
   }
-  fx.levelCallout = { unlock: name, t: 0 };
+  pushCallout(fx, { kind: 'unlock', unlock: name, t: 0 });
+}
+
+// 21.1: the same envelope again, carrying a rule the player has to be told
+// once. There is no shake and no sound of its own: a teach rides an event
+// that already made a noise (a floor rise, a stone cracking), and stacking a
+// third cue on top of those reads as chaos rather than emphasis.
+//
+// Why this exists at all: 21 put a grey slab on the board that never merges
+// and breaks only when a merge lands beside it. The second half of that rule
+// is not discoverable by accident inside a five-minute session, and an
+// unexplained thing appearing on the board is the exact complaint this phase
+// was built to fix. Reviewed and reported as a gap in the phase 21 diff, and
+// it was right.
+export function triggerTeach(fx, title, line) {
+  pushCallout(fx, { kind: 'teach', teach: title, line, t: 0 });
 }
 
 // Expanding ring on a bomb detonation -- the loudest action in the game
@@ -290,7 +343,10 @@ export function updateEffects(fx, dt) {
 
   if (fx.levelCallout) {
     fx.levelCallout.t += dt;
-    if (fx.levelCallout.t >= LEVEL_CALLOUT_SEC) fx.levelCallout = null;
+    if (fx.levelCallout.t >= LEVEL_CALLOUT_SEC) {
+      const next = fx.calloutQueue.shift();
+      fx.levelCallout = next ? next.callout : null;
+    }
   }
 }
 
@@ -362,4 +418,5 @@ export function clearEffects(fx) {
   fx.shake.magnitude = 0;
   fx.bombRings.length = 0;
   fx.levelCallout = null;
+  fx.calloutQueue.length = 0;
 }

@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.07-25';
+export const BUILD_VERSION = '2026.09.07-26';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -323,10 +323,12 @@ export const FLOOR_RISE_TIGHTEN_PER_LEVEL = 1;  // drops shaved off the cadence 
 // Merges CAN outpace the floor. What was actually ending runs was the losing
 // rule, not the arithmetic.
 //
-// So the run ends because the ceiling deadline (see "The ceiling countdown"
-// below, and raiseFloor in js/physics.js) says it does, and this cadence's job
-// is to make that deadline arrive fast. The two are load-bearing together;
-// neither is on its own.
+// So the run ends because the losing rule in raiseFloor (js/physics.js) says
+// it does -- the board fills and there is nowhere left to put a fruit -- and
+// this cadence's job is to make that arrive fast. The two are load-bearing
+// together; neither is on its own. Since 21 the cadence has a partner, too:
+// stonesPerRise controls how much of each rise CANNOT be merged away, which
+// is what stopped a faster floor from simply delivering more ammunition.
 //
 // REJECTED, and recorded here so nobody spends the afternoon re-deriving it:
 // escalating the TIER of the rising row -- pushing up peaches instead of
@@ -360,17 +362,25 @@ export const FLOOR_RISE_SLOW_LEVELS = 5;      // levels per extra drop shaved, p
 export const CASCADE_STEP_SEC = 0.07;   // delay per link in the chain
 export const CASCADE_STEP_MAX = 6;      // ...stop stretching after this many, so a long chain never drags
 
-// --- The ceiling countdown (20) ---------------------------------------------
-// The rule that ends a run. Reported from real play, and correct: "it should
+// --- Rejected endings, and where the real one lives (17-21) -----------------
+// THE RULE ITSELF IS NOT DESCRIBED HERE. It lives in exactly one place --
+// raiseFloor in js/physics.js -- and every other file points at it. That is
+// deliberate, and it is a repair: this section, its twin in js/state.js, and a
+// header in physics.js all used to restate the losing rule in their own words,
+// so when 21 changed it for the third time all three went quietly false at
+// once. One statement, many pointers. Do not restate it here again.
+//
+// What IS worth keeping here is the graveyard, so nobody spends an afternoon
+// re-deriving a dead end. Reported from real play, and correct: "it should
 // not end with one line full... why should the game end and yet there are
 // still spaces to play?" Until 20 a rise that met ANY full column ended the
 // run on the spot -- one capped column beside five empty ones was a loss with
 // fifty of sixty cells free -- while an ordinary drop only ended the run when
 // every single cell was taken. Two rules, disagreeing by fifty cells, and the
-// harsh one was the one in charge because the floor rises constantly.
+// harsh one was in charge because the floor rises constantly.
 //
-// TWO fixes were built, measured, and thrown away before this one. Recording
-// them because both look obviously right and both are wrong:
+// THREE fixes were built, measured, and thrown away. All three look obviously
+// right:
 //
 //   1. "Full columns sit the rise out." Fair, and it destroys the game: every
 //      capped column stops taking fruit, so the incoming pressure FALLS as the
@@ -380,23 +390,19 @@ export const CASCADE_STEP_MAX = 6;      // ...stop stretching after this many, s
 //      have room." Holds the pressure constant on paper. Worse in practice:
 //      34 of 40 runs never ended, because concentrating small fruit into few
 //      columns feeds cascades faster than it fills the board.
+//   3. "A capped column gets one floor cadence of grace, then the run ends."
+//      This one SHIPPED, as 20, and it was still wrong: it ended runs that
+//      had moves left, and it needed a line of text on the results screen
+//      explaining the loss -- which is the tell. A rule you have to explain
+//      is not the rule.
 //
-// Both failures taught the same thing, and it corrected a claim 19 made in
-// print: the run was never terminal "by arithmetic". Merges CAN outpace the
-// floor. What actually ended runs was the one-full-column rule. So 20 keeps a
-// terminating rule and makes it fair instead of pretending it isn't needed:
-// a column at the ceiling gets a deadline you can SEE, and the deadline is
-// exactly one floor cadence -- you have until the floor pushes again. Clear
-// the column and the deadline is gone; that is the "fight the floor" the
-// design is built on. It cannot be done forever, because the floor keeps
-// pushing every other column while you do it, and because the cadence itself
-// shrinks to a single drop late in a run.
+// Failures 1 and 2 also corrected a claim 19 made in print: the run was never
+// terminal "by arithmetic". Merges CAN outpace the floor. What actually ended
+// runs was the one-full-column rule, not the numbers.
 //
-// There is deliberately no constant here. Tying the grace to the cadence
-// scales it for free (16 drops early, 5 by level 14, 1 at the end), keeps one
-// clock in the game instead of two, and means the next-rise meter the player
-// has been reading all run IS the countdown -- see raiseFloor in
-// js/physics.js.
+// 21 replaced all of it with a rule that needs no explanation, and the
+// crushing that makes it work is the reason failure 1's measurement does not
+// apply to it. Read raiseFloor.
 
 // --- Armed power-up expiry (18) --------------------------------------------
 // The Remover and Swap are "aiming mode" tools: while one is armed, every
@@ -812,6 +818,35 @@ export const STONE_CRACK_POINTS = 12; // a small score for clearing one -- it is
 export const STONE_START_LEVEL = 3;      // matches FLOOR_RISE_START_LEVEL -- no floor, no stones
 export const STONE_START_COUNT = 1;      // ...and it starts as a single stone in the row
 export const STONE_LEVELS_PER_EXTRA = 4; // one more stone every this many levels
+
+// 21.1: what the player is told about the stone, once each, ever.
+//
+// The gap this fills was found in review of the 21 diff: the stone shipped
+// with no first-encounter teaching of any kind. Half its rule teaches itself
+// -- drop a fruit on a stone, nothing happens, lesson learned. The other half
+// does not. "Merging BESIDE a stone breaks it" is not something a player
+// stumbles into reliably inside a five-minute Playables session, and without
+// it the stone is pure difficulty with no counterplay, which is the exact
+// thing docs/phase21brief.md claims it is not.
+//
+// So the first line teaches the half that is NOT self-evident, and the second
+// confirms it the first time the player actually does it -- because a rule you
+// are told is information, and a rule you are told and then see work is a play
+// you know you can make again.
+//
+// Deliberately not a tutorial: no arrows, no modal, no step-by-step, nothing
+// that stops the run. It is the callout envelope the game already uses for a
+// level-up and an unlock, which the player has been reading since level 2.
+export const STONE_TEACH_TITLE = 'STONE';
+export const STONE_TEACH_LINE = 'merge beside it to break it';
+export const CRACK_TEACH_TITLE = 'BROKEN';
+export const CRACK_TEACH_LINE = 'keep merging beside them';
+
+// Keys under which the two above are recorded as shown, in the save. Strings
+// rather than booleans so a future teach moment costs one constant and no
+// change to the save shape at all.
+export const TEACH_STONE = 'stone';
+export const TEACH_STONE_CRACK = 'stoneCrack';
 
 // --- Rainbow -------------------------------------------------------------
 // Sentinel stored in the grid alongside normal tier indices. Chosen well past

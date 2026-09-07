@@ -6,10 +6,12 @@ import {
   MAX_TIER, WATERMELON_CLEAR_BONUS, TIERS, BOARD_WIDTH,
   RAINBOW_TIER, RAINBOW_DEF, BOMB_RADIUS, BOMB_TIER, BOMB_DEF, BOMB_FUSE_DROPS,
   SPAWN_MIN_REACTION_SEC, STONE_TIER, STONE_DEF, STONE_CRACK_POINTS,
+  STONE_TEACH_TITLE, STONE_TEACH_LINE, CRACK_TEACH_TITLE, CRACK_TEACH_LINE,
+  TEACH_STONE, TEACH_STONE_CRACK,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
-  floorRiseCadenceDrops, expireArmedPowerUp, stonesPerRise,
+  floorRiseCadenceDrops, expireArmedPowerUp, stonesPerRise, maybeTeach,
 } from './state.js';
 
 // Tier lookup that also answers for the rainbow and bomb sentinels, so
@@ -177,6 +179,12 @@ export function spawnFruit(state) {
     state.dropsSinceFloorRise += 1;
     if (state.dropsSinceFloorRise >= cadence) {
       state.dropsSinceFloorRise = 0;
+      // 21: this branch is currently UNREACHABLE -- raiseFloor returns
+      // toppedOut: false unconditionally, because a rise can no longer end a
+      // run. Kept, not deleted: it is the guard that catches a future change
+      // to that contract instead of silently ignoring it. Do not read it as
+      // evidence that a rise can still block a drop; the ending is the
+      // spawnColumnFor check a few lines below.
       if (raiseFloor(state).toppedOut) {
         return { blocked: true };
       }
@@ -420,6 +428,11 @@ function crackStonesAround(state, row, col) {
       type: 'stoneCracked', row: r, col: c,
       x: c * CELL + CELL / 2, y: r * CELL + CELL / 2,
     });
+    // 21.1: the second half of teaching the stone -- the player has just done
+    // the thing, so name it while their hand is still on it. Gated in
+    // maybeTeach, so this is once in the life of the save no matter how many
+    // stones break here.
+    maybeTeach(state, TEACH_STONE_CRACK, CRACK_TEACH_TITLE, CRACK_TEACH_LINE);
   }
 }
 
@@ -641,22 +654,6 @@ export function swapFruits(state, r1, c1, r2, c2) {
   return true;
 }
 
-// 17: the rising floor -- push a new bottom row up across the whole board,
-// lifting every column by one. This is the pressure that makes a run END:
-// speed and the spawn pool both stop escalating (see constants.js), so without
-// it a careful merger holds a low board forever and "how long can you last"
-// has no answer.
-//
-// Returns { toppedOut } rather than setting a flag, and 20 changed what that
-// means: it is now true only for a COMPLETELY full board, or for a board that
-// was left with a column at the ceiling through a whole cadence. It used to be
-// true the moment any single column was full. Checked before any mutation, so
-// a topping-out rise leaves the board untouched for endRun to read.
-//
-// No active fruit exists when this runs: it is called only from spawnFruit,
-// after the previous fruit has locked and before the next is placed, so there
-// is never a mid-air fruit whose coordinates a shift would invalidate.
-
 // How many columns are currently at the ceiling. Since 21 a capped column is
 // not a losing condition -- its top fruit is crushed off on the next rise --
 // so this feeds the board's danger reading only. Kept as one function so
@@ -671,6 +668,21 @@ export function topColumnCount(state) {
 export function raiseFloor(state) {
   const rows = state.grid.length;
 
+  // 17: the rising floor -- push a new bottom row up across the whole board,
+  // lifting every column by one. This is the pressure that makes a run END:
+  // speed and the spawn pool both stop escalating (see constants.js), so
+  // without it a careful merger holds a low board forever and "how long can
+  // you last" has no answer.
+  //
+  // No active fruit exists when this runs: it is called only from spawnFruit,
+  // after the previous fruit has locked and before the next is placed, so
+  // there is never a mid-air fruit whose coordinates a shift would invalidate.
+  //
+  // (Until 21 this paragraph lived in a header ABOVE topColumnCount, left
+  // stranded there when the function moved, still describing 20's toppedOut
+  // contract long after 21 removed it. Kept here, inside the function it
+  // documents, where it cannot be orphaned again.)
+  //
   // 21: THE ending, rebuilt on one rule -- the run is over when there is no
   // move left to play, and that means every cell taken. Nothing else ends it.
   //
@@ -728,6 +740,22 @@ export function raiseFloor(state) {
   // sets off a cascade. main.js turns it into sound/haptics -- physics stays
   // free of audio/DOM, as everywhere else here.
   state.events.push({ type: 'floorRose' });
+
+  // 21.1: the first stone the player ever sees arrives HERE, and it arrives
+  // inside the first floor rise they ever see -- STONE_START_LEVEL and
+  // FLOOR_RISE_START_LEVEL are both 3. That was checked and deliberately left
+  // alone: the stone IS what the floor is made of, so delaying it would teach
+  // "the floor brings fruit" for a few levels and then break that rule. Two
+  // new things at once is the lesser evil, and the callout queue in
+  // js/effects.js is what keeps this from colliding with the level-3 level-up
+  // callout -- it lines up behind it instead of overwriting it.
+  //
+  // Pushed BEFORE resolveMerges on purpose. If this rise both delivers a
+  // stone and cracks one in the same frame, the player must read STONE before
+  // BROKEN or the second callout explains something they were never told.
+  if (newRow.includes(STONE_TIER)) {
+    maybeTeach(state, TEACH_STONE, STONE_TEACH_TITLE, STONE_TEACH_LINE);
+  }
 
   // The new fruit can sit under a matching fruit, or a settling cascade can
   // bring matches together -- resolve them. This is the seam that lets a good

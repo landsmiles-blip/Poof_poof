@@ -62,8 +62,11 @@ export function floorRiseCadenceDrops(level) {
   // 20 CORRECTION: 19 claimed here that this end state was unsurvivable by
   // arithmetic and that the run therefore terminated on its own. It is not,
   // and it does not -- see FLOOR_RISE_DROPS_HARD_MIN in constants.js for the
-  // measurement that disproved it. What ends a run is the ceiling deadline in
-  // raiseFloor; this cadence is what makes that deadline arrive quickly.
+  // measurement that disproved it. What ends a run is the losing rule in
+  // raiseFloor (js/physics.js), which is the ONE place it is written down;
+  // this cadence is what makes that arrive quickly. 21 note: this line used
+  // to name 20's ceiling deadline, and went false the day that rule was
+  // replaced. Point at raiseFloor, never restate it.
   const levelsPastFloor = level - stageOneFloorLevel();
   const slowShave = Math.floor(levelsPastFloor / FLOOR_RISE_SLOW_LEVELS);
   return Math.max(FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_DROPS_MIN - slowShave);
@@ -177,6 +180,10 @@ export function createInitialState(save) {
     // save written before 21, which is exactly right -- none of those were
     // ever announced, so the menu owes them all. See markAnnounced.
     announcedUnlocks: Array.isArray(blob.announcedUnlocks) ? [...blob.announcedUnlocks] : [],
+    // 21.1: keys of the one-time rules the player has already been shown.
+    // Absent in any save written before 21.1, which is correct -- nobody has
+    // been taught anything yet, so everyone gets it once. See maybeTeach.
+    taught: Array.isArray(blob.taught) ? [...blob.taught] : [],
     starterGranted: freshGrant || storedStarterGranted === true
       || !(Object.values(storedInventory).every((n) => !n) && storedHigh === 0),
     // Only true when this boot just granted the starter Remover -- nothing
@@ -319,6 +326,7 @@ export function toSaveBlob(state, { musicOn, sfxOn, hapticsOn }) {
     inventory: state.inventory,
     starterGranted: state.starterGranted === true,
     announcedUnlocks: Array.isArray(state.announcedUnlocks) ? state.announcedUnlocks : [],
+    taught: Array.isArray(state.taught) ? state.taught : [],
     unlockedSkins: state.unlockedSkins,
     selectedSkin: state.selectedSkin,
     musicOn,
@@ -760,6 +768,31 @@ function markAnnounced(state, id) {
 export function pendingUnlocks(state) {
   const seen = Array.isArray(state.announcedUnlocks) ? state.announcedUnlocks : [];
   return UNLOCKABLES.filter((i) => state.highScore >= i.unlockScore && !seen.includes(i.id));
+}
+
+// 21.1: tell the player a rule, once in the life of the save.
+//
+// Modelled directly on markAnnounced above, and for the same reason: the game
+// has to record what it has SHOWN, not only what is true, or it has no way to
+// know what it still owes. That lesson cost a real player five silent
+// unlocks; it is not being relearned for the stone.
+//
+// Returns true if the teach fired, so callers can be tested without reading
+// the event list. Pushes through state.events like every other reaction, so
+// physics stays free of anything to do with drawing.
+export function maybeTeach(state, key, title, line) {
+  if (!Array.isArray(state.taught)) state.taught = [];
+  if (state.taught.includes(key)) return false;
+  state.taught.push(key);
+  state.dirty = true;
+  state.events.push({ type: 'teach', key, title, line });
+  return true;
+}
+
+// Whether a one-time rule has already been shown. Exported for tests and for
+// anything that needs to branch on it without firing it.
+export function hasTaught(state, key) {
+  return Array.isArray(state.taught) && state.taught.includes(key);
 }
 
 // Called once the menu has shown them, so the debt is paid exactly once.

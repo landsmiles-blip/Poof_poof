@@ -28,7 +28,7 @@ import {
 } from './music.js';
 import {
   createEffects, updateEffects, spawnMergeEffects, clearEffects, vibrate,
-  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp, triggerUnlock, spawnGhost,
+  hydrate as hydrateHaptics, isHapticsOn, spawnBombRing, triggerLevelUp, triggerUnlock, triggerTeach, spawnGhost,
 } from './effects.js';
 import { themeForScore, applyPageTheme, relativeLuminance } from './theme.js';
 import { initBackground, setBoardRect, drawBackground } from './background.js';
@@ -416,6 +416,14 @@ function drainEvents() {
         playCelebration();
         vibrate(HAPTIC_LEVEL_UP_MS);
         triggerUnlock(fx, event.name);
+      } else if (event.type === 'teach') {
+        // 21.1: a one-time rule, shown in the same envelope as a level-up and
+        // an unlock. NO sound and NO haptic of its own, unlike those two --
+        // every teach rides an event that already fired a cue (a floor rise,
+        // a stone cracking), and a third noise on top of that reads as a
+        // glitch rather than as emphasis. state.js's maybeTeach has already
+        // decided this is the first and only time.
+        triggerTeach(fx, event.title, event.line);
       } else if (event.type === 'floorRose') {
         // 17: the rising floor just pushed a new row up. The board visibly
         // jumping is the main telegraph; this adds a light tick + haptic so a

@@ -230,3 +230,144 @@ The agent proxy blocks `www.youtube.com`, so the SDK 404s here and
    - Does the chain now read as one connected thing?
 5. If the stone is wrong for your game, say so. It is one mechanic and I can
    take it out — but the ending goes back to a deadline if I do.
+
+---
+
+# 21.1 — what the review caught, and what playing it caught
+
+Phase 21 was reviewed before it was pushed and came back with two findings.
+Both were right. Fixing them turned up three more that nobody had reported.
+
+## 1. The stone was never explained (the review's find)
+
+The brief above says: *"a wall you can't touch isn't a game, so a stone cracks
+when a merge happens right beside it."* That is only true if the player finds
+the crack rule. **Nothing in the diff told them.**
+
+Half the rule teaches itself — drop a fruit on a stone, nothing happens, lesson
+learned. The other half does not. "Merge *beside* it" is not something anyone
+reliably stumbles into inside a five-minute session, and without it the stone
+is pure difficulty with no counterplay — the exact thing the brief claims it
+is not. It would also have been the third unexplained thing on a board in a
+release whose whole point was removing the other two.
+
+So the game now says it, twice, once each in the life of a save:
+
+```
+        STONE                        BROKEN
+merge beside it to break it    keep merging beside them
+```
+
+The first teaches the half that is not self-evident, on the first rise that
+carries a stone. The second confirms it the first time the player actually
+does it — because a rule you are told is information, and a rule you are told
+and then watch work is a play you know you can make again.
+
+**Not a tutorial.** No arrows, no modal, no step-by-step, nothing that stops
+the run. It is the same callout the game has used for a level-up since level 2
+and for an unlock since Phase 20.
+
+**Recorded in the save, like the unlocks.** A returning player is not
+re-taught. A save written before this build has been taught nothing, so it
+still gets both — the same reasoning `pendingUnlocks` uses, and the same lesson
+that cost a real player five silent unlocks in Phase 20, applied *before* it
+bit a second time.
+
+### The thing I checked and deliberately left alone
+
+`STONE_START_LEVEL` and `FLOOR_RISE_START_LEVEL` are both 3, so **the first
+stone a player ever sees arrives inside the first floor rise they ever see** —
+two new things in one instant. Tempting to delay the stone. Wrong: the stone
+*is* what the floor is made of, so delaying it teaches "the floor brings fruit"
+and then breaks that rule a few levels later. The collision is handled where it
+belongs, in the callout queue below.
+
+## 2. A stale comment — and there were four, not one
+
+The review found the header above `topColumnCount` in `js/physics.js` still
+describing Phase 20's `toppedOut` contract, and named it correctly as the
+defect class section 4b of the Phase 20 brief made a point of sweeping.
+
+Sweeping properly found three more, all describing the ceiling deadline that
+Phase 21 deleted:
+
+| where | said |
+|---|---|
+| `physics.js`, above `topColumnCount` | 20's `toppedOut` contract — an orphaned header left behind when `raiseFloor` moved |
+| `constants.js:326` | "the run ends because the ceiling deadline says it does" |
+| `constants.js:363` | a whole section titled **The ceiling countdown (20)**, documenting a deleted mechanic |
+| `state.js:65` | "What ends a run is the ceiling deadline in `raiseFloor`" — now false in the load-bearing direction |
+
+All four sat inside the blocks Phase 20 wrote to *correct* Phase 19's wrong
+claim. The code kept a careful permanent record of the last mistake and went
+quietly stale about what was currently true. The rule changed three times in
+five phases; the comments changed twice.
+
+**The repair is structural, not editorial.** These went stale because three
+files each restated the losing rule in their own words. Now the rule is written
+down in exactly one place — `raiseFloor` — and everything else points at it.
+The graveyard of rejected designs stays in `constants.js`, where it is still
+worth reading, with the shipped-and-withdrawn Phase 20 deadline added to it as
+rejection number three.
+
+Also from that sweep, not a comment: `physics.js` still branches on
+`raiseFloor(state).toppedOut`, which can never be true. Kept — it is the guard
+that would catch a future change to that contract instead of ignoring it — but
+now labelled unreachable, so the next reader does not conclude a rise can still
+block a drop.
+
+## 3. Two callouts in one batch: one of them was never seen
+
+Found while adding the teach, and **it predates this release.**
+`fx.levelCallout` was a single slot that every trigger simply assigned to.
+Proven by execution, not by reading: a drop that both levels up and crosses a
+milestone puts `levelUp` and `unlocked` in the *same* event batch, `main.js`
+drains them in order, and the unlock silently ate the level-up.
+
+Level 3 is where this would have bitten hardest — the floor starts, the first
+stone arrives and a level-up fires, all at once.
+
+There is a queue now. Callouts wait their turn instead of overwriting each
+other, capped at three in a row so it can never become a parade, and when
+something has to be dropped it is **a level-up** — that happens again next
+level, where an unlock or a lesson happens once in the life of a save.
+
+## 4. The chip pulse was painting over the level readout
+
+Caught by playing, not by reading. Phase 21 added the pulse ring that
+announces a power-up at its chip. The ring grows *outward* from the slot —
+upward as well as down — and the power bar was drawn after the HUD text, so
+the ring painted straight through the bottom third of `LV 5`.
+
+Fixed by draw **order**: the level readout is now painted last, so any
+decoration on a chip, at any size, passes under it. That is the version that
+cannot rot — the Phase 15 comment claiming the label "clears `POWER_SLOT.y`
+with room to spare" was true when written and was silently invalidated by a
+later phase, which is the same failure as section 2 with a visible symptom.
+
+## Verification
+
+- `node unit-tests/run.js` → **34/34** (33 before, +`teach.js`), stable over
+  three consecutive runs
+- `node tools/build-playables.js` → 19 files, **0.384 MiB** (limit 30 MiB)
+- `node tools/check-prohibited-apis.js` → clean
+- `node tests/verify-features.js` → **51 checks, 0 not wired**; peak heap
+  4.21 MiB, time-to-interactive 364 ms
+- `TRIALS=200 node tools/tune-floor-rise.mjs` → careless median **156** drops,
+  careful **184**, **0 of 400** failed to end — unchanged from Phase 21's
+  151/184, which is the point: a teach moment must not touch the curve
+- A full played run to game over through the real input path, invariants
+  checked after **every** drop: 188 drops, level 19, 11,484 points, **zero**
+  violations, **zero** console errors, both lessons fired at drop 33
+- Screenshots: both callouts in real play, and the `LV 15` readout with the
+  chip pulse pinned at its widest — before and after the draw-order fix
+
+## Definition of done (your side)
+
+1. Apply, `node unit-tests/run.js` — expect **34/34**.
+2. Build + prohibited-API scan + feature suite.
+3. Play from a **cleared save**, or the lessons will already be marked shown.
+   Around drop 30 you should get `STONE`, and within a few drops of your first
+   merge beside one, `BROKEN`.
+4. The question the brief above asked you is now actually answerable: does the
+   stone read as "not fruit" *and* as something you can do something about?

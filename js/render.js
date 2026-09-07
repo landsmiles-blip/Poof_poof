@@ -161,14 +161,6 @@ function drawHUD(ctx, state, width, theme) {
   ctx.fillText(`Best ${state.highScore}`, 10, 32);
   ctx.fillText(`Coins ${state.coins}`, 10, 50);
 
-  // 15: the persistent level readout. (10, 66) at 12px was checked against a
-  // 390x844 screenshot and clears POWER_SLOT.y (80) with room to spare -- see
-  // docs/phase15brief.md for the check. Left column, under Coins, same
-  // left-aligned block the three stats above it already are.
-  ctx.font = `bold 12px ${FONT_FAMILY}`;
-  ctx.fillStyle = theme.text;
-  ctx.fillText(`LV ${levelFor(state.spawnIndex)}`, 10, 66);
-
   drawComboMeter(ctx, state, width, theme);
 
   // 20: the label sits BESIDE the preview, not above it. It used to be
@@ -188,6 +180,27 @@ function drawHUD(ctx, state, width, theme) {
   drawPowerBar(ctx, state, theme);
   drawMergeMeter(ctx, state, theme);
   drawPauseButton(ctx, theme);
+
+  // 15: the persistent level readout. (10, 66) at 12px was checked against a
+  // 390x844 screenshot and cleared POWER_SLOT.y (80) with room to spare.
+  //
+  // 21.1: it does not any more, and this is why the call moved down here.
+  // Phase 21 added the chip pulse -- a ring that grows OUTWARD from a slot,
+  // above POWER_SLOT.y as well as below it -- and 21 drew the power bar after
+  // this text, so the ring painted straight through the bottom third of
+  // "LV 5". Caught in a real played run, not by reading: see the two frames
+  // in the 21.1 verification, one with the pulse and one without.
+  //
+  // Fixed by draw ORDER rather than by moving the text or shrinking the ring,
+  // because that is the version that cannot rot: any future decoration on a
+  // chip, at any size, now passes under the HUD's own labels instead of over
+  // them. The clearance comment above was true when it was written and was
+  // silently invalidated by a later phase -- exactly the failure this release
+  // spent its first half sweeping out of the comments.
+  ctx.textAlign = 'left';
+  ctx.font = `bold 12px ${FONT_FAMILY}`;
+  ctx.fillStyle = theme.text;
+  ctx.fillText(`LV ${levelFor(state.spawnIndex)}`, 10, 66);
 }
 
 // Combo readout fades as the window runs out, so the player can see the streak
@@ -600,7 +613,24 @@ function drawLevelCallout(ctx, fx, width, height, theme) {
   ctx.shadowColor = 'rgba(0,0,0,0.4)';
   ctx.shadowBlur = 12;
   ctx.fillStyle = theme.accent;
-  if (callout.unlock) {
+  if (callout.teach) {
+    // 21.1: a rule the player is told once. Same two-line envelope as an
+    // unlock, because it is the same beat -- something just entered your
+    // game -- and reusing it means the player already knows to read it.
+    ctx.font = `40px ${DISPLAY_FONT_FAMILY}`;
+    ctx.fillText(callout.teach, 0, -16);
+    ctx.fillStyle = theme.text;
+    // The body line is a sentence, not a name, so it is the one thing here
+    // that can outgrow the board. Measured and shrunk to fit rather than
+    // trusted: a rule the player cannot read is not a rule they were told.
+    ctx.font = `bold 17px ${FONT_FAMILY}`;
+    let size = 17;
+    while (size > 11 && ctx.measureText(callout.line).width > width - 24) {
+      size -= 1;
+      ctx.font = `bold ${size}px ${FONT_FAMILY}`;
+    }
+    ctx.fillText(callout.line, 0, 22);
+  } else if (callout.unlock) {
     // 20: an unlock says what it is, and says UNLOCKED loudest -- the word is
     // the reward, the name is the detail. Two lines rather than one long one
     // so it still fits a 384-wide board at a size that reads as a moment.
