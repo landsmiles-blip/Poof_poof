@@ -88,3 +88,10 @@ npm warn exec The following package was not found and will be installed: serve@1
  HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
  HTTP  9/14/2026 6:11:15 AM ::1 GET /icons/icon-512-maskable.png
  HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+
+ INFO  Gracefully shutting down. Please wait...
+npm notice
+npm notice New minor version of npm available! 11.11.0 -> 11.19.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.19.1
+npm notice To update run: npm install -g npm@11.19.1
+npm notice
