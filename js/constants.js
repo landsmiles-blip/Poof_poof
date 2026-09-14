@@ -719,10 +719,10 @@ export const MERGE_METER_MAX = 75;
 // See unit-tests/theme-contrast.js, which samples the whole 0-10000 score
 // range and asserts text-on-board contrast never drops below 4.5:1.
 export const THEMES = [
-  { boardTop: '#FFF6EA', boardBot: '#FFE4CB', page: '#2A1A12', text: '#4A3122', grid: 'rgba(74,49,34,0.08)', accent: '#F2960B' },
-  { boardTop: '#FFF1F4', boardBot: '#FFD6E2', page: '#3A1526', text: '#5A2438', grid: 'rgba(90,36,56,0.09)', accent: '#E8368F' },
-  { boardTop: '#F3EEFF', boardBot: '#D9CCFF', page: '#1E1338', text: '#3A2A6B', grid: 'rgba(58,42,107,0.10)', accent: '#7C4DFF' },
-  { boardTop: '#1E2947', boardBot: '#0C1122', page: '#05080F', text: '#D2E6FF', grid: 'rgba(210,230,255,0.12)', accent: '#00D9C0' },
+  { boardTop: '#2D2438', boardBot: '#1A1625', page: '#0F0C1B', text: '#F8F4FF', grid: 'rgba(248,244,255,0.08)', accent: '#FF0066' },
+  { boardTop: '#3A1526', boardBot: '#200A13', page: '#14050A', text: '#FFD6E2', grid: 'rgba(255,214,226,0.09)', accent: '#00E5FF' },
+  { boardTop: '#1E1338', boardBot: '#0D0720', page: '#080414', text: '#D9CCFF', grid: 'rgba(217,204,255,0.10)', accent: '#00FF9D' },
+  { boardTop: '#0C1122', boardBot: '#040712', page: '#020308', text: '#D2E6FF', grid: 'rgba(210,230,255,0.12)', accent: '#FF3366' },
 ];
 
 // Fixed, non-interpolated -- appears nowhere except the danger state (6.2).

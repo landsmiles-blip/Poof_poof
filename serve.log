@@ -1,0 +1,90 @@
+npm warn exec The following package was not found and will be installed: serve@14.2.6
+ INFO  Accepting connections at http://localhost:3000
+ HTTP  9/14/2026 6:11:13 AM ::1 GET /
+ HTTP  9/14/2026 6:11:13 AM ::1 Returned 200 in 353 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /css/style.css
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 6 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/main.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 4 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/constants.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 6 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/state.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/platform.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/physics.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/render.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/input.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 8 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 14 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 13 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 11 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/shop.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 16 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/audio.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 12 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 5 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/music.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 3 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/effects.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/theme.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/background.js
+ HTTP  9/14/2026 6:11:14 AM ::1 GET /js/icons.js
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 6 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 6 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 7 ms
+ HTTP  9/14/2026 6:11:14 AM ::1 Returned 200 in 6 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /assets/fonts/titanone-latin.woff2
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /assets/fonts/fredoka-latin.woff2
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 5 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 4 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /service-worker.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 2 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /index.html
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 301 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /manifest.json
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 2 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /index
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 301 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /css/style.css
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/constants.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 0 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/platform.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/audio.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 2 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/music.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/effects.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 2 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 3 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/theme.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 0 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/icons.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/background.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/state.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/physics.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/render.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/input.js
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 0 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/shop.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /js/main.js
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /assets/fonts/fredoka-latin.woff2
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /assets/fonts/titanone-latin.woff2
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /icons/icon-192.png
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /icons/icon-512.png
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 2 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms
+ HTTP  9/14/2026 6:11:15 AM ::1 GET /icons/icon-512-maskable.png
+ HTTP  9/14/2026 6:11:15 AM ::1 Returned 200 in 1 ms

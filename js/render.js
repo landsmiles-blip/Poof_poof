@@ -68,10 +68,34 @@ function bombFuseFractionFor(state, tierIndex) {
   return Math.max(0, Math.min(1, state.bombFuseDrops / BOMB_FUSE_DROPS));
 }
 
+// Arsenal Announcement state tracking
+let lastArmedState = {
+  bomb: false,
+  remover: false,
+  swap: false
+};
+let activeAnnouncement = null; // { text: string, t: number }
+const ANNOUNCEMENT_DURATION_SEC = 1.5;
+
 export function drawFrame(ctx, state, fx) {
   const width = BOARD_WIDTH;
   const height = canvasHeightFor(state);
   const theme = themeForScore(state.score);
+
+  // Check for newly armed power-ups
+  const isBombArmed = Boolean(state.bombInPlay);
+  const isRemoverArmed = Boolean(state.removerArmed);
+  const isSwapArmed = Boolean(state.swapArmed);
+
+  if (isBombArmed && !lastArmedState.bomb) {
+    activeAnnouncement = { text: "BOMB LOADED", t: performance.now() };
+  } else if (isRemoverArmed && !lastArmedState.remover) {
+    activeAnnouncement = { text: "REMOVER ACTIVE", t: performance.now() };
+  } else if (isSwapArmed && !lastArmedState.swap) {
+    activeAnnouncement = { text: "SWAP READY", t: performance.now() };
+  }
+
+  lastArmedState = { bomb: isBombArmed, remover: isRemoverArmed, swap: isSwapArmed };
 
   // Re-established every frame rather than once at startup. Assigning
   // canvas.width/height resets the 2D context including its transform, and
@@ -132,6 +156,55 @@ export function drawFrame(ctx, state, fx) {
     // not inside drawBoard.
     drawLevelCallout(ctx, fx, COLS * CELL, boardHeightFor(state), theme);
   }
+  ctx.restore();
+
+  // Draw the "IN THE ARSENAL" power-up announcement if active
+  if (activeAnnouncement) {
+    const now = performance.now();
+    const elapsedSec = (now - activeAnnouncement.t) / 1000;
+    if (elapsedSec > ANNOUNCEMENT_DURATION_SEC) {
+      activeAnnouncement = null;
+    } else {
+      drawArsenalAnnouncement(ctx, activeAnnouncement.text, elapsedSec, width, height, theme);
+    }
+  }
+}
+
+function drawArsenalAnnouncement(ctx, text, elapsedSec, width, height, theme) {
+  // Envelope: quick pop in (0.15s), hold, quick fade out (0.2s)
+  let p = 1;
+  if (elapsedSec < 0.15) {
+    p = elapsedSec / 0.15;
+  } else if (elapsedSec > ANNOUNCEMENT_DURATION_SEC - 0.2) {
+    p = Math.max(0, (ANNOUNCEMENT_DURATION_SEC - elapsedSec) / 0.2);
+  }
+
+  // Alpha fade and scale pop
+  const alpha = p * 0.95;
+  const scale = 1 + (1 - p) * 0.3; // scale down from 1.3 to 1 during pop-in
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(width / 2, HUD_HEIGHT + CELL * 3); // Centered over upper board
+  ctx.scale(scale, scale);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold 32px ${DISPLAY_FONT_FAMILY}`;
+
+  // Heavy drop shadow for pop
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = 15;
+  ctx.shadowOffsetY = 4;
+
+  // Inner stroke to create a bold, sticker-like text effect
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = theme.boardBot;
+  ctx.strokeText(text, 0, 0);
+
+  ctx.fillStyle = theme.accent;
+  ctx.fillText(text, 0, 0);
+
   ctx.restore();
 }
 
@@ -773,35 +846,71 @@ function highlightAngleFor(tierIndex) {
 // existing outline + highlight dot -- three cheap lines that turn a flat
 // disc into something reading as a lit, rounded object (7.2 depth pass).
 // Shared between drawCircle and drawFlower's centre disc.
+// Helper to boost or drop brightness for gradient stops
+function adjustColor(hex, factor) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+
+  const to = (c) => Math.max(0, Math.min(255, Math.round(c * factor))).toString(16).padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
 function drawRim(ctx, x, y, radius) {
+  // Inner rim light to simulate glossy subsurface scattering edge
   ctx.beginPath();
-  ctx.arc(x, y, radius * 0.9, -Math.PI * 0.85, -Math.PI * 0.15);
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-  ctx.lineWidth = Math.max(1, radius * 0.12);
+  ctx.arc(x, y, radius * 0.93, -Math.PI * 0.9, -Math.PI * 0.1);
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = Math.max(1.5, radius * 0.14);
+  ctx.lineCap = 'round';
   ctx.stroke();
 
+  // Bottom core shadow rim
   ctx.beginPath();
-  ctx.arc(x, y, radius * 0.9, Math.PI * 0.15, Math.PI * 0.85);
-  ctx.strokeStyle = 'rgba(0,0,0,0.16)';
-  ctx.lineWidth = Math.max(1, radius * 0.1);
+  ctx.arc(x, y, radius * 0.92, Math.PI * 0.1, Math.PI * 0.9);
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = Math.max(1.5, radius * 0.12);
+  ctx.lineCap = 'round';
   ctx.stroke();
 }
 
 function drawCircle(ctx, x, y, radius, fill, tierIndex) {
+  const angle = highlightAngleFor(tierIndex);
+
+  // Volumetric radial gradient for organic depth
+  const grad = ctx.createRadialGradient(
+    x + Math.cos(angle) * radius * 0.3,
+    y + Math.sin(angle) * radius * 0.3,
+    radius * 0.1,
+    x, y, radius
+  );
+  grad.addColorStop(0, adjustColor(fill, 1.4)); // Specular glow
+  grad.addColorStop(0.6, fill); // Core color
+  grad.addColorStop(1, adjustColor(fill, 0.4)); // Deep edge shadow
+
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
+  ctx.fillStyle = grad;
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+
+  // Sharp outer edge
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
   ctx.stroke();
 
   drawRim(ctx, x, y, radius);
 
-  const angle = highlightAngleFor(tierIndex);
+  // Sharp specular highlight reflection
   ctx.beginPath();
-  ctx.arc(x + Math.cos(angle) * radius * 0.5, y + Math.sin(angle) * radius * 0.5, radius * 0.28, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.ellipse(
+    x + Math.cos(angle) * radius * 0.5,
+    y + Math.sin(angle) * radius * 0.5,
+    radius * 0.35, radius * 0.15,
+    angle + Math.PI / 4,
+    0, Math.PI * 2
+  );
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.fill();
 }
 
@@ -814,11 +923,24 @@ const PETAL_COUNT = 6;
 function drawFlower(ctx, x, y, radius, fill, tierIndex) {
   const petalR = radius * 0.42;
   const ringR = radius - petalR;
+  const hAngle = highlightAngleFor(tierIndex);
 
   ctx.save();
-  ctx.fillStyle = fill;
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+
+  // Volumetric radial gradient for petals
+  const petalGrad = ctx.createRadialGradient(
+    x + Math.cos(hAngle) * radius * 0.3,
+    y + Math.sin(hAngle) * radius * 0.3,
+    radius * 0.1,
+    x, y, radius
+  );
+  petalGrad.addColorStop(0, adjustColor(fill, 1.3));
+  petalGrad.addColorStop(0.6, fill);
+  petalGrad.addColorStop(1, adjustColor(fill, 0.5));
+
+  ctx.fillStyle = petalGrad;
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
 
   ctx.beginPath();
   for (let i = 0; i < PETAL_COUNT; i++) {
@@ -831,19 +953,33 @@ function drawFlower(ctx, x, y, radius, fill, tierIndex) {
   ctx.fill();
   ctx.stroke();
 
+  // Center bud gradient
+  const budGrad = ctx.createRadialGradient(
+    x + Math.cos(hAngle) * radius * 0.1,
+    y + Math.sin(hAngle) * radius * 0.1,
+    radius * 0.05,
+    x, y, radius * 0.42
+  );
+  budGrad.addColorStop(0, adjustColor(fill, 1.5));
+  budGrad.addColorStop(1, adjustColor(fill, 0.4));
+
   ctx.beginPath();
   ctx.arc(x, y, radius * 0.42, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.fillStyle = 'rgba(0,0,0,0.13)';
+  ctx.fillStyle = budGrad;
   ctx.fill();
 
   drawRim(ctx, x, y, radius * 0.42);
 
-  const hAngle = highlightAngleFor(tierIndex);
+  // Center bud specular highlight
   ctx.beginPath();
-  ctx.arc(x + Math.cos(hAngle) * radius * 0.42, y + Math.sin(hAngle) * radius * 0.42, radius * 0.2, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.ellipse(
+    x + Math.cos(hAngle) * radius * 0.2,
+    y + Math.sin(hAngle) * radius * 0.2,
+    radius * 0.15, radius * 0.08,
+    hAngle + Math.PI / 4,
+    0, Math.PI * 2
+  );
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
   ctx.fill();
   ctx.restore();
 }
@@ -857,8 +993,18 @@ function drawRainbow(ctx, x, y, radius) {
   // from the wall clock, same as drawDangerState's pulse -- purely cosmetic,
   // so it needs no dt threaded through render.js's call chain.
   const spin = (Date.now() / 1000) * RAINBOW_SPIN_RADIANS_PER_SEC;
+
   ctx.save();
   RAINBOW_WEDGES.forEach((c, i) => {
+    // Add volumetric gradient to each wedge
+    const wedgeGrad = ctx.createRadialGradient(
+      x, y, 0,
+      x, y, radius
+    );
+    wedgeGrad.addColorStop(0, adjustColor(c, 1.4));
+    wedgeGrad.addColorStop(0.7, c);
+    wedgeGrad.addColorStop(1, adjustColor(c, 0.5));
+
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.arc(
@@ -867,21 +1013,39 @@ function drawRainbow(ctx, x, y, radius) {
       spin + ((i + 1) / RAINBOW_WEDGES.length) * Math.PI * 2 - Math.PI / 2
     );
     ctx.closePath();
-    ctx.fillStyle = c;
+    ctx.fillStyle = wedgeGrad;
     ctx.fill();
   });
   ctx.restore();
 
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-  ctx.stroke();
+  // Glassy outer shell overlay
+  const shellGrad = ctx.createRadialGradient(
+    x - radius * 0.3, y - radius * 0.3, radius * 0.1,
+    x, y, radius
+  );
+  shellGrad.addColorStop(0, 'rgba(255,255,255,0.3)');
+  shellGrad.addColorStop(0.5, 'rgba(255,255,255,0)');
+  shellGrad.addColorStop(1, 'rgba(0,0,0,0.4)');
 
   ctx.beginPath();
-  ctx.arc(x, y, radius * 0.34, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = shellGrad;
   ctx.fill();
+
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+  ctx.stroke();
+
+  drawRim(ctx, x, y, radius);
+
+  // Center white pupil
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.34, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.shadowColor = 'rgba(255,255,255,0.8)';
+  ctx.shadowBlur = 10;
+  ctx.fill();
+  ctx.shadowBlur = 0; // reset
 }
 
 // 8.4: "the most visible object in the game while it is live" -- a round
@@ -891,17 +1055,33 @@ function drawRainbow(ctx, x, y, radius) {
 function drawBombShape(ctx, x, y, radius, fuseFraction) {
   ctx.save();
 
-  ctx.beginPath();
-  ctx.arc(x, y + radius * 0.12, radius * 0.82, 0, Math.PI * 2);
-  ctx.fillStyle = BOMB_DEF.color;
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-  ctx.stroke();
+  // Volumetric metallic body
+  const bodyGrad = ctx.createRadialGradient(
+    x - radius * 0.2, y - radius * 0.1, radius * 0.1,
+    x, y, radius
+  );
+  bodyGrad.addColorStop(0, adjustColor(BOMB_DEF.color, 1.8));
+  bodyGrad.addColorStop(0.4, BOMB_DEF.color);
+  bodyGrad.addColorStop(1, adjustColor(BOMB_DEF.color, 0.3));
 
   ctx.beginPath();
-  ctx.arc(x - radius * 0.28, y - radius * 0.06, radius * 0.22, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.arc(x, y + radius * 0.12, radius * 0.82, 0, Math.PI * 2);
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.stroke();
+
+  // Specular reflection
+  ctx.beginPath();
+  ctx.ellipse(
+    x - radius * 0.25,
+    y - radius * 0.05,
+    radius * 0.25, radius * 0.1,
+    -Math.PI / 6,
+    0, Math.PI * 2
+  );
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
   ctx.fill();
 
   // Fuse: shrinks toward the bomb as the drops run out, not a fixed length
