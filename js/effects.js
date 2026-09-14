@@ -277,13 +277,28 @@ export function shakeOffset(fx) {
 export function drawParticles(ctx, fx) {
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
+  // Additive blending for kinetic energy pops
+  ctx.globalCompositeOperation = 'lighter';
+
   for (const p of fx.particles) {
-    const life = 1 - p.t / p.life;
-    ctx.globalAlpha = Math.max(0, life);
-    ctx.fillStyle = p.color;
+    const life = Math.max(0, 1 - p.t / p.life);
+
+    // Trail-based rendering using velocity vector for kinetic motion blur
+    const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+    const trailLength = Math.max(p.size, speed * 0.04 * life);
+    const angle = Math.atan2(p.vy, p.vx);
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(angle);
+    ctx.globalAlpha = life;
+
+    // Juice droplet shape (tear drop / trail)
     ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * life), 0, Math.PI * 2);
+    ctx.ellipse(0, 0, trailLength, p.size * 0.5 * (0.4 + 0.6 * life), 0, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
     ctx.fill();
+    ctx.restore();
   }
   ctx.restore();
 }

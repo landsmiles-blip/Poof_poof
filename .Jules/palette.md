@@ -1,0 +1,3 @@
+## 2024-05-18 - Hyper-Realism vs Code Isolation
+**Learning:** Adding volumetric texturing and deep-contrast color palettes via standard Canvas 2D API (`ctx.createRadialGradient`, additive blending) dramatically improves user engagement visual hooks without needing WebGL or external assets. However, creating multi-layered rendering requires isolating particle rendering updates from physics ticks to maintain game stability.
+**Action:** When implementing visual overhauls, decouple visual states (like power-up announcements or particle motion blur) from the core state machine, observing properties directly in the render loop frame rather than mutating core state tracking.

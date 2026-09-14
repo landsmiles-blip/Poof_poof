@@ -34,11 +34,11 @@
    The values here are the milestone-0 palette and the fallback if JS hasn't
    applied a theme yet. */
 :root {
-  --page-bg: #2A1A12;
-  --board-top: #FFF6EA;
-  --board-bottom: #FFE4CB;
-  --text-color: #4A3122;
-  --accent: #F2960B;
+  --page-bg: #0F0C1B;
+  --board-top: #2D2438;
+  --board-bottom: #1A1625;
+  --text-color: #F8F4FF;
+  --accent: #FF0066;
   --danger: #FF3B30;
 }
 
