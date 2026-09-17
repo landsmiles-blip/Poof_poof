@@ -134,53 +134,265 @@ function blip(freq, { duration = 0.16, type = 'sine', gain = 0.35, bendTo = null
   }
 }
 
-// Merge pop. Pitch climbs with tier so bigger merges read as more significant:
-// one semitone per tier over the 9-tier range.
+// Merge pop: tactile percussive attack snap + warm resonant harmonic body.
+// Pitch climbs musically across tiers with sparkling overtones at higher tiers for dopamine escalation.
 export function playMerge(tier) {
-  const t = Math.max(0, Math.min(MAX_TIER, tier));
-  const base = 320;
-  const freq = base * Math.pow(2, t / 12);
-  blip(freq, { duration: 0.14, type: 'sine', gain: 0.3, bendTo: freq * 0.6 });
+  if (!ready()) return;
+  try {
+    const t = Math.max(0, Math.min(MAX_TIER, tier));
+    const now = ctx.currentTime;
+
+    // Musical scale across tiers 0..8: C4 (261.6Hz) to G5 (784Hz)
+    const scale = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99];
+    const baseFreq = scale[t] || (261.63 * Math.pow(2, t / 8));
+
+    // 1. Tactile percussive "snap" transient (punchy physical contact)
+    const snap = ctx.createOscillator();
+    const snapEnv = ctx.createGain();
+    snap.type = 'sine';
+    snap.frequency.setValueAtTime(baseFreq * 2.8, now);
+    snap.frequency.exponentialRampToValueAtTime(baseFreq * 0.9, now + 0.022);
+
+    snapEnv.gain.setValueAtTime(0.0001, now);
+    snapEnv.gain.linearRampToValueAtTime(0.24, now + 0.003);
+    snapEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+
+    snap.connect(snapEnv);
+    snapEnv.connect(masterGain);
+    snap.start(now);
+    snap.stop(now + 0.04);
+
+    // 2. Warm resonant harmonic body (juicy acoustic pop)
+    const body = ctx.createOscillator();
+    const bodyEnv = ctx.createGain();
+    body.type = 'sine';
+    body.frequency.setValueAtTime(baseFreq * 1.15, now);
+    body.frequency.exponentialRampToValueAtTime(baseFreq, now + 0.038);
+    body.frequency.exponentialRampToValueAtTime(baseFreq * 0.75, now + 0.13);
+
+    bodyEnv.gain.setValueAtTime(0.0001, now);
+    bodyEnv.gain.linearRampToValueAtTime(0.32, now + 0.005);
+    bodyEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+
+    body.connect(bodyEnv);
+    bodyEnv.connect(masterGain);
+    body.start(now);
+    body.stop(now + 0.16);
+
+    // 3. For mid-to-high tiers (t >= 3), add a sparkling harmonic shimmer overtone
+    if (t >= 3) {
+      const chime = ctx.createOscillator();
+      const chimeEnv = ctx.createGain();
+      chime.type = 'triangle';
+      chime.frequency.setValueAtTime(baseFreq * 2, now + 0.01);
+      chimeEnv.gain.setValueAtTime(0.0001, now + 0.01);
+      chimeEnv.gain.linearRampToValueAtTime(0.14 + (t / MAX_TIER) * 0.10, now + 0.018);
+      chimeEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.16 + (t / MAX_TIER) * 0.08);
+
+      chime.connect(chimeEnv);
+      chimeEnv.connect(masterGain);
+      chime.start(now + 0.01);
+      chime.stop(now + 0.26);
+    }
+  } catch {
+    // A failed sound must never interrupt gameplay.
+  }
 }
 
-// Reaching the top tier: a short rising arpeggio instead of a single pop.
+// Reaching the top tier (Watermelon): climbing major arpeggio with shimmering chime harmonics.
 export function playCelebration() {
-  const root = 523.25; // C5
-  const intervals = [0, 4, 7, 12, 16]; // major triad climbing into the octave
-  intervals.forEach((semitones, i) => {
-    blip(root * Math.pow(2, semitones / 12), {
-      duration: 0.3,
-      type: 'triangle',
-      gain: 0.26,
-      delay: i * 0.075,
+  if (!ready()) return;
+  try {
+    const root = 523.25; // C5
+    const intervals = [0, 4, 7, 12, 16]; // C5, E5, G5, C6, E6
+    const now = ctx.currentTime;
+    intervals.forEach((semitones, i) => {
+      const freq = root * Math.pow(2, semitones / 12);
+      const t = now + i * 0.075;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.linearRampToValueAtTime(0.24, t + 0.01);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      osc.connect(env);
+      env.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + 0.38);
+
+      const chime = ctx.createOscillator();
+      const chimeEnv = ctx.createGain();
+      chime.type = 'triangle';
+      chime.frequency.setValueAtTime(freq * 2, t);
+      chimeEnv.gain.setValueAtTime(0.0001, t);
+      chimeEnv.gain.linearRampToValueAtTime(0.12, t + 0.012);
+      chimeEnv.gain.exponentialRampToValueAtTime(0.0001, t + 0.30);
+      chime.connect(chimeEnv);
+      chimeEnv.connect(masterGain);
+      chime.start(t);
+      chime.stop(t + 0.35);
     });
-  });
+  } catch {
+    // Safe no-op
+  }
 }
 
-// Small confirmation tick for shop purchases / skin selection.
+// Deeply satisfying organic wooden-marimba / juicy bubble-pop acoustic tap for UI clicks/taps.
 export function playUiTick() {
-  blip(660, { duration: 0.08, type: 'square', gain: 0.12, bendTo: 880 });
+  if (!ready()) return;
+  try {
+    const now = ctx.currentTime;
+
+    // 1. Organic wooden/marimba tap body: sine pitch drop from 940Hz to 430Hz
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(940, now);
+    osc.frequency.exponentialRampToValueAtTime(430, now + 0.038);
+
+    env.gain.setValueAtTime(0.0001, now);
+    env.gain.linearRampToValueAtTime(0.28, now + 0.003);
+    env.gain.exponentialRampToValueAtTime(0.0001, now + 0.052);
+
+    osc.connect(env);
+    env.connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.06);
+
+    // 2. Subtle high-frequency acoustic snap transient (adds tactile "pop" click)
+    const click = ctx.createOscillator();
+    const clickEnv = ctx.createGain();
+    click.type = 'triangle';
+    click.frequency.setValueAtTime(1800, now);
+    click.frequency.exponentialRampToValueAtTime(700, now + 0.015);
+
+    clickEnv.gain.setValueAtTime(0.0001, now);
+    clickEnv.gain.linearRampToValueAtTime(0.12, now + 0.001);
+    clickEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.018);
+
+    click.connect(clickEnv);
+    clickEnv.connect(masterGain);
+    click.start(now);
+    click.stop(now + 0.025);
+  } catch {
+    // Audio errors must never throw
+  }
 }
 
-// A charge earned mid-run (8.1): a short, bright two-note rise. Distinct from
-// playCelebration's five-note arpeggio -- that one means "you reached the top
-// tier"; this one means "a free charge just became available".
+// A charge earned mid-run: bright, sparkling two-note rising chime (E5 -> A5)
+// with sweet harmonic resonance.
 export function playChargeEarned() {
-  const root = 660;
-  blip(root, { duration: 0.1, type: 'triangle', gain: 0.22 });
-  blip(root * Math.pow(2, 7 / 12), { duration: 0.16, type: 'triangle', gain: 0.24, delay: 0.07 });
+  if (!ready()) return;
+  try {
+    const now = ctx.currentTime;
+    const cues = [
+      { freq: 659.25, delay: 0, dur: 0.16, gain: 0.22 },      // E5
+      { freq: 880.00, delay: 0.08, dur: 0.26, gain: 0.26 },   // A5
+    ];
+    for (const c of cues) {
+      const t = now + c.delay;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(c.freq, t);
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.linearRampToValueAtTime(c.gain, t + 0.01);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + c.dur);
+      osc.connect(env);
+      env.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + c.dur + 0.03);
+
+      // Sparkling octave harmonic
+      const spark = ctx.createOscillator();
+      const sparkEnv = ctx.createGain();
+      spark.type = 'triangle';
+      spark.frequency.setValueAtTime(c.freq * 2, t);
+      sparkEnv.gain.setValueAtTime(0.0001, t);
+      sparkEnv.gain.linearRampToValueAtTime(c.gain * 0.45, t + 0.012);
+      sparkEnv.gain.exponentialRampToValueAtTime(0.0001, t + c.dur * 0.85);
+      spark.connect(sparkEnv);
+      sparkEnv.connect(masterGain);
+      spark.start(t);
+      spark.stop(t + c.dur + 0.03);
+    }
+  } catch {
+    // Safe no-op
+  }
 }
 
-// A level-up (15): a short rising two-note cue, pitched above playChargeEarned
-// so the two reward sounds never get mistaken for each other -- a charge is a
-// tool becoming available, a level is the game itself moving up a notch.
+// A level-up: triumphant, sparkling ascending chime (G5 -> C6 -> E6)
+// with brilliant overtone resonance.
 export function playLevelUp() {
-  const root = 880;
-  blip(root, { duration: 0.11, type: 'triangle', gain: 0.24 });
-  blip(root * Math.pow(2, 7 / 12), { duration: 0.18, type: 'triangle', gain: 0.26, delay: 0.08 });
+  if (!ready()) return;
+  try {
+    const now = ctx.currentTime;
+    const cues = [
+      { freq: 783.99, delay: 0, dur: 0.16, gain: 0.22 },     // G5
+      { freq: 1046.50, delay: 0.08, dur: 0.20, gain: 0.24 }, // C6
+      { freq: 1318.51, delay: 0.16, dur: 0.32, gain: 0.28 }, // E6
+    ];
+    for (const c of cues) {
+      const t = now + c.delay;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(c.freq, t);
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.linearRampToValueAtTime(c.gain, t + 0.008);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + c.dur);
+      osc.connect(env);
+      env.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + c.dur + 0.03);
+
+      // Shimmer overtone
+      const chime = ctx.createOscillator();
+      const chimeEnv = ctx.createGain();
+      chime.type = 'triangle';
+      chime.frequency.setValueAtTime(c.freq * 1.5, t);
+      chimeEnv.gain.setValueAtTime(0.0001, t);
+      chimeEnv.gain.linearRampToValueAtTime(c.gain * 0.40, t + 0.012);
+      chimeEnv.gain.exponentialRampToValueAtTime(0.0001, t + c.dur * 0.85);
+      chime.connect(chimeEnv);
+      chimeEnv.connect(masterGain);
+      chime.start(t);
+      chime.stop(t + c.dur + 0.03);
+    }
+  } catch {
+    // Safe no-op
+  }
 }
 
-// Descending tone when a run ends.
+// Gentle, comforting descending triad when a run ends: soft warm bell tones (G3 -> E3 -> C3)
+// that invite the player to jump right back in with "Play Again".
 export function playGameOver() {
-  blip(330, { duration: 0.5, type: 'triangle', gain: 0.28, bendTo: 110 });
+  if (!ready()) return;
+  try {
+    const now = ctx.currentTime;
+    const notes = [
+      { freq: 196.00, delay: 0, dur: 0.38, gain: 0.22 },      // G3
+      { freq: 164.81, delay: 0.16, dur: 0.42, gain: 0.22 },   // E3
+      { freq: 130.81, delay: 0.34, dur: 0.65, gain: 0.26 },   // C3
+    ];
+    for (const n of notes) {
+      const t = now + n.delay;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(n.freq, t);
+
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.linearRampToValueAtTime(n.gain, t + 0.025);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + n.dur);
+
+      osc.connect(env);
+      env.connect(masterGain);
+      osc.start(t);
+      osc.stop(t + n.dur + 0.05);
+    }
+  } catch {
+    // Audio errors must never throw
+  }
 }

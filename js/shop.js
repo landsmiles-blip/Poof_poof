@@ -151,15 +151,33 @@ export function renderMenu(root, state, onStart) {
 }
 
 export function renderGameOver(root, state, onPlayAgain) {
+  const isNewBest = state.score >= state.highScore && state.score > 0;
+  const bestBadge = isNewBest
+    ? `<span class="score-pill new-best">NEW BEST!</span>`
+    : `<span class="score-pill">Best: <strong>${state.highScore}</strong></span>`;
+
+  const chainBadge = state.bestCascade >= 2
+    ? `<div class="stat-pill"><span class="stat-pill-label">Chain</span><strong class="stat-pill-val">${state.bestCascade}</strong></div>`
+    : '';
+
   renderShopScreen(root, state, {
     title: 'Game Over',
     lead: `
-      <p class="stat">Level reached: <strong>${levelFor(state.spawnIndex)}</strong></p>
-      <p class="stat">Score: <strong>${state.score}</strong></p>
-      <p class="stat">Best: <strong>${state.highScore}</strong></p>
-      ${state.bestCascade >= 2 ? `<p class="stat">Biggest chain: <strong>${state.bestCascade} merges from one drop</strong></p>` : ''}
-      <p class="stat">Coins earned: <strong>+${state.lastRunCoinsEarned}</strong></p>
-      <p class="stat">Coin balance: <strong>${state.coins}</strong></p>
+      <div class="gameover-hero">
+        <div class="hero-score-val">${state.score}</div>
+        <div class="hero-score-sub">${bestBadge}</div>
+      </div>
+      <div class="gameover-stats-grid">
+        <div class="stat-pill">
+          <span class="stat-pill-label">Level</span>
+          <strong class="stat-pill-val">${levelFor(state.spawnIndex)}</strong>
+        </div>
+        <div class="stat-pill coin-gain">
+          <span class="stat-pill-label">Coins</span>
+          <strong class="stat-pill-val">+${state.lastRunCoinsEarned}</strong>
+        </div>
+        ${chainBadge}
+      </div>
       ${renderUnlockBanner(state)}
       ${nextUnlockHTML(state)}
     `,

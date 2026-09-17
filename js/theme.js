@@ -168,13 +168,24 @@ export function applyPageTheme(theme) {
   const key = `${theme.page}|${theme.boardTop}|${theme.boardBot}|${theme.text}|${theme.accent}`;
   if (key === lastApplied) return; // avoid touching style every frame
   lastApplied = key;
+  if (typeof document === 'undefined') return;
   const root = document.documentElement;
+  if (!root) return;
   root.style.setProperty('--page-bg', theme.page);
   root.style.setProperty('--board-top', theme.boardTop);
   root.style.setProperty('--board-bottom', theme.boardBot);
   root.style.setProperty('--text-color', theme.text);
   root.style.setProperty('--accent', theme.accent);
   root.style.setProperty('--danger', theme.danger);
+
+  const isDark = relativeLuminance(theme.boardTop) < 0.5;
+  root.style.setProperty('--is-dark', isDark ? '1' : '0');
+  root.style.setProperty('--card-border', isDark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.65)');
+  root.style.setProperty('--card-shadow', isDark ? 'rgba(0, 0, 0, 0.50)' : 'rgba(0, 0, 0, 0.22)');
+  root.style.setProperty('--card-highlight', isDark ? 'rgba(255, 255, 255, 0.20)' : 'rgba(255, 255, 255, 0.85)');
+
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.setAttribute('content', theme.page);
 }
 
 export function resetPageTheme() {

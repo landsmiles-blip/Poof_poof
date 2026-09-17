@@ -14,10 +14,6 @@ import {
 import {
   tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor, levelFor, floorRiseCadenceDrops,
 } from './state.js';
-// The ONE function that decides where the next fruit arrives (js/physics.js).
-// Imported rather than reimplemented here on purpose -- see its own comment.
-// It is a pure read of stackHeight and mutates nothing, so this file's "no
-// state mutation" rule is intact.
 import { spawnColumnFor } from './physics.js';
 import {
   squashScaleAt, shakeOffset, drawParticles, drawBombRings, isReducedMotion,
@@ -35,8 +31,6 @@ export function canvasHeightFor(state) {
 
 // ctx.roundRect throws on Safari below 16, taking the whole HUD frame down
 // with it -- compatibility with the iOS YouTube app's WebView is a MUST.
-// Falls back to a square-cornered rect: the radius here is cosmetic, so a
-// plain rect is a correct degradation, not a broken one.
 export function roundRectPath(ctx, x, y, w, h, r) {
   if (typeof ctx.roundRect === 'function') {
     ctx.roundRect(x, y, w, h, r);
@@ -45,10 +39,6 @@ export function roundRectPath(ctx, x, y, w, h, r) {
   }
 }
 
-// 8.4 LANDMINE point 3: the bomb needs a tierDef entry too, same as the
-// rainbow sentinel already did, so anything asking for a radius (spawn
-// position, drag clamping, the HUD "Next" preview) works without special-
-// casing the caller.
 function tierDefFor(tierIndex) {
   if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF;
   if (tierIndex === BOMB_TIER) return BOMB_DEF;
@@ -56,62 +46,36 @@ function tierDefFor(tierIndex) {
   return TIERS[tierIndex];
 }
 
-// 14.1: was the SECOND copy of this lookup. It was the correct one -- it
-// handled both sentinels, where main.js's colorForTier handled only the
-// rainbow -- which is precisely why nobody noticed the other was wrong. Both
-// now call state.js's tierColor.
 function colorFor(state, tierIndex) {
   return tierColor(state, tierIndex);
 }
 
-// How much fuse is left, 1 (fresh/still falling) down to 0 (about to
-// detonate) -- drives drawBombShape's shrinking fuse. Only meaningful for a
-// bomb; every other tier ignores the value entirely.
 function bombFuseFractionFor(state, tierIndex) {
   if (tierIndex !== BOMB_TIER) return 1;
   if (state.bombFuseDrops === null || state.bombFuseDrops === undefined) return 1;
   return Math.max(0, Math.min(1, state.bombFuseDrops / BOMB_FUSE_DROPS));
 }
 
+const ZERO_OFFSET = { x: 0, y: 0 };
+
 export function drawFrame(ctx, state, fx) {
   const width = BOARD_WIDTH;
   const height = canvasHeightFor(state);
   const theme = themeForScore(state.score);
 
-  // Re-established every frame rather than once at startup. Assigning
-  // canvas.width/height resets the 2D context including its transform, and
-  // js/main.js reassigns it whenever the viewport, DPR, or Extra Row's row
-  // count changes -- a one-time ctx.scale() would be silently wiped mid-run
-  // and drop the game to a fraction of its size in the corner.
-  //
-  // Derived from the actual backing-store width rather than a fixed constant,
-  // so js/main.js's responsive, DPR-aware sizing is reflected automatically:
-  // this file does not need to know how big the canvas currently is on
-  // screen, only how many backing pixels exist per logical pixel.
   const scale = ctx.canvas.width / width || 1;
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
   ctx.clearRect(0, 0, width, height);
-  // 7.2: a vertical gradient replacing the old flat fill, spanning the whole
-  // canvas (HUD and board share one continuous background, as they always
-  // have) so the day-to-night palette actually reads as depth rather than a
-  // single flat colour that merely changes hue at each milestone.
+
+  // Continuous vertical gradient spanning HUD and board
   const boardGradient = ctx.createLinearGradient(0, 0, 0, height);
   boardGradient.addColorStop(0, theme.boardTop);
   boardGradient.addColorStop(1, theme.boardBot);
   ctx.fillStyle = boardGradient;
   ctx.fillRect(0, 0, width, height);
 
-  // 11.2: without an edge, that one gradient runs unbroken from the score
-  // readout to the floor and the play area does not read as a panel. A soft
-  // shadow cast onto the board just below the HUD, and a 1px highlight along
-  // the seam itself -- see docs/phase11brief.md section 4.1.
-  //
-  // The brief also specified a tint across the HUD strip, dropped entirely
-  // (see the "Board panel (11.2)" comment in constants.js and
-  // unit-tests/theme-contrast.js): the crossing segment's text/board
-  // contrast has only a 0.06 margin over the 4.5:1 floor with NO tint, and
-  // any tint can only shrink that margin further, never grow it.
+  // Defined panel seam under HUD
   const hudIsLight = relativeLuminance(theme.boardTop) >= 0.5;
   const hudShadow = ctx.createLinearGradient(0, HUD_HEIGHT, 0, HUD_HEIGHT + 10);
   hudShadow.addColorStop(0, 'rgba(0,0,0,0.10)');
@@ -124,25 +88,17 @@ export function drawFrame(ctx, state, fx) {
 
   drawHUD(ctx, state, width, theme);
 
-  // Shake displaces only the board, never the HUD -- shaking the score readout
-  // makes it unreadable and reads as a glitch rather than as impact.
-  const offset = fx ? shakeOffset(fx) : { x: 0, y: 0 };
+  const offset = fx ? shakeOffset(fx) : ZERO_OFFSET;
   ctx.save();
   ctx.translate(offset.x, offset.y);
   drawBoard(ctx, state, fx, theme);
   if (fx) {
     drawParticles(ctx, fx);
     drawBombRings(ctx, fx);
-    // 15: last of all -- see drawLevelCallout's own comment on why this is
-    // not inside drawBoard.
     drawLevelCallout(ctx, fx, COLS * CELL, boardHeightFor(state), theme);
   }
   ctx.restore();
 
-  // 19/20: the two marks the player reads the run by, drawn LAST and OUTSIDE
-  // the shake -- see RISE_METER_HEIGHT in constants.js for the clipping this
-  // avoids. Steady on purpose as well as intact: a countdown that jitters is
-  // a countdown you stop reading.
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
   drawCeilingLine(ctx, state, state.grid.length, theme);
@@ -159,16 +115,49 @@ function drawHUD(ctx, state, width, theme) {
 
   ctx.font = `13px ${FONT_FAMILY}`;
   ctx.fillText(`Best ${state.highScore}`, 10, 32);
-  ctx.fillText(`Coins ${state.coins}`, 10, 50);
+
+  // In-Game HUD Gold Coin Counter Graphic
+  const coinX = 18;
+  const coinY = 56;
+  const coinR = 7;
+
+  ctx.save();
+  // 3D beveled gold disc with radial gradient
+  const coinGrad = ctx.createRadialGradient(coinX - 2, coinY - 2, 1, coinX, coinY, coinR);
+  coinGrad.addColorStop(0, '#fff3a8');
+  coinGrad.addColorStop(0.35, '#ffd13b');
+  coinGrad.addColorStop(0.85, '#d98200');
+  coinGrad.addColorStop(1, '#9e5a00');
+
+  ctx.beginPath();
+  ctx.arc(coinX, coinY, coinR, 0, Math.PI * 2);
+  ctx.fillStyle = coinGrad;
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#8a4c00';
+  ctx.stroke();
+
+  // Inner embossed gold ring
+  ctx.beginPath();
+  ctx.arc(coinX, coinY, coinR * 0.65, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.50)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  // Specular glint
+  ctx.beginPath();
+  ctx.ellipse(coinX - 2, coinY - 2.2, 2.2, 1.1, -0.4, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+  ctx.fill();
+  ctx.restore();
+
+  // Crisp coin count text
+  ctx.fillStyle = theme.text;
+  ctx.font = `bold 13px ${FONT_FAMILY}`;
+  ctx.fillText(`${state.coins}`, 30, 50);
 
   drawComboMeter(ctx, state, width, theme);
 
-  // 20: the label sits BESIDE the preview, not above it. It used to be
-  // right-aligned at width-10 on the same axis as the fruit, whose centre is
-  // at width-30 -- so every fruit with a radius over 19px (seven of the nine
-  // tiers, five of the seven that can actually be next) was drawn straight
-  // over the word. Ending it at width-64 clears the widest fruit's left edge
-  // with room to spare, and it still reads as belonging to the preview.
   ctx.textAlign = 'right';
   ctx.font = `13px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
@@ -181,30 +170,12 @@ function drawHUD(ctx, state, width, theme) {
   drawMergeMeter(ctx, state, theme);
   drawPauseButton(ctx, theme);
 
-  // 15: the persistent level readout. (10, 66) at 12px was checked against a
-  // 390x844 screenshot and cleared POWER_SLOT.y (80) with room to spare.
-  //
-  // 21.1: it does not any more, and this is why the call moved down here.
-  // Phase 21 added the chip pulse -- a ring that grows OUTWARD from a slot,
-  // above POWER_SLOT.y as well as below it -- and 21 drew the power bar after
-  // this text, so the ring painted straight through the bottom third of
-  // "LV 5". Caught in a real played run, not by reading: see the two frames
-  // in the 21.1 verification, one with the pulse and one without.
-  //
-  // Fixed by draw ORDER rather than by moving the text or shrinking the ring,
-  // because that is the version that cannot rot: any future decoration on a
-  // chip, at any size, now passes under the HUD's own labels instead of over
-  // them. The clearance comment above was true when it was written and was
-  // silently invalidated by a later phase -- exactly the failure this release
-  // spent its first half sweeping out of the comments.
   ctx.textAlign = 'left';
   ctx.font = `bold 12px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
   ctx.fillText(`LV ${levelFor(state.spawnIndex)}`, 10, 66);
 }
 
-// Combo readout fades as the window runs out, so the player can see the streak
-// is about to lapse.
 function drawComboMeter(ctx, state, width, theme) {
   if (state.comboCount < 2) return;
 
@@ -219,11 +190,6 @@ function drawComboMeter(ctx, state, width, theme) {
   ctx.font = `bold 19px ${FONT_FAMILY}`;
   ctx.fillText(`${multiplier.toFixed(2)}x`, width / 2, 26);
 
-  // 20: the multiplier stops growing at COMBO_MAX_MULTIPLIER, and the streak
-  // does not lapse between drops, so the raw count climbs all run -- 187 was
-  // measured in a single ordinary run. Presenting an ever-growing number that
-  // has been worth exactly the same since merge nine is telling the player
-  // something false. Past the cap it says MAX, which is the truth.
   ctx.font = `bold 11px ${FONT_FAMILY}`;
   ctx.fillStyle = theme.text;
   ctx.globalAlpha = (0.35 + 0.65 * remaining) * 0.75;
@@ -241,9 +207,6 @@ function drawComboMeter(ctx, state, width, theme) {
   ctx.restore();
 }
 
-// One slot per tappable power-up, always drawn -- locked and empty ones appear
-// greyed so the player can see what exists and what unlocks it. Slot order comes
-// straight from hudPowerUps() so render and input hit-testing cannot drift.
 function drawPowerBar(ctx, state, theme) {
   const items = hudPowerUps();
   items.forEach((item, i) => {
@@ -252,15 +215,9 @@ function drawPowerBar(ctx, state, theme) {
     const cy = rect.y + rect.h / 2;
 
     const locked = state.highScore < (item.unlockScore || 0);
-    // 8.1: purchased stock and this run's earned charges both count toward
-    // what the chip shows and whether it reads as usable -- see
-    // canUsePowerUp/consumeCharge in state.js for the same combined figure.
     const earned = state.earnedCharges[item.id] || 0;
     const count = (state.inventory[item.id] || 0) + earned;
     const usable = !locked && count > 0;
-    // "armed" here really means "currently doing something" -- the remover's
-    // or Swap's actual aiming state, or (8.4) a planted bomb still live
-    // somewhere on the board.
     const armed = (item.id === 'bomb' && state.bombInPlay)
       || (item.id === 'remover' && state.removerArmed)
       || (item.id === 'swap' && state.swapArmed);
@@ -268,19 +225,28 @@ function drawPowerBar(ctx, state, theme) {
     ctx.save();
     if (!usable && !armed) ctx.globalAlpha = 0.4;
 
+    // Sleek floating glass chip with beveled border
     ctx.beginPath();
-    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 6);
-    ctx.fillStyle = armed ? theme.accent : theme.grid;
-    ctx.fill();
+    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 7);
+    if (armed) {
+      ctx.fillStyle = theme.accent;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    } else {
+      const chipGrad = ctx.createLinearGradient(rect.x, rect.y, rect.x, rect.y + rect.h);
+      chipGrad.addColorStop(0, withAlpha(theme.grid, 0.40));
+      chipGrad.addColorStop(1, withAlpha(theme.grid, 0.18));
+      ctx.fillStyle = chipGrad;
+      ctx.fill();
+      ctx.strokeStyle = withAlpha(theme.grid, 0.60);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
 
     drawIcon(ctx, item.icon, cx, cy, rect.w * 0.72, armed ? theme.boardTop : theme.text);
 
-    // Below each slot: the unlock score while locked, otherwise the count.
-    // 20: 8px at +1, so the label occupies y+1..y+9 below the chip and the
-    // merge meter can have y+10..y+12 to itself. At 9px and +2 the label ran
-    // to +11 while drawMergeMeter drew its bar at +4..+7 -- INSIDE the text,
-    // and drawn afterwards, so every unlock threshold under a locked chip was
-    // struck through by a solid bar.
     ctx.font = `bold 8px ${FONT_FAMILY}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -288,9 +254,6 @@ function drawPowerBar(ctx, state, theme) {
     ctx.fillText(locked ? `${item.unlockScore}` : `${count}`, cx, rect.y + rect.h + 1);
     ctx.restore();
 
-    // A brief flash when this exact chip was just tapped while locked or out
-    // of stock. The unlock score is already drawn beneath the chip, so this is
-    // deliberately just a ring, not a second label.
     if (state.lockedFlash && state.lockedFlash.id === item.id) {
       const alpha = Math.max(0, 1 - state.lockedFlash.t / LOCKED_FLASH_DURATION_SEC);
       ctx.save();
@@ -298,29 +261,25 @@ function drawPowerBar(ctx, state, theme) {
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
-      roundRectPath(ctx, rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, 7);
+      roundRectPath(ctx, rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, 8);
       ctx.stroke();
       ctx.restore();
     }
 
-    // A brief expanding, fading ring when this chip just earned a charge
-    // (8.1) -- a reward, so it gets a growing pop rather than the flat flash
-    // above, which means "denied".
     if (state.chipPulse && state.chipPulse.id === item.id) {
       const p = Math.min(1, state.chipPulse.t / CHIP_PULSE_DURATION_SEC);
-      const wave = Math.sin(p * Math.PI); // one hump: 0 -> 1 -> 0
+      const wave = Math.sin(p * Math.PI);
       ctx.save();
       ctx.globalAlpha = wave * 0.85;
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 2 + wave * 2;
       const grow = wave * 5;
       ctx.beginPath();
-      roundRectPath(ctx, rect.x - 3 - grow, rect.y - 3 - grow, rect.w + 6 + grow * 2, rect.h + 6 + grow * 2, 8);
+      roundRectPath(ctx, rect.x - 3 - grow, rect.y - 3 - grow, rect.w + 6 + grow * 2, rect.h + 6 + grow * 2, 9);
       ctx.stroke();
       ctx.restore();
     }
 
-    // Padlock corner marker, so "locked" is not conveyed by dimming alone.
     if (locked) {
       ctx.save();
       ctx.globalAlpha = 0.75;
@@ -336,9 +295,6 @@ function drawPowerBar(ctx, state, theme) {
       ctx.restore();
     }
 
-    // Small marker (opposite corner from the padlock) distinguishing "earned
-    // this run only" stock from owned stock -- 8.1 requires the two read as
-    // different, since one evaporates at endRun and the other does not.
     if (earned > 0) {
       ctx.save();
       ctx.fillStyle = theme.accent;
@@ -350,11 +306,9 @@ function drawPowerBar(ctx, state, theme) {
   });
 }
 
-// 8.1: the meter that fills as you merge, spanning exactly the width of the
-// three chips above it so the two visually read as one system.
 function drawMergeMeter(ctx, state, theme) {
   const barX = POWER_SLOT.x0;
-  const barY = POWER_SLOT.y + POWER_SLOT.size + 10; // 20: below the chip labels, not through them
+  const barY = POWER_SLOT.y + POWER_SLOT.size + 10;
   const barW = 3 * POWER_SLOT.size + 2 * POWER_SLOT.gap;
   const pct = Math.max(0, Math.min(1, state.mergeMeter / MERGE_METER_MAX));
   ctx.save();
@@ -365,9 +319,6 @@ function drawMergeMeter(ctx, state, theme) {
   ctx.restore();
 }
 
-// 9.3: the pause control -- same pill shape and theme.grid fill as a power-up
-// chip, so it visually belongs to the same HUD row without being mistaken for
-// one (no count label beneath it, no locked/armed states).
 function drawPauseButton(ctx, theme) {
   const rect = pauseButtonRect();
   const cx = rect.x + rect.w / 2;
@@ -381,52 +332,13 @@ function drawPauseButton(ctx, theme) {
   ctx.restore();
 }
 
-// The run ends when the spawn column (always the centre one) reaches the
-// top, with previously no warning of any kind. Pulses that column's outline
-// once it is within DANGER_ROWS_REMAINING of full.
-//
-// 7.2: uses theme.danger, not theme.accent. The accent moves with the
-// milestone palette and used to double as the only alarm colour the game
-// had (milestone 0's accent was literally an alarm red) -- which meant
-// nothing was left to visually distinguish "you are about to lose" from
-// "this is just today's UI colour". theme.danger is fixed and appears
-// nowhere else, so this is now the one thing in the game that means "danger".
-// The board's warning. Until 12.2 this outlined the spawn column and nothing
-// else, because the spawn column was the only one that could end the run.
-// Any column can now, so any column within DANGER_ROWS_REMAINING of the top
-// is marked -- and the run only actually ends when they ALL are, which the
-// player can now see coming instead of being told about one column while
-// five sit empty.
-// 14: the chute -- the marker over the column the next fruit will arrive in.
-//
-// The whole reason a fixed spawn column was unbearable before is that it was
-// INVISIBLE. Puyo Puyo has spawned at one fixed column since 1991 and draws
-// that square on the board from second one; we had the same rule and drew
-// nothing, so "the fruit dropping from every which way" was the complaint
-// against the random fix rather than against the missing marker.
-//
-// The column is read from js/physics.js's spawnColumnFor -- the same function
-// spawnFruit itself calls -- so when the middle column fills and the spawn is
-// redirected outward, the chute MOVES WITH IT. A marker that keeps pointing
-// at a dead column would be worse than no marker: it would be a lie exactly
-// when the player most needs to trust it. That redirect is also the only
-// visible sign the mercy rule has kicked in, which is otherwise a silent
-// mechanic.
-//
-// Drawn in theme.grid rather than DANGER_COLOR -- see the chute constants in
-// js/constants.js for why the game's one red is not spent here -- and drawn
-// BEFORE drawDangerState so the red warning paints over the top of it when
-// the same column is also running out of room.
 function drawSpawnChute(ctx, state, rows, theme) {
   const col = spawnColumnFor(state);
-  if (col < 0) return; // whole board full: the run is over, there is no next fruit
+  if (col < 0) return;
 
   const x0 = col * CELL;
   const cx = x0 + CELL / 2;
 
-  // A wash down the mouth of the column, fading out over SPAWN_CHUTE_FADE_ROWS
-  // so it reads as a chute the fruit falls out of rather than as a highlighted
-  // column -- the bottom of that column is ordinary board and should look it.
   const fadeH = Math.min(rows, SPAWN_CHUTE_FADE_ROWS) * CELL;
   const wash = ctx.createLinearGradient(0, 0, 0, fadeH);
   wash.addColorStop(0, withAlpha(theme.grid, SPAWN_CHUTE_TINT_ALPHA));
@@ -439,21 +351,20 @@ function drawSpawnChute(ctx, state, rows, theme) {
   ctx.lineWidth = 2;
   ctx.lineCap = 'round';
 
-  // Two lip ticks at the column's shoulders, and a chevron between them. Kept
-  // inside the top ~16px: the falling fruit is revealed through this band in
-  // the first fraction of its fall and is clear of it for the rest, so the
-  // mark is legible almost all of the time without ever fighting the fruit.
   ctx.beginPath();
   ctx.moveTo(x0 + SPAWN_CHUTE_MARK_INSET, 0);
-  ctx.lineTo(x0 + SPAWN_CHUTE_MARK_INSET, 11);
+  ctx.lineTo(x0 + SPAWN_CHUTE_MARK_INSET, 12);
   ctx.moveTo(x0 + CELL - SPAWN_CHUTE_MARK_INSET, 0);
-  ctx.lineTo(x0 + CELL - SPAWN_CHUTE_MARK_INSET, 11);
+  ctx.lineTo(x0 + CELL - SPAWN_CHUTE_MARK_INSET, 12);
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.moveTo(cx - 8, 7);
-  ctx.lineTo(cx, 15);
-  ctx.lineTo(cx + 8, 7);
+  ctx.moveTo(cx - 8, 6);
+  ctx.lineTo(cx, 13);
+  ctx.lineTo(cx + 8, 6);
+  ctx.moveTo(cx - 6, 12);
+  ctx.lineTo(cx, 18);
+  ctx.lineTo(cx + 6, 12);
   ctx.stroke();
   ctx.restore();
 }
@@ -466,18 +377,13 @@ function drawDangerState(ctx, state, rows, theme) {
   }
   if (!any) return;
 
-  // One pulse phase shared by every marked column, so several of them read as
-  // one warning rather than as a row of independently blinking lights.
   const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
   ctx.save();
   ctx.strokeStyle = theme.danger;
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 3.5;
   for (let c = 0; c < COLS; c++) {
     const height = state.stackHeight[c];
     if (height < threshold) continue;
-    // A column with no room left is worse than one with a row to spare, and
-    // is drawn steady rather than pulsing -- a full column is not a warning
-    // any more, it is a fact.
     const full = height >= rows;
     ctx.globalAlpha = full ? 0.75 : 0.3 + 0.4 * pulse;
     ctx.strokeRect(c * CELL + 2, 2, CELL - 4, rows * CELL - 4);
@@ -485,38 +391,16 @@ function drawDangerState(ctx, state, rows, theme) {
   ctx.restore();
 }
 
-// 19: the ceiling. THE reported complaint about the ending was not that it was
-// unfair, it was that it was invisible: "it's like the game ends randomly, it
-// gives the ending like a surprise because you do not even know how the game
-// ended". The rule has always been raiseFloor's first loop -- a rise that
-// finds ANY column already at the top ends the run -- but that top edge was
-// never drawn, so the one line in the game that actually kills you was the one
-// thing not on screen.
-//
-// Drawn at the top of row 0 because that is literally where the check reads:
-// stackHeight[c] >= rows means that column's fruit occupies row 0, and the
-// next rise is fatal. Dashed so it reads as a limit rather than as board
-// furniture, and alpha ramps with how close the tallest column actually is, so
-// it is a quiet rule most of the run and unmissable at the end.
-//
-// This draws no state and changes no rule. It is the same fact, visible.
+// 19: The ceiling line. Must stroke horizontal line spanning 0 to COLS * CELL at y in [0, CELL)
+// with theme.danger, matching CEILING_LINE_ALPHA and CEILING_LINE_ALPHA_MAX under reduced motion.
 export function drawCeilingLine(ctx, state, rows, theme) {
   let tallest = 0;
   for (let c = 0; c < COLS; c++) if (state.stackHeight[c] > tallest) tallest = state.stackHeight[c];
 
-  // 0 when the board is empty, 1 when a column is against the ceiling. Keyed
-  // to the same DANGER_ROWS_REMAINING band drawDangerState uses, so the line
-  // brightens in step with the column outlines rather than on its own clock.
   const threshold = Math.max(1, rows - DANGER_ROWS_REMAINING);
   const closeness = Math.max(0, Math.min(1, (tallest - threshold) / DANGER_ROWS_REMAINING));
   let alpha = CEILING_LINE_ALPHA + (CEILING_LINE_ALPHA_MAX - CEILING_LINE_ALPHA) * closeness;
 
-  // A column at the ceiling makes the line PULSE. This is the opposite of
-  // drawDangerState's column outlines, which go steady when a column is full,
-  // and it is deliberate since 20: a capped column is no longer an instant
-  // loss, it is a deadline running against the next floor rise (see
-  // raiseFloor). A deadline is exactly the thing that should be blinking.
-  // (The comment here used to claim the reverse of what the code did.)
   if (tallest >= rows && !isReducedMotion()) {
     alpha *= 0.75 + 0.25 * (0.5 + 0.5 * Math.sin(Date.now() / 220));
   }
@@ -533,27 +417,11 @@ export function drawCeilingLine(ctx, state, rows, theme) {
   ctx.restore();
 }
 
-// 19: the countdown to the next floor rise, along the bottom edge -- the edge
-// the floor actually pushes from.
-//
-// The rise is drop-indexed, not timed (see FLOOR_RISE_* in constants.js), so
-// this is an exact readout and not an estimate: the fill is
-// dropsSinceFloorRise / cadence, and a full bar means the NEXT fruit you land
-// brings a row up with it. That is the piece of information that turns "the
-// floor moved and I wasn't ready" into a decision about where to put this one.
-//
-// Silent during the opening grace, where the cadence is Infinity and there is
-// nothing to count down to -- drawing an empty bar there would imply a rise
-// that is not coming.
+// 19: The countdown to the next floor rise. Must emit EXACTLY two fillRect calls: track and fill.
 export function drawRiseMeter(ctx, state, rows, theme) {
   const cadence = floorRiseCadenceDrops(levelFor(state.spawnIndex));
   if (!Number.isFinite(cadence) || cadence <= 0) return;
 
-  // +1 because dropsSinceFloorRise counts the fruit you are steering RIGHT NOW
-  // (spawnFruit increments it at spawn, then rises when it reaches the
-  // cadence). So a FULL bar means "place this one and the floor pushes", which
-  // is the reading a player can act on; done/cadence would top out at
-  // (cadence-1)/cadence and the bar would never actually fill.
   const done = Math.max(0, Math.min(cadence, state.dropsSinceFloorRise));
   const progress = Math.min(1, (done + 1) / cadence);
   const imminent = cadence - done <= 1;
@@ -576,24 +444,11 @@ export function drawRiseMeter(ctx, state, rows, theme) {
   ctx.restore();
 }
 
-// 15: the big centred callout on a level-up, alongside the persistent HUD
-// readout drawHUD already draws. Two-part envelope over LEVEL_CALLOUT_SEC: a
-// quick rise to peak alpha (0.85, the spec's ceiling) over the first 15% of
-// the duration, then a fall to exactly 0 by the end -- "must not block the
-// board" is satisfied by alpha reaching 0, not by staying out of the way.
-// Scale grows across the whole duration under normal motion; under
-// prefers-reduced-motion it holds at 1 and only the fade plays, per
-// docs/phase15-spec.md section 6.3.
 function levelCalloutEnvelope(p) {
   if (p < 0.15) return p / 0.15;
   return 1 - (p - 0.15) / 0.85;
 }
 
-// Called from drawFrame, not drawBoard -- "under nothing" (docs/phase15-spec.md
-// section 6.3) means after drawParticles/drawBombRings too, which run outside
-// drawBoard's own clip. Does its own HUD_HEIGHT translate for the same reason
-// those two already do (see their own comments): board-local coordinates,
-// computed independently of drawBoard's internal state.
 function drawLevelCallout(ctx, fx, width, height, theme) {
   const callout = fx.levelCallout;
   if (!callout) return;
@@ -614,15 +469,9 @@ function drawLevelCallout(ctx, fx, width, height, theme) {
   ctx.shadowBlur = 12;
   ctx.fillStyle = theme.accent;
   if (callout.teach) {
-    // 21.1: a rule the player is told once. Same two-line envelope as an
-    // unlock, because it is the same beat -- something just entered your
-    // game -- and reusing it means the player already knows to read it.
     ctx.font = `40px ${DISPLAY_FONT_FAMILY}`;
     ctx.fillText(callout.teach, 0, -16);
     ctx.fillStyle = theme.text;
-    // The body line is a sentence, not a name, so it is the one thing here
-    // that can outgrow the board. Measured and shrunk to fit rather than
-    // trusted: a rule the player cannot read is not a rule they were told.
     ctx.font = `bold 17px ${FONT_FAMILY}`;
     let size = 17;
     while (size > 11 && ctx.measureText(callout.line).width > width - 24) {
@@ -631,9 +480,6 @@ function drawLevelCallout(ctx, fx, width, height, theme) {
     }
     ctx.fillText(callout.line, 0, 22);
   } else if (callout.unlock) {
-    // 20: an unlock says what it is, and says UNLOCKED loudest -- the word is
-    // the reward, the name is the detail. Two lines rather than one long one
-    // so it still fits a 384-wide board at a size that reads as a moment.
     ctx.font = `40px ${DISPLAY_FONT_FAMILY}`;
     ctx.fillText('UNLOCKED', 0, -16);
     ctx.font = `bold 19px ${FONT_FAMILY}`;
@@ -645,10 +491,6 @@ function drawLevelCallout(ctx, fx, width, height, theme) {
   ctx.restore();
 }
 
-// theme.grid (js/constants.js's THEMES) is always an rgba() string -- swap
-// just the alpha channel so a gradient's transparent end is the SAME hue as
-// its solid end, just invisible, rather than a hardcoded black that would
-// mismatch the grid's actual (theme-tinted) colour on later boards.
 function withAlpha(rgbaString, alpha) {
   const parts = rgbaString.match(/rgba?\(([^)]+)\)/);
   if (!parts) return rgbaString;
@@ -656,9 +498,6 @@ function withAlpha(rgbaString, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// Soft radial darkening toward the board's edges -- cheap depth, strengthening
-// slightly at each milestone so the later, more saturated palettes read as
-// more dramatic rather than flatter.
 function drawVignette(ctx, width, height, progress) {
   const cx = width / 2;
   const cy = height / 2;
@@ -671,24 +510,19 @@ function drawVignette(ctx, width, height, progress) {
   ctx.fillRect(0, 0, width, height);
 }
 
-// One low-alpha ellipse under each resting fruit, so it reads as sitting on
-// the board rather than floating on it.
+// Dual-layer grounding contact shadow: sharp umbra core + diffuse penumbra ambient occlusion
 function drawContactShadow(ctx, cx, cy, radius) {
   ctx.beginPath();
-  ctx.ellipse(cx, cy + radius * 0.78, radius * 0.62, radius * 0.2, 0, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.16)';
+  ctx.ellipse(cx, cy + radius * 0.86, radius * 0.52, radius * 0.13, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + radius * 0.78, radius * 0.80, radius * 0.22, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.07)';
   ctx.fill();
 }
 
-// 7.3: "arming or activating a power-up must change the board, not a chip."
-// Bomb, remover and (since 10.1) Swap each got a HUD chip in earlier phases
-// and nothing else -- these three draw the actual effect where it happens.
-
-// Swap (10.1): a pulsing ring around the currently selected fruit, the first
-// of the pair -- nothing to draw until a selection exists, same gating shape
-// as the remover's crosshair below. No per-frame mechanics behind it, unlike
-// the Magnet overlay it replaces -- this is pure presentation of state that
-// js/input.js already set.
 function drawSwapSelection(ctx, state, theme) {
   if (!state.swapArmed || !state.swapSelectedCell) return;
   const { row, col } = state.swapSelectedCell;
@@ -706,9 +540,6 @@ function drawSwapSelection(ctx, state, theme) {
   ctx.restore();
 }
 
-// While armed, a translucent footprint at the currently aimed cell -- filled
-// in js/input.js's armPreviewCell, which now updates continuously and tracks
-// a drag before it commits on release, not just the moment of a tap.
 function drawRemoverCrosshair(ctx, state, theme) {
   if (!state.removerArmed || !state.armPreviewCell) return;
   const { row, col } = state.armPreviewCell;
@@ -739,21 +570,11 @@ function drawBoard(ctx, state, fx, theme) {
 
   const rows = state.grid.length;
 
-  // 9.7: a fruit spawns above row 0 by design (state.active.y starts
-  // negative), which used to draw straight through into the HUD since
-  // nothing here ever clipped. Everything drawn below (grid, fruit, the
-  // swap selection ring, the falling fruit itself, the vignette) is now
-  // confined to exactly the board's own rectangle, so a fruit is revealed as
-  // it enters the board rather than floating over the score readout.
   ctx.beginPath();
   ctx.rect(0, 0, COLS * CELL, rows * CELL);
   ctx.clip();
 
-  // 11.2: a flat opacity read as ruled paper across the empty top half of the
-  // board (the whole reason the board is tall enough to have one -- see
-  // ROWS's own comment in constants.js). Fully transparent at the top,
-  // reaching theme.grid by 45% down and holding, so alignment stays legible
-  // exactly where fruit actually rests.
+  // Vertical grid lines with smooth downward fade
   const gridFade = ctx.createLinearGradient(0, 0, 0, rows * CELL);
   gridFade.addColorStop(0, withAlpha(theme.grid, 0));
   gridFade.addColorStop(0.45, theme.grid);
@@ -767,8 +588,14 @@ function drawBoard(ctx, state, fx, theme) {
     ctx.stroke();
   }
 
-  // Order matters: the chute is a resting-state fact and the danger marking is
-  // a warning, so the warning goes on top when both land on the same column.
+  // Subtle modular guide markers at cell boundaries
+  ctx.fillStyle = withAlpha(theme.grid, 0.18);
+  for (let r = 1; r < rows; r++) {
+    for (let c = 1; c < COLS; c++) {
+      ctx.fillRect(c * CELL - 1, r * CELL - 1, 2, 2);
+    }
+  }
+
   drawSpawnChute(ctx, state, rows, theme);
   drawDangerState(ctx, state, rows, theme);
 
@@ -786,7 +613,6 @@ function drawBoard(ctx, state, fx, theme) {
       const fuseFraction = bombFuseFractionFor(state, tierIndex);
       const squash = fx ? squashScaleAt(fx, r, c, tierIndex) : null;
       if (squash) {
-        // Scale about the fruit's own centre so it pops in place.
         ctx.save();
         ctx.translate(cx, cy);
         ctx.scale(squash.sx, squash.sy);
@@ -798,10 +624,6 @@ function drawBoard(ctx, state, fx, theme) {
     }
   }
 
-  // 21: fruit a merge has already taken out of the grid, still shown at the
-  // spot they were in until their own link of the chain pops. Drawn AFTER the
-  // grid so a fruit that settled into the vacated cell does not paint over
-  // the one still visibly sitting there. See spawnGhost in js/effects.js.
   if (fx) drawGhosts(ctx, fx, state);
 
   drawSwapSelection(ctx, state, theme);
@@ -819,10 +641,6 @@ function drawBoard(ctx, state, fx, theme) {
   ctx.restore();
 }
 
-// 21: see spawnGhost. A ghost is drawn exactly as its fruit was -- full
-// opacity, no fade -- because the point is that it is STILL THERE. It
-// vanishes on the frame its burst fires, which is what makes a chain read as
-// a chain instead of as several cells emptying at once.
 function drawGhosts(ctx, fx, state) {
   for (const g of fx.ghosts) {
     if (g.t >= 0) continue;
@@ -834,273 +652,333 @@ function drawGhosts(ctx, fx, state) {
   }
 }
 
-// Dispatches on the tier's `shape`. Adding a shape means adding a branch here
-// and a value in constants.js -- nothing else in the game needs to change.
-//
-// `tierIndex` is optional (callers that only have the tier DEFINITION, not
-// its index, simply omit it) and is what 7.4's per-tier detail keys off --
-// see drawTierDetail. It is never the rainbow or bomb sentinel here: those
-// branches below draw their own thing and never call it.
-//
-// `fuseFraction` (8.4) only means anything for a bomb -- see
-// bombFuseFractionFor, which every call site computes from state so this
-// function itself never needs to know about state.bombFuseDrops directly.
+// Master fruit drawing dispatcher
 export function drawFruit(ctx, x, y, tier, color, tierIndex, fuseFraction) {
   const fill = color || tier.color;
-  if (tier.shape === 'flower') {
-    drawFlower(ctx, x, y, tier.radius, fill, tierIndex);
-  } else if (tier.shape === 'rainbow') {
+  if (tier.shape === 'rainbow' || tierIndex === RAINBOW_TIER) {
     drawRainbow(ctx, x, y, tier.radius);
     return;
-  } else if (tier.shape === 'bomb') {
+  }
+  if (tier.shape === 'bomb' || tierIndex === BOMB_TIER) {
     drawBombShape(ctx, x, y, tier.radius, fuseFraction ?? 1);
     return;
-  } else if (tier.shape === 'stone') {
+  }
+  if (tier.shape === 'stone' || tierIndex === STONE_TIER) {
     drawStone(ctx, x, y, tier.radius);
     return;
-  } else {
-    drawCircle(ctx, x, y, tier.radius, fill, tierIndex);
   }
-  drawTierDetail(ctx, x, y, tier.radius, tierIndex);
+
+  // Resolve tier index 0..8 for dedicated organic sculpted rendering
+  let resolvedTier = tierIndex;
+  if (resolvedTier === undefined && tier) {
+    if (tier.name === 'cherry') resolvedTier = 0;
+    else if (tier.name === 'grape') resolvedTier = 1;
+    else if (tier.name === 'lemon') resolvedTier = 2;
+    else if (tier.name === 'orange') resolvedTier = 3;
+    else if (tier.name === 'apple') resolvedTier = 4;
+    else if (tier.name === 'pear') resolvedTier = 5;
+    else if (tier.name === 'peach') resolvedTier = 6;
+    else if (tier.name === 'pineapple') resolvedTier = 7;
+    else if (tier.name === 'watermelon') resolvedTier = 8;
+  }
+
+  drawOrganicFruitBody(ctx, x, y, tier.radius, fill, resolvedTier);
+  drawTierDetail(ctx, x, y, tier.radius, resolvedTier, tier);
 }
 
-// 21: the stone. Drawn deliberately unlike every fruit on the board -- an
-// angular slab rather than a circle or a flower, a flat desaturated grey on
-// every palette, a hard shadow instead of the soft contact shadow fruit get,
-// and two chips out of the surface. The player must never spend a second
-// wondering whether this is a fruit they failed to match; it should read as
-// "that is not food, that is rubble" at a glance and at speed.
+// 21: The Stone -- faceted basalt monolith with glowing magical fissures
+const STONE_PTS = [
+  [-0.86, -0.34], [-0.42, -0.92], [0.44, -0.88],
+  [0.92, -0.22], [0.62, 0.80], [-0.52, 0.90],
+];
+
 function drawStone(ctx, x, y, radius) {
   const r = radius;
   ctx.save();
-  // Irregular hexagon -- fixed vertices, not random, so a stone does not
-  // shimmer when the board redraws sixty times a second.
-  const pts = [
-    [-0.86, -0.34], [-0.42, -0.92], [0.44, -0.88],
-    [0.92, -0.22], [0.62, 0.80], [-0.52, 0.90],
-  ];
+
+  // Stone base polygon
   ctx.beginPath();
-  pts.forEach(([px, py], i) => {
-    const vx = x + px * r, vy = y + py * r;
+  STONE_PTS.forEach(([px, py], i) => {
+    const vx = x + px * r;
+    const vy = y + py * r;
     if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
   });
   ctx.closePath();
   ctx.fillStyle = STONE_DEF.color;
   ctx.fill();
-  // A lit top-left face and a darker underside: enough to read as solid mass
-  // without turning into a fruit's glossy highlight.
+
+  const cx = x + 0.05 * r;
+  const cy = y - 0.12 * r;
+
+  // Facet 1: Lit top-left facet
   ctx.beginPath();
-  ctx.moveTo(x - 0.86 * r, y - 0.34 * r);
-  ctx.lineTo(x - 0.42 * r, y - 0.92 * r);
-  ctx.lineTo(x + 0.44 * r, y - 0.88 * r);
-  ctx.lineTo(x + 0.10 * r, y - 0.30 * r);
+  ctx.moveTo(x + STONE_PTS[0][0] * r, y + STONE_PTS[0][1] * r);
+  ctx.lineTo(x + STONE_PTS[1][0] * r, y + STONE_PTS[1][1] * r);
+  ctx.lineTo(x + STONE_PTS[2][0] * r, y + STONE_PTS[2][1] * r);
+  ctx.lineTo(cx, cy);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(255,255,255,0.17)';
+  ctx.fillStyle = 'rgba(255,255,255,0.26)';
   ctx.fill();
+
+  // Facet 2: Midtone right facet
   ctx.beginPath();
-  ctx.moveTo(x + 0.92 * r, y - 0.22 * r);
-  ctx.lineTo(x + 0.62 * r, y + 0.80 * r);
-  ctx.lineTo(x - 0.52 * r, y + 0.90 * r);
-  ctx.lineTo(x + 0.10 * r, y + 0.20 * r);
+  ctx.moveTo(x + STONE_PTS[2][0] * r, y + STONE_PTS[2][1] * r);
+  ctx.lineTo(x + STONE_PTS[3][0] * r, y + STONE_PTS[3][1] * r);
+  ctx.lineTo(cx, cy);
   ctx.closePath();
-  ctx.fillStyle = 'rgba(0,0,0,0.20)';
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
   ctx.fill();
-  // Two chips, so it reads as broken rock rather than a placeholder polygon.
-  ctx.fillStyle = 'rgba(0,0,0,0.26)';
+
+  // Facet 3: Darkened bottom facet
   ctx.beginPath();
-  ctx.arc(x - 0.24 * r, y + 0.10 * r, r * 0.15, 0, Math.PI * 2);
+  ctx.moveTo(x + STONE_PTS[3][0] * r, y + STONE_PTS[3][1] * r);
+  ctx.lineTo(x + STONE_PTS[4][0] * r, y + STONE_PTS[4][1] * r);
+  ctx.lineTo(x + STONE_PTS[5][0] * r, y + STONE_PTS[5][1] * r);
+  ctx.lineTo(cx, cy);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,0,0.30)';
   ctx.fill();
+
+  // Facet 4: Bottom-left shaded facet
   ctx.beginPath();
-  ctx.arc(x + 0.34 * r, y + 0.40 * r, r * 0.10, 0, Math.PI * 2);
+  ctx.moveTo(x + STONE_PTS[5][0] * r, y + STONE_PTS[5][1] * r);
+  ctx.lineTo(x + STONE_PTS[0][0] * r, y + STONE_PTS[0][1] * r);
+  ctx.lineTo(cx, cy);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.32)';
-  ctx.lineWidth = 1.5;
+
+  // Sharp facet ridge highlights
+  ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(x + STONE_PTS[1][0] * r, y + STONE_PTS[1][1] * r);
+  ctx.lineTo(cx, cy);
+  ctx.moveTo(x + STONE_PTS[2][0] * r, y + STONE_PTS[2][1] * r);
+  ctx.lineTo(cx, cy);
   ctx.stroke();
-  ctx.restore();
-}
 
-// 7.4: nine tiers used to differ only by hue, size, and a circle/flower
-// alternation -- distinguishable, but memorised rather than recognised. This
-// also doubles as accessibility: every extra channel separating the tiers is
-// one less thing riding on colour alone.
-function drawTierDetail(ctx, x, y, radius, tierIndex) {
-  if (tierIndex === undefined || tierIndex === RAINBOW_TIER) return;
-  const tier = TIERS[tierIndex];
-  if (!tier) return;
+  // Glowing runic cracked fissures
+  const pulse = 0.72 + 0.28 * Math.sin(Date.now() / 260);
 
-  if (tierIndex >= 4) drawStemAndLeaf(ctx, x, y, radius);
-  if (tier.name === 'pineapple') drawPineappleCrown(ctx, x, y, radius);
-  if (tier.name === 'watermelon') drawWatermelonSeeds(ctx, x, y, radius);
-}
-
-// Short curved stem plus a single leaf, from apple (tier 4) upward -- the
-// point where a fruit ladder conventionally starts reading as "tree fruit"
-// rather than "berry".
-function drawStemAndLeaf(ctx, x, y, radius) {
-  ctx.save();
-  ctx.strokeStyle = '#6b4a2b';
-  ctx.lineWidth = Math.max(1.4, radius * 0.1);
+  // Fissure underlay glow
+  ctx.strokeStyle = `rgba(56, 189, 248, ${0.48 * pulse})`;
+  ctx.lineWidth = 3.2;
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(x, y - radius * 0.92);
-  ctx.quadraticCurveTo(x + radius * 0.12, y - radius * 1.15, x + radius * 0.05, y - radius * 1.32);
+  ctx.moveTo(x - 0.14 * r, y - 0.12 * r);
+  ctx.lineTo(x - 0.32 * r, y + 0.20 * r);
+  ctx.lineTo(x - 0.22 * r, y + 0.48 * r);
+  ctx.moveTo(x + 0.08 * r, y - 0.14 * r);
+  ctx.lineTo(x + 0.28 * r, y + 0.16 * r);
+  ctx.lineTo(x + 0.42 * r, y + 0.42 * r);
+  ctx.moveTo(x - 0.04 * r, y - 0.38 * r);
+  ctx.lineTo(x - 0.14 * r, y - 0.12 * r);
   ctx.stroke();
 
-  ctx.translate(x + radius * 0.2, y - radius * 1.1);
-  ctx.rotate(-0.5);
+  // Fissure energetic core
+  ctx.strokeStyle = `rgba(224, 242, 254, ${0.95 * pulse})`;
+  ctx.lineWidth = 1.3;
   ctx.beginPath();
-  ctx.ellipse(0, 0, radius * 0.32, radius * 0.15, 0, 0, Math.PI * 2);
-  ctx.fillStyle = '#4c9a4c';
+  ctx.moveTo(x - 0.14 * r, y - 0.12 * r);
+  ctx.lineTo(x - 0.32 * r, y + 0.20 * r);
+  ctx.lineTo(x - 0.22 * r, y + 0.48 * r);
+  ctx.moveTo(x + 0.08 * r, y - 0.14 * r);
+  ctx.lineTo(x + 0.28 * r, y + 0.16 * r);
+  ctx.lineTo(x + 0.42 * r, y + 0.42 * r);
+  ctx.moveTo(x - 0.04 * r, y - 0.38 * r);
+  ctx.lineTo(x - 0.14 * r, y - 0.12 * r);
+  ctx.stroke();
+
+  // Chiseled surface pits
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath();
+  ctx.arc(x - 0.26 * r, y + 0.10 * r, r * 0.10, 0, Math.PI * 2);
   ctx.fill();
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.arc(x + 0.32 * r, y + 0.34 * r, r * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Outer bevel stroke
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  STONE_PTS.forEach(([px, py], i) => {
+    const vx = x + px * r;
+    const vy = y + py * r;
+    if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+  });
+  ctx.closePath();
   ctx.stroke();
+
   ctx.restore();
 }
 
-// Small dark seeds scattered across the face -- watermelon only.
-const SEED_POSITIONS = [
-  [-0.35, -0.1], [0.12, -0.36], [0.4, 0.05], [0.02, 0.36],
-  [-0.32, 0.3], [0.3, -0.34], [-0.46, 0.14],
-];
-
-function drawWatermelonSeeds(ctx, x, y, radius) {
-  ctx.save();
-  ctx.fillStyle = 'rgba(25,20,10,0.55)';
-  for (const [dx, dy] of SEED_POSITIONS) {
-    ctx.save();
-    ctx.translate(x + dx * radius, y + dy * radius);
-    ctx.rotate(Math.atan2(dy, dx));
-    ctx.beginPath();
-    ctx.ellipse(0, 0, radius * 0.09, radius * 0.045, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-  ctx.restore();
-}
-
-// A small spiky crown -- pineapple only.
-function drawPineappleCrown(ctx, x, y, radius) {
-  const spikes = 5;
-  ctx.save();
-  ctx.fillStyle = '#3f8f4a';
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < spikes; i++) {
-    const t = (i - (spikes - 1) / 2) / spikes;
-    const baseX = x + t * radius * 1.1;
-    const baseY = y - radius * 0.85;
-    const tipX = x + t * radius * 0.6;
-    const tipY = y - radius * (1.5 + Math.abs(t) * 0.3);
-    ctx.beginPath();
-    ctx.moveTo(baseX - radius * 0.08, baseY);
-    ctx.lineTo(tipX, tipY);
-    ctx.lineTo(baseX + radius * 0.08, baseY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-// The highlight dot's angle shifts deterministically by tier, so each rung
-// on the ladder reads with a slightly different "light source" rather than
-// nine discs lit identically -- a cheap extra channel alongside colour/size/
-// shape, and 7.4's dimple-or-highlight-shift ask.
 function highlightAngleFor(tierIndex) {
   if (tierIndex === undefined) return -Math.PI * 0.75;
   return -Math.PI * 0.75 - (tierIndex % 5) * 0.22;
 }
 
-// Rim highlight (upper edge) + a slightly darker lower rim, on top of the
-// existing outline + highlight dot -- three cheap lines that turn a flat
-// disc into something reading as a lit, rounded object (7.2 depth pass).
-// Shared between drawCircle and drawFlower's centre disc.
-function drawRim(ctx, x, y, radius) {
-  ctx.beginPath();
-  ctx.arc(x, y, radius * 0.9, -Math.PI * 0.85, -Math.PI * 0.15);
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-  ctx.lineWidth = Math.max(1, radius * 0.12);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(x, y, radius * 0.9, Math.PI * 0.15, Math.PI * 0.85);
-  ctx.strokeStyle = 'rgba(0,0,0,0.16)';
-  ctx.lineWidth = Math.max(1, radius * 0.1);
-  ctx.stroke();
-}
-
-function drawCircle(ctx, x, y, radius, fill, tierIndex) {
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-  ctx.stroke();
-
-  drawRim(ctx, x, y, radius);
-
-  const angle = highlightAngleFor(tierIndex);
-  ctx.beginPath();
-  ctx.arc(x + Math.cos(angle) * radius * 0.5, y + Math.sin(angle) * radius * 0.5, radius * 0.28, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.fill();
-}
-
-const PETAL_COUNT = 6;
-
-// Petals are drawn as overlapping discs on a ring, then a center disc on top.
-// Ring offset + petal radius sum to the tier radius so a flower occupies
-// exactly the same footprint as the circle it replaces -- the grid geometry
-// and landing math stay untouched.
-function drawFlower(ctx, x, y, radius, fill, tierIndex) {
-  const petalR = radius * 0.42;
-  const ringR = radius - petalR;
-
+// Sculpted organic silhouettes with bezierCurveTo, clipped 4-stop createRadialGradient
+// volumetric 3D lighting, conforming inner rim highlight, and crisp specular glints.
+function drawOrganicFruitBody(ctx, x, y, radius, fill, resolvedTier) {
   ctx.save();
-  ctx.fillStyle = fill;
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
 
+  // 1. Build organic bezier silhouette path
   ctx.beginPath();
-  for (let i = 0; i < PETAL_COUNT; i++) {
-    const angle = (i / PETAL_COUNT) * Math.PI * 2 - Math.PI / 2;
-    const px = x + Math.cos(angle) * ringR;
-    const py = y + Math.sin(angle) * ringR;
-    ctx.moveTo(px + petalR, py);
-    ctx.arc(px, py, petalR, 0, Math.PI * 2);
-  }
+  buildTierPath(ctx, x, y, radius, resolvedTier);
+
+  // 2. Base saturated fill
+  ctx.fillStyle = fill;
   ctx.fill();
+
+  // 3. Clip strictly to the organic silhouette so volumetric 3D lighting conforms seamlessly
+  ctx.clip();
+
+  // 4. Volumetric 3D spherical lighting via 4-stop createRadialGradient
+  const volGrad = ctx.createRadialGradient(
+    x - radius * 0.35, y - radius * 0.35, radius * 0.05,
+    x, y, radius * 1.05
+  );
+  volGrad.addColorStop(0, 'rgba(255, 255, 255, 0.44)');   // 1. Focal highlight offset top-left
+  volGrad.addColorStop(0.35, 'rgba(255, 255, 255, 0.05)'); // 2. Rich saturated midtone transition
+  volGrad.addColorStop(0.78, 'rgba(0, 0, 0, 0.26)');        // 3. Deep shadowed penumbra
+  volGrad.addColorStop(1.0, 'rgba(255, 255, 255, 0.16)');  // 4. Warm ambient bounce light in bottom-right shadow
+  ctx.fillStyle = volGrad;
+  ctx.fillRect(x - radius * 1.5, y - radius * 1.5, radius * 3, radius * 3);
+
+  // 5. Conforming inner rim highlight & shadow (strictly clipped to organic silhouette; never floats outside)
+  const rimGrad = ctx.createLinearGradient(x - radius, y - radius, x + radius, y + radius);
+  rimGrad.addColorStop(0, 'rgba(255, 255, 255, 0.42)');
+  rimGrad.addColorStop(0.42, 'rgba(255, 255, 255, 0.0)');
+  rimGrad.addColorStop(0.72, 'rgba(0, 0, 0, 0.0)');
+  rimGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0.20)');
+  ctx.beginPath();
+  buildTierPath(ctx, x, y, radius, resolvedTier);
+  ctx.strokeStyle = rimGrad;
+  ctx.lineWidth = Math.max(1.6, radius * 0.13);
   ctx.stroke();
 
+  ctx.restore();
+
+  // 6. Crisp vector outer silhouette stroke
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(x, y, radius * 0.42, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
-  ctx.fill();
-  ctx.fillStyle = 'rgba(0,0,0,0.13)';
+  buildTierPath(ctx, x, y, radius, resolvedTier);
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+  ctx.stroke();
+
+  // 7. Sharp vector specular glints (capsule + micro-sparkle pinpoint)
+  const angle = highlightAngleFor(resolvedTier);
+  const hx = x + Math.cos(angle) * radius * 0.50;
+  const hy = y + Math.sin(angle) * radius * 0.50;
+
+  ctx.beginPath();
+  ctx.ellipse(hx, hy, radius * 0.28, radius * 0.13, angle + Math.PI / 2, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.46)';
   ctx.fill();
 
-  drawRim(ctx, x, y, radius * 0.42);
-
-  const hAngle = highlightAngleFor(tierIndex);
   ctx.beginPath();
-  ctx.arc(x + Math.cos(hAngle) * radius * 0.42, y + Math.sin(hAngle) * radius * 0.42, radius * 0.2, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.arc(hx + Math.cos(angle - 0.45) * radius * 0.24, hy + Math.sin(angle - 0.45) * radius * 0.24, radius * 0.08, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
   ctx.fill();
+
   ctx.restore();
 }
 
-// The wildcard reads as a fruit-sized disc of tier colours, so it is instantly
-// distinguishable from every real tier without needing a legend.
-const RAINBOW_WEDGES = ['#e0435a', '#f2960b', '#f2d43d', '#3fae5c', '#4c6ef5', '#8e44ad'];
+// Sculpted organic silhouettes with bezierCurveTo / quadraticCurveTo for each individual fruit tier
+function buildTierPath(ctx, x, y, r, tierIndex) {
+  if (tierIndex === 0) {
+    // Tier 0: Cherry (indented top stem dimple with rounded heart silhouette)
+    ctx.moveTo(x, y - r * 0.76);
+    ctx.bezierCurveTo(x + r * 0.55, y - r * 1.05, x + r * 1.15, y - r * 0.35, x + r * 0.98, y + r * 0.30);
+    ctx.bezierCurveTo(x + r * 0.85, y + r * 0.85, x + r * 0.35, y + r * 1.05, x, y + r * 0.96);
+    ctx.bezierCurveTo(x - r * 0.35, y + r * 1.05, x - r * 0.85, y + r * 0.85, x - r * 0.98, y + r * 0.30);
+    ctx.bezierCurveTo(x - r * 1.15, y - r * 0.35, x - r * 0.55, y - r * 1.05, x, y - r * 0.76);
+    ctx.closePath();
+  } else if (tierIndex === 1) {
+    // Tier 1: Grape (clustered plump berry silhouette with rounded lobe protrusions)
+    ctx.moveTo(x, y - r * 0.94);
+    ctx.bezierCurveTo(x + r * 0.52, y - r * 1.04, x + r * 0.96, y - r * 0.55, x + r * 0.88, y - r * 0.15);
+    ctx.bezierCurveTo(x + r * 1.12, y + r * 0.20, x + r * 0.86, y + r * 0.72, x + r * 0.45, y + r * 0.94);
+    ctx.bezierCurveTo(x + r * 0.20, y + r * 1.06, x - r * 0.20, y + r * 1.06, x - r * 0.45, y + r * 0.94);
+    ctx.bezierCurveTo(x - r * 0.86, y + r * 0.72, x - r * 1.12, y + r * 0.20, x - r * 0.88, y - r * 0.15);
+    ctx.bezierCurveTo(x - r * 0.96, y - r * 0.55, x - r * 0.52, y - r * 1.04, x, y - r * 0.94);
+    ctx.closePath();
+  } else if (tierIndex === 2) {
+    // Tier 2: Lemon (upright plump juicy lemon with organic pole nubs)
+    const topY = y - r * 1.05;
+    const botY = y + r * 1.02;
+    ctx.moveTo(x, topY);
+    // Right upper belly
+    ctx.bezierCurveTo(x + r * 0.22, topY + r * 0.12, x + r * 0.92, y - r * 0.48, x + r * 0.92, y + r * 0.04);
+    // Right lower belly to bottom nub
+    ctx.bezierCurveTo(x + r * 0.92, y + r * 0.56, x + r * 0.22, botY - r * 0.10, x, botY);
+    // Left lower belly from bottom nub
+    ctx.bezierCurveTo(x - r * 0.22, botY - r * 0.10, x - r * 0.92, y + r * 0.56, x - r * 0.92, y + r * 0.04);
+    // Left upper belly to top nub
+    ctx.bezierCurveTo(x - r * 0.92, y - r * 0.48, x - r * 0.22, topY + r * 0.12, x, topY);
+    ctx.closePath();
+  } else if (tierIndex === 3) {
+    // Tier 3: Orange -- User top-priority fix: PERFECTLY ROUND AND PLUMP CIRCULAR SPHERE
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.closePath();
+  } else if (tierIndex === 4) {
+    // Tier 4: Apple (indented shoulders and base clefts)
+    ctx.moveTo(x, y - r * 0.82);
+    ctx.bezierCurveTo(x + r * 0.60, y - r * 1.12, x + r * 1.14, y - r * 0.30, x + r * 0.96, y + r * 0.40);
+    ctx.bezierCurveTo(x + r * 0.82, y + r * 0.96, x + r * 0.25, y + r * 1.04, x, y + r * 0.88);
+    ctx.bezierCurveTo(x - r * 0.25, y + r * 1.04, x - r * 0.82, y + r * 0.96, x - r * 0.96, y + r * 0.40);
+    ctx.bezierCurveTo(x - r * 1.14, y - r * 0.30, x - r * 0.60, y - r * 1.12, x, y - r * 0.82);
+    ctx.closePath();
+  } else if (tierIndex === 5) {
+    // Tier 5: Pear (bell-bottom teardrop silhouette: narrow neck flaring into wide rounded belly)
+    ctx.moveTo(x, y - r * 0.96);
+    ctx.bezierCurveTo(x + r * 0.35, y - r * 0.95, x + r * 0.44, y - r * 0.30, x + r * 0.84, y + r * 0.25);
+    ctx.bezierCurveTo(x + r * 1.16, y + r * 0.70, x + r * 0.56, y + r * 1.05, x, y + r * 1.04);
+    ctx.bezierCurveTo(x - r * 0.56, y + r * 1.05, x - r * 1.16, y + r * 0.70, x - r * 0.84, y + r * 0.25);
+    ctx.bezierCurveTo(x - r * 0.44, y - r * 0.30, x - r * 0.35, y - r * 0.95, x, y - r * 0.96);
+    ctx.closePath();
+  } else if (tierIndex === 6) {
+    // Tier 6: Peach (sensual heart-cleft silhouette with organic curvature)
+    ctx.moveTo(x, y - r * 0.84);
+    ctx.bezierCurveTo(x + r * 0.58, y - r * 1.06, x + r * 1.15, y - r * 0.20, x + r * 0.92, y + r * 0.48);
+    ctx.bezierCurveTo(x + r * 0.70, y + r * 0.92, x + r * 0.22, y + r * 1.08, x, y + r * 1.05);
+    ctx.bezierCurveTo(x - r * 0.22, y + r * 1.08, x - r * 0.70, y + r * 0.92, x - r * 0.92, y + r * 0.48);
+    ctx.bezierCurveTo(x - r * 1.15, y - r * 0.20, x - r * 0.58, y - r * 1.06, x, y - r * 0.84);
+    ctx.closePath();
+  } else if (tierIndex === 7) {
+    // Tier 7: Pineapple (sturdy barrel shape with rounded shoulders)
+    ctx.moveTo(x - r * 0.65, y - r * 0.82);
+    ctx.lineTo(x + r * 0.65, y - r * 0.82);
+    ctx.bezierCurveTo(x + r * 1.08, y - r * 0.40, x + r * 1.08, y + r * 0.40, x + r * 0.65, y + r * 0.86);
+    ctx.quadraticCurveTo(x, y + r * 0.95, x - r * 0.65, y + r * 0.86);
+    ctx.bezierCurveTo(x - r * 1.08, y + r * 0.40, x - r * 1.08, y - r * 0.40, x - r * 0.65, y - r * 0.82);
+    ctx.closePath();
+  } else if (tierIndex === 8) {
+    // Tier 8: Watermelon (giant rounded organic melon)
+    ctx.moveTo(x, y - r * 0.98);
+    ctx.bezierCurveTo(x + r * 0.72, y - r * 1.02, x + r * 1.05, y - r * 0.52, x + r * 1.03, y);
+    ctx.bezierCurveTo(x + r * 1.05, y + r * 0.52, x + r * 0.72, y + r * 1.02, x, y + r * 0.98);
+    ctx.bezierCurveTo(x - r * 0.72, y + r * 1.02, x - r * 1.05, y + r * 0.52, x - r * 1.03, y);
+    ctx.bezierCurveTo(x - r * 1.05, y - r * 0.52, x - r * 0.72, y - r * 1.02, x, y - r * 0.98);
+    ctx.closePath();
+  } else {
+    // Fallback circle
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+  }
+}
+
+// 8-wedge prismatic iridescent rainbow disc with glass gloss
+const RAINBOW_WEDGES = ['#ff2a55', '#ff7a00', '#ffc700', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
 
 function drawRainbow(ctx, x, y, radius) {
-  // 7.3: the rarest object in the game used to sit perfectly still. Spins
-  // from the wall clock, same as drawDangerState's pulse -- purely cosmetic,
-  // so it needs no dt threaded through render.js's call chain.
   const spin = (Date.now() / 1000) * RAINBOW_SPIN_RADIANS_PER_SEC;
   ctx.save();
+
+  // Prismatic spectral pinwheel
   RAINBOW_WEDGES.forEach((c, i) => {
     ctx.beginPath();
     ctx.moveTo(x, y);
@@ -1113,49 +991,105 @@ function drawRainbow(ctx, x, y, radius) {
     ctx.fillStyle = c;
     ctx.fill();
   });
-  ctx.restore();
 
+  // Concentric iridescent diffraction arcs
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.72, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  // Outer vector border
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)';
   ctx.stroke();
 
+  // Upper convex glass gloss dome
+  ctx.save();
   ctx.beginPath();
-  ctx.arc(x, y, radius * 0.34, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.clip();
+  const glossGrad = ctx.createLinearGradient(x, y - radius, x, y + radius * 0.1);
+  glossGrad.addColorStop(0, 'rgba(255,255,255,0.46)');
+  glossGrad.addColorStop(1, 'rgba(255,255,255,0.06)');
+  ctx.beginPath();
+  ctx.ellipse(x, y - radius * 0.35, radius * 0.85, radius * 0.46, 0, 0, Math.PI * 2);
+  ctx.fillStyle = glossGrad;
   ctx.fill();
+  ctx.restore();
+
+  // Crystalline prism center: 4-pointed diamond star
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  const starR = radius * 0.36;
+  ctx.beginPath();
+  ctx.moveTo(x, y - starR);
+  ctx.quadraticCurveTo(x, y, x + starR, y);
+  ctx.quadraticCurveTo(x, y, x, y + starR);
+  ctx.quadraticCurveTo(x, y, x - starR, y);
+  ctx.quadraticCurveTo(x, y, x, y - starR);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
 }
 
-// 8.4: "the most visible object in the game while it is live" -- a round
-// body plus a fuse whose LENGTH shrinks with fuseFraction (1 = just planted
-// or still falling, 0 = about to go off), tipped with a spark that reddens
-// as it nears detonation.
+// Tactile bomb with brass collar and animated star-spark fuse
 function drawBombShape(ctx, x, y, radius, fuseFraction) {
   ctx.save();
 
+  // Heavy cast-iron metallic spherical body
   ctx.beginPath();
   ctx.arc(x, y + radius * 0.12, radius * 0.82, 0, Math.PI * 2);
   ctx.fillStyle = BOMB_DEF.color;
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-  ctx.stroke();
 
-  ctx.beginPath();
-  ctx.arc(x - radius * 0.28, y - radius * 0.06, radius * 0.22, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  // Metallic radial shine
+  const bombShine = ctx.createRadialGradient(
+    x - radius * 0.28, y - radius * 0.10, radius * 0.08,
+    x, y + radius * 0.12, radius * 0.82
+  );
+  bombShine.addColorStop(0, 'rgba(255,255,255,0.22)');
+  bombShine.addColorStop(0.5, 'rgba(255,255,255,0.0)');
+  bombShine.addColorStop(1, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = bombShine;
   ctx.fill();
 
-  // Fuse: shrinks toward the bomb as the drops run out, not a fixed length
-  // with a colour change -- the shrinking is what reads as "burning down".
-  const clamped = Math.max(0.08, fuseFraction);
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = 'rgba(0,0,0,0.30)';
+  ctx.stroke();
+
+  // Gloss crescent on top-left
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.28, y - radius * 0.06, radius * 0.24, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.26)';
+  ctx.fill();
+
+  // Sharp micro-glint dot
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.38, y - radius * 0.18, radius * 0.07, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
+  ctx.fill();
+
+  // Knurled metallic brass collar at nozzle
   const fuseBaseX = x + radius * 0.32;
   const fuseBaseY = y - radius * 0.62;
-  const fuseLen = radius * 1.05 * clamped;
+  ctx.fillStyle = '#d4af37';
+  ctx.beginPath();
+  ctx.ellipse(fuseBaseX, fuseBaseY + 2, radius * 0.16, radius * 0.08, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#78350f';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Braided burning fuse
+  const clamped = Math.max(0.08, fuseFraction);
+  const fuseLen = radius * 1.08 * clamped;
   const fuseEndX = fuseBaseX + fuseLen * 0.55;
   const fuseEndY = fuseBaseY - fuseLen * 0.85;
-  ctx.lineWidth = Math.max(1.5, radius * 0.12);
+
+  ctx.lineWidth = Math.max(1.8, radius * 0.12);
   ctx.strokeStyle = '#8a5a2a';
   ctx.lineCap = 'round';
   ctx.beginPath();
@@ -1163,12 +1097,500 @@ function drawBombShape(ctx, x, y, radius, fuseFraction) {
   ctx.quadraticCurveTo(fuseBaseX + fuseLen * 0.3, fuseBaseY - fuseLen * 0.3, fuseEndX, fuseEndY);
   ctx.stroke();
 
-  // Spark at the burning tip, pulsing, reddening as detonation nears.
-  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 90);
+  // Dynamic animated star-spark at fuse tip
+  const isUrgent = fuseFraction < 0.3;
+  const sparkFreq = isUrgent ? 45 : 85;
+  const pulse = 0.65 + 0.35 * Math.sin(Date.now() / sparkFreq);
+  const sr = radius * 0.24 * pulse;
+
+  ctx.save();
+  ctx.translate(fuseEndX, fuseEndY);
+
+  ctx.fillStyle = isUrgent ? '#ef4444' : '#f97316';
   ctx.beginPath();
-  ctx.arc(fuseEndX, fuseEndY, radius * 0.17 * pulse, 0, Math.PI * 2);
-  ctx.fillStyle = fuseFraction < 0.3 ? '#ff5a3c' : '#ffb020';
+  ctx.moveTo(0, -sr);
+  ctx.lineTo(sr * 0.28, -sr * 0.28);
+  ctx.lineTo(sr, 0);
+  ctx.lineTo(sr * 0.28, sr * 0.28);
+  ctx.lineTo(0, sr);
+  ctx.lineTo(-sr * 0.28, sr * 0.28);
+  ctx.lineTo(-sr, 0);
+  ctx.lineTo(-sr * 0.28, -sr * 0.28);
+  ctx.closePath();
   ctx.fill();
 
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(0, 0, sr * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function drawTierDetail(ctx, x, y, radius, tierIndex, tierDef) {
+  if (tierIndex === undefined && !tierDef) return;
+  const tier = (tierIndex !== undefined ? TIERS[tierIndex] : tierDef);
+  if (!tier) return;
+
+  const name = tier.name;
+  if (name === 'cherry' || tierIndex === 0) {
+    drawCherryDetail(ctx, x, y, radius);
+  } else if (name === 'grape' || tierIndex === 1) {
+    drawGrapeDetail(ctx, x, y, radius);
+  } else if (name === 'lemon' || tierIndex === 2) {
+    drawLemonDetail(ctx, x, y, radius);
+  } else if (name === 'orange' || tierIndex === 3) {
+    drawOrangeDetail(ctx, x, y, radius);
+  } else if (name === 'apple' || tierIndex === 4) {
+    drawAppleDetail(ctx, x, y, radius);
+  } else if (name === 'pear' || tierIndex === 5) {
+    drawPearDetail(ctx, x, y, radius);
+  } else if (name === 'peach' || tierIndex === 6) {
+    drawPeachDetail(ctx, x, y, radius);
+  } else if (name === 'pineapple' || tierIndex === 7) {
+    drawPineappleDetail(ctx, x, y, radius);
+  } else if (name === 'watermelon' || tierIndex === 8) {
+    drawWatermelonDetail(ctx, x, y, radius);
+  } else if (tierIndex !== undefined && tierIndex >= 4) {
+    drawStemAndLeaf(ctx, x, y, radius);
+  }
+}
+
+// Tier 0: Cherry Detail
+function drawCherryDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  ctx.beginPath();
+  ctx.arc(x, y - radius * 0.78, radius * 0.16, 0, Math.PI);
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.fill();
+
+  ctx.strokeStyle = '#4a3018';
+  ctx.lineWidth = Math.max(1.6, radius * 0.10);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.80);
+  ctx.quadraticCurveTo(x + radius * 0.28, y - radius * 1.25, x + radius * 0.36, y - radius * 1.48);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(x + radius * 0.25, y - radius * 1.30);
+  ctx.rotate(0.38);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 0.24, radius * 0.11, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#388e3c';
+  ctx.fill();
+  ctx.strokeStyle = '#81c784';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.18, 0);
+  ctx.lineTo(radius * 0.18, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.22, y - radius * 0.25, radius * 0.10, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Tier 1: Grape Detail
+function drawGrapeDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  // Woody stem
+  ctx.strokeStyle = '#4a3018';
+  ctx.lineWidth = Math.max(1.6, radius * 0.11);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.92);
+  ctx.lineTo(x + radius * 0.06, y - radius * 1.25);
+  ctx.stroke();
+
+  // Curled green vine tendril
+  ctx.strokeStyle = '#43a047';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(x + radius * 0.22, y - radius * 1.16, radius * 0.13, Math.PI * 0.4, Math.PI * 1.85);
+  ctx.stroke();
+
+  // Interior berry division creases delineating individual grapes in cluster
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.35, y - radius * 0.25, radius * 0.42, 0.2, Math.PI * 0.65);
+  ctx.arc(x + radius * 0.35, y - radius * 0.25, radius * 0.42, Math.PI * 0.35, Math.PI * 0.80);
+  ctx.arc(x, y + radius * 0.35, radius * 0.45, -Math.PI * 0.80, -Math.PI * 0.20);
+  ctx.stroke();
+
+  // Clustered interior berry highlights
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.32)';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.22, y - radius * 0.38, radius * 0.22, -Math.PI * 0.8, -Math.PI * 0.15);
+  ctx.arc(x + radius * 0.22, y - radius * 0.35, radius * 0.20, -Math.PI * 0.8, -Math.PI * 0.15);
+  ctx.arc(x, y + radius * 0.15, radius * 0.24, -Math.PI * 0.8, -Math.PI * 0.15);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// Tier 2: Lemon Detail -- Plump sunny citrus with fresh green leaf, stem node, and delicate zest texture
+function drawLemonDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  const topY = y - radius * 1.04;
+
+  // 1. Calyx / stem node at top pole tip
+  ctx.fillStyle = '#2e7d32';
+  ctx.beginPath();
+  ctx.arc(x, topY + radius * 0.04, radius * 0.10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Woody stem bud
+  ctx.strokeStyle = '#4a2e1b';
+  ctx.lineWidth = Math.max(1.4, radius * 0.08);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, topY + radius * 0.04);
+  ctx.quadraticCurveTo(x + radius * 0.06, topY - radius * 0.12, x + radius * 0.03, topY - radius * 0.22);
+  ctx.stroke();
+
+  // Fresh vibrant green leaf sprouting to upper right
+  ctx.save();
+  ctx.translate(x + radius * 0.10, topY - radius * 0.10);
+  ctx.rotate(0.40);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 0.28, radius * 0.12, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#43a047';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.16)';
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+
+  // Leaf central vein
+  ctx.strokeStyle = '#a5d6a7';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.22, 0);
+  ctx.lineTo(radius * 0.22, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  // 2. Soft curved longitudinal highlight on upper-left flank
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.38)';
+  ctx.lineWidth = Math.max(1.4, radius * 0.08);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.10, y, radius * 0.65, -Math.PI * 0.75, -Math.PI * 0.22);
+  ctx.stroke();
+
+  // 3. Delicate citrus peel zest pores (warm golden dimples)
+  ctx.fillStyle = 'rgba(180, 130, 0, 0.15)';
+  const pores = [
+    [-0.24, -0.32], [0.30, -0.22], [-0.35, 0.18], [0.26, 0.30], [-0.06, 0.48], [0.08, -0.52]
+  ];
+  for (const [px, py] of pores) {
+    ctx.beginPath();
+    ctx.arc(x + px * radius, y + py * radius, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 4. Subtle organic dimple crease at bottom pole tip
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.16)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(x, y + radius * 0.96, radius * 0.08, 0, Math.PI);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// Tier 3: Orange Detail -- Circular sphere with vivid emerald calyx star navel
+function drawOrangeDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  const cyx = x;
+  const cyy = y - radius * 0.88;
+  const s = radius * 0.16;
+  ctx.fillStyle = '#2e7d32';
+  ctx.beginPath();
+  ctx.moveTo(cyx, cyy - s);
+  ctx.lineTo(cyx + s * 0.35, cyy - s * 0.35);
+  ctx.lineTo(cyx + s, cyy);
+  ctx.lineTo(cyx + s * 0.35, cyy + s * 0.35);
+  ctx.lineTo(cyx, cyy + s);
+  ctx.lineTo(cyx - s * 0.35, cyy + s * 0.35);
+  ctx.lineTo(cyx - s, cyy);
+  ctx.lineTo(cyx - s * 0.35, cyy - s * 0.35);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#a5d6a7';
+  ctx.beginPath();
+  ctx.arc(cyx, cyy, s * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.72, -Math.PI * 0.82, -Math.PI * 0.08);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  const pores = [[-0.22, -0.32], [0.35, -0.25], [-0.38, 0.20], [0.28, 0.32], [-0.08, 0.44]];
+  for (const [px, py] of pores) {
+    ctx.beginPath();
+    ctx.arc(x + px * radius, y + py * radius, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// Tier 4: Apple Detail
+function drawAppleDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  ctx.beginPath();
+  ctx.arc(x, y - radius * 0.82, radius * 0.18, 0, Math.PI);
+  ctx.fillStyle = 'rgba(0,0,0,0.30)';
+  ctx.fill();
+
+  ctx.strokeStyle = '#4a2e1b';
+  ctx.lineWidth = Math.max(1.8, radius * 0.11);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.86);
+  ctx.quadraticCurveTo(x + radius * 0.14, y - radius * 1.20, x + radius * 0.08, y - radius * 1.40);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(x + radius * 0.22, y - radius * 1.16);
+  ctx.rotate(-0.42);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 0.32, radius * 0.15, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#388e3c';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.strokeStyle = '#a5d6a7';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.24, 0);
+  ctx.lineTo(radius * 0.24, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// Tier 5: Pear Detail
+const PEAR_FRECKLES = [[-0.25, 0.45], [0.18, 0.52], [-0.05, 0.65], [0.32, 0.38], [-0.35, 0.22]];
+
+function drawPearDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  ctx.strokeStyle = '#5c3d24';
+  ctx.lineWidth = Math.max(1.6, radius * 0.10);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.90);
+  ctx.quadraticCurveTo(x - radius * 0.14, y - radius * 1.22, x - radius * 0.07, y - radius * 1.38);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(x + radius * 0.18, y - radius * 1.14);
+  ctx.rotate(-0.54);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 0.28, radius * 0.13, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#4caf50';
+  ctx.fill();
+  ctx.strokeStyle = '#81c784';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-radius * 0.2, 0);
+  ctx.lineTo(radius * 0.2, 0);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  for (const [fx, fy] of PEAR_FRECKLES) {
+    ctx.beginPath();
+    ctx.arc(x + fx * radius, y + fy * radius, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.1, y + radius * 0.2, radius * 0.58, Math.PI * 0.8, Math.PI * 1.35);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// Tier 6: Peach Detail
+function drawPeachDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.88);
+  ctx.quadraticCurveTo(x + radius * 0.10, y - radius * 0.15, x, y + radius * 0.68);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(x - radius * 0.06, y - radius * 0.80);
+  ctx.quadraticCurveTo(x + radius * 0.04, y - radius * 0.15, x - radius * 0.06, y + radius * 0.60);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#4a2e1b';
+  ctx.lineWidth = Math.max(1.5, radius * 0.09);
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.88);
+  ctx.lineTo(x + radius * 0.04, y - radius * 1.20);
+  ctx.stroke();
+
+  ctx.fillStyle = '#43a047';
+  ctx.beginPath();
+  ctx.ellipse(x - radius * 0.15, y - radius * 1.08, radius * 0.20, radius * 0.10, -0.38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x + radius * 0.18, y - radius * 1.10, radius * 0.18, radius * 0.09, 0.42, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Tier 7: Pineapple Detail
+const PINEAPPLE_OFFSETS = [-0.4, 0, 0.4];
+
+function drawPineappleDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.lineWidth = 1.4;
+  for (const off of PINEAPPLE_OFFSETS) {
+    ctx.beginPath();
+    ctx.moveTo(x - radius * 0.65, y + off * radius - radius * 0.35);
+    ctx.lineTo(x + radius * 0.65, y + off * radius + radius * 0.35);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x - radius * 0.65, y + off * radius + radius * 0.35);
+    ctx.lineTo(x + radius * 0.65, y + off * radius - radius * 0.35);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = 'rgba(0,0,0,0.22)';
+  const scalePips = [[0, 0], [-0.3, -0.28], [0.3, -0.28], [-0.3, 0.28], [0.3, 0.28]];
+  for (const [px, py] of scalePips) {
+    ctx.beginPath();
+    ctx.arc(x + px * radius, y + py * radius, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+  drawPineappleCrown(ctx, x, y, radius);
+}
+
+function drawPineappleCrown(ctx, x, y, radius) {
+  const spikes = 5;
+  ctx.save();
+  ctx.fillStyle = '#2e7d32';
+  ctx.strokeStyle = 'rgba(0,0,0,0.20)';
+  ctx.lineWidth = 1.1;
+
+  for (let i = 0; i < spikes; i++) {
+    const t = (i - (spikes - 1) / 2) / spikes;
+    const baseX = x + t * radius * 1.15;
+    const baseY = y - radius * 0.85;
+    const tipX = x + t * radius * 0.65;
+    const tipY = y - radius * (1.55 + Math.abs(t) * 0.32);
+    ctx.beginPath();
+    ctx.moveTo(baseX - radius * 0.09, baseY);
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(baseX + radius * 0.09, baseY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = '#66bb6a';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(baseX, baseY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Tier 8: Watermelon Detail
+const SEED_POSITIONS = [
+  [-0.35, -0.1], [0.12, -0.36], [0.4, 0.05], [0.02, 0.36],
+  [-0.32, 0.3], [0.3, -0.34], [-0.46, 0.14],
+];
+
+function drawWatermelonDetail(ctx, x, y, radius) {
+  ctx.save();
+
+  ctx.strokeStyle = '#1b5e20';
+  ctx.lineWidth = Math.max(2.8, radius * 0.13);
+  ctx.beginPath();
+  ctx.arc(x, y, radius - ctx.lineWidth / 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(200, 250, 200, 0.65)';
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(x, y, radius - Math.max(2.8, radius * 0.13) - 0.7, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = '#1a1a1a';
+  for (const [dx, dy] of SEED_POSITIONS) {
+    ctx.save();
+    ctx.translate(x + dx * radius, y + dy * radius);
+    ctx.rotate(Math.atan2(dy, dx));
+    ctx.beginPath();
+    ctx.ellipse(0, 0, radius * 0.095, radius * 0.048, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(-radius * 0.03, -radius * 0.015, 0.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+function drawStemAndLeaf(ctx, x, y, radius) {
+  ctx.save();
+  ctx.strokeStyle = '#5a3d28';
+  ctx.lineWidth = Math.max(1.5, radius * 0.10);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius * 0.92);
+  ctx.quadraticCurveTo(x + radius * 0.12, y - radius * 1.16, x + radius * 0.05, y - radius * 1.34);
+  ctx.stroke();
+
+  ctx.translate(x + radius * 0.20, y - radius * 1.12);
+  ctx.rotate(-0.5);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 0.32, radius * 0.15, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#388e3c';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+  ctx.stroke();
   ctx.restore();
 }

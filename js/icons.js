@@ -3,8 +3,6 @@
 //
 // Every icon draws inside a unit box centred on (x, y) with a given `size`, so
 // the same function serves the 26px HUD slots and the larger shop swatches.
-// Shapes are kept to bold silhouettes with a single accent: at 26px, interior
-// detail turns to mush, so contrast does the work instead.
 
 const ICONS = {};
 
@@ -16,117 +14,215 @@ function withStyle(ctx, color, lineScale) {
   ctx.fillStyle = color;
 }
 
-// Downward chevrons with a bar under them: "falling, slowly".
+// Glowing aerodynamic wings / parachute canopy with motion streaks: "falling, slowly".
 ICONS.slowDrop = (ctx, x, y, s, color) => {
   const u = s / 2;
-  withStyle(ctx, color, s * 0.11);
+  withStyle(ctx, color, s * 0.09);
+
+  // Aerodynamic parachute canopy
   ctx.beginPath();
-  ctx.moveTo(x - u * 0.55, y - u * 0.75);
-  ctx.lineTo(x, y - u * 0.2);
-  ctx.lineTo(x + u * 0.55, y - u * 0.75);
-  ctx.moveTo(x - u * 0.55, y - u * 0.05);
-  ctx.lineTo(x, y + u * 0.5);
-  ctx.lineTo(x + u * 0.55, y - u * 0.05);
+  ctx.moveTo(x - u * 0.72, y - u * 0.22);
+  ctx.bezierCurveTo(x - u * 0.65, y - u * 0.85, x + u * 0.65, y - u * 0.85, x + u * 0.72, y - u * 0.22);
+  ctx.quadraticCurveTo(x + u * 0.36, y - u * 0.08, x, y - u * 0.18);
+  ctx.quadraticCurveTo(x - u * 0.36, y - u * 0.08, x - u * 0.72, y - u * 0.22);
+  ctx.closePath();
   ctx.stroke();
+
+  // Suspension cords
+  ctx.lineWidth = Math.max(1, s * 0.05);
   ctx.beginPath();
-  ctx.moveTo(x - u * 0.7, y + u * 0.8);
-  ctx.lineTo(x + u * 0.7, y + u * 0.8);
+  ctx.moveTo(x - u * 0.65, y - u * 0.22);
+  ctx.lineTo(x, y + u * 0.32);
+  ctx.moveTo(x + u * 0.65, y - u * 0.22);
+  ctx.lineTo(x, y + u * 0.32);
+  ctx.moveTo(x, y - u * 0.18);
+  ctx.lineTo(x, y + u * 0.32);
+  ctx.stroke();
+
+  // Downward airflow motion streaks
+  ctx.lineWidth = Math.max(1.2, s * 0.07);
+  ctx.beginPath();
+  ctx.moveTo(x - u * 0.40, y + u * 0.48);
+  ctx.lineTo(x - u * 0.40, y + u * 0.82);
+  ctx.moveTo(x, y + u * 0.52);
+  ctx.lineTo(x, y + u * 0.90);
+  ctx.moveTo(x + u * 0.40, y + u * 0.48);
+  ctx.lineTo(x + u * 0.40, y + u * 0.82);
   ctx.stroke();
 };
 
-// A circle with a diagonal slash: "remove this one".
+// High-tech laser target reticle with glowing crosshairs and circular targeting brackets.
 ICONS.remover = (ctx, x, y, s, color) => {
   const u = s / 2;
-  withStyle(ctx, color, s * 0.11);
+  withStyle(ctx, color, s * 0.09);
+
+  const r = u * 0.70;
+  // Four corner targeting brackets
+  const gap = 0.28;
+  for (let i = 0; i < 4; i++) {
+    const start = (i * Math.PI / 2) + gap;
+    const end = ((i + 1) * Math.PI / 2) - gap;
+    ctx.beginPath();
+    ctx.arc(x, y, r, start, end);
+    ctx.stroke();
+  }
+
+  // Inner precision reticle
+  ctx.lineWidth = Math.max(1, s * 0.05);
   ctx.beginPath();
-  ctx.arc(x, y, u * 0.68, 0, Math.PI * 2);
+  ctx.arc(x, y, u * 0.34, 0, Math.PI * 2);
   ctx.stroke();
+
+  // Crosshair laser tics pointing inward
+  ctx.lineWidth = Math.max(1.2, s * 0.08);
   ctx.beginPath();
-  ctx.moveTo(x - u * 0.48, y + u * 0.48);
-  ctx.lineTo(x + u * 0.48, y - u * 0.48);
+  ctx.moveTo(x, y - r * 1.15); ctx.lineTo(x, y - u * 0.45);
+  ctx.moveTo(x, y + r * 1.15); ctx.lineTo(x, y + u * 0.45);
+  ctx.moveTo(x - r * 1.15, y); ctx.lineTo(x - u * 0.45, y);
+  ctx.moveTo(x + r * 1.15, y); ctx.lineTo(x + u * 0.45, y);
   ctx.stroke();
+
+  // Center laser dot
+  ctx.beginPath();
+  ctx.arc(x, y, u * 0.12, 0, Math.PI * 2);
+  ctx.fill();
 };
 
-// Stacked bars with an arrow: "one more row".
+// Stacked luminous ascending grid layers with dynamic upward chevron.
 ICONS.extraRow = (ctx, x, y, s, color) => {
   const u = s / 2;
-  withStyle(ctx, color, s * 0.1);
+  withStyle(ctx, color, s * 0.09);
+
+  // Stacked horizontal grid plates
   ctx.globalAlpha = 0.45;
-  ctx.fillRect(x - u * 0.75, y + u * 0.15, u * 1.5, u * 0.3);
-  ctx.fillRect(x - u * 0.75, y + u * 0.6, u * 1.5, u * 0.3);
+  ctx.fillRect(x - u * 0.72, y + u * 0.25, u * 1.44, u * 0.22);
+  ctx.fillRect(x - u * 0.72, y + u * 0.62, u * 1.44, u * 0.22);
   ctx.globalAlpha = 1;
+
+  // Luminous upward energetic chevron
+  ctx.lineWidth = Math.max(1.6, s * 0.12);
   ctx.beginPath();
-  ctx.moveTo(x, y - u * 0.85);
-  ctx.lineTo(x, y - u * 0.12);
-  ctx.moveTo(x - u * 0.32, y - u * 0.5);
-  ctx.lineTo(x, y - u * 0.85);
-  ctx.lineTo(x + u * 0.32, y - u * 0.5);
+  ctx.moveTo(x, y - u * 0.88);
+  ctx.lineTo(x, y + u * 0.12);
+  ctx.stroke();
+
+  // Chevron arrowhead
+  ctx.beginPath();
+  ctx.moveTo(x - u * 0.48, y - u * 0.45);
+  ctx.lineTo(x, y - u * 0.88);
+  ctx.lineTo(x + u * 0.48, y - u * 0.45);
   ctx.stroke();
 };
 
-// Two opposing arrows -- the universal "exchange" glyph. 10.1.
+// Two dynamic, glowing aerodynamic curved arrows in a circular flow with sharp dimensional heads.
 ICONS.swap = (ctx, x, y, s, color) => {
   const u = s / 2;
   withStyle(ctx, color, s * 0.11);
   ctx.lineCap = 'round';
 
-  // Top arrow: shaft pointing right, arrowhead at the right end.
-  const topY = y - u * 0.32;
+  const r = u * 0.58;
+
+  // Upper clockwise arc
   ctx.beginPath();
-  ctx.moveTo(x - u * 0.62, topY);
-  ctx.lineTo(x + u * 0.5, topY);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x + u * 0.5, topY);
-  ctx.lineTo(x + u * 0.22, topY - u * 0.28);
-  ctx.moveTo(x + u * 0.5, topY);
-  ctx.lineTo(x + u * 0.22, topY + u * 0.28);
+  ctx.arc(x, y, r, -Math.PI * 0.88, -Math.PI * 0.10);
   ctx.stroke();
 
-  // Bottom arrow: shaft pointing left, mirrored.
-  const botY = y + u * 0.32;
+  // Upper arrowhead at right end pointing downwards
+  const topEndX = x + Math.cos(-Math.PI * 0.10) * r;
+  const topEndY = y + Math.sin(-Math.PI * 0.10) * r;
   ctx.beginPath();
-  ctx.moveTo(x + u * 0.62, botY);
-  ctx.lineTo(x - u * 0.5, botY);
+  ctx.moveTo(topEndX - u * 0.10, topEndY - u * 0.28);
+  ctx.lineTo(topEndX, topEndY);
+  ctx.lineTo(topEndX - u * 0.32, topEndY - u * 0.05);
   ctx.stroke();
+
+  // Lower counter-clockwise arc
   ctx.beginPath();
-  ctx.moveTo(x - u * 0.5, botY);
-  ctx.lineTo(x - u * 0.22, botY - u * 0.28);
-  ctx.moveTo(x - u * 0.5, botY);
-  ctx.lineTo(x - u * 0.22, botY + u * 0.28);
+  ctx.arc(x, y, r, Math.PI * 0.12, Math.PI * 0.90);
+  ctx.stroke();
+
+  // Lower arrowhead at left end pointing upwards
+  const botEndX = x + Math.cos(Math.PI * 0.90) * r;
+  const botEndY = y + Math.sin(Math.PI * 0.90) * r;
+  ctx.beginPath();
+  ctx.moveTo(botEndX + u * 0.10, botEndY + u * 0.28);
+  ctx.lineTo(botEndX, botEndY);
+  ctx.lineTo(botEndX + u * 0.32, botEndY + u * 0.05);
   ctx.stroke();
 };
 
-// Round bomb with a lit fuse.
+// Glossy round bomb with metallic specular crescent, brass nozzle collar, and burning spark.
 ICONS.bomb = (ctx, x, y, s, color) => {
   const u = s / 2;
   withStyle(ctx, color, s * 0.09);
+
+  const bx = x - u * 0.04;
+  const by = y + u * 0.18;
+  const br = u * 0.60;
+
+  // Spherical bomb body
   ctx.beginPath();
-  ctx.arc(x - u * 0.05, y + u * 0.18, u * 0.62, 0, Math.PI * 2);
+  ctx.arc(bx, by, br, 0, Math.PI * 2);
   ctx.fill();
 
+  // Metallic specular crescent
+  ctx.save();
   ctx.beginPath();
-  ctx.moveTo(x + u * 0.3, y - u * 0.34);
-  ctx.quadraticCurveTo(x + u * 0.75, y - u * 0.72, x + u * 0.5, y - u * 0.95);
+  ctx.arc(bx - br * 0.28, by - br * 0.12, br * 0.28, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+  ctx.fill();
+  ctx.restore();
+
+  // Brass nozzle collar
+  const collarX = bx + br * 0.38;
+  const collarY = by - br * 0.78;
+  ctx.save();
+  ctx.fillStyle = '#d4af37';
+  ctx.beginPath();
+  ctx.ellipse(collarX, collarY, u * 0.16, u * 0.08, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Burning S-curved fuse
+  const fuseEndX = x + u * 0.55;
+  const fuseEndY = y - u * 0.92;
+  ctx.lineWidth = Math.max(1.4, s * 0.08);
+  ctx.strokeStyle = '#8a5a2a';
+  ctx.beginPath();
+  ctx.moveTo(collarX, collarY);
+  ctx.quadraticCurveTo(x + u * 0.72, y - u * 0.65, fuseEndX, fuseEndY);
   ctx.stroke();
 
-  // Spark, as a four-point star in the caller's colour rather than a fixed
-  // orange -- the slot background changes with the theme and when armed.
-  const sx = x + u * 0.52;
-  const sy = y - u * 0.95;
-  const a = u * 0.3;
-  ctx.lineWidth = s * 0.07;
+  // 4-pointed radiant star-spark at fuse tip
+  const starR = u * 0.26;
+  ctx.save();
+  ctx.translate(fuseEndX, fuseEndY);
+  ctx.fillStyle = '#f97316';
   ctx.beginPath();
-  ctx.moveTo(sx - a, sy); ctx.lineTo(sx + a, sy);
-  ctx.moveTo(sx, sy - a); ctx.lineTo(sx, sy + a);
-  ctx.stroke();
+  ctx.moveTo(0, -starR);
+  ctx.lineTo(starR * 0.28, -starR * 0.28);
+  ctx.lineTo(starR, 0);
+  ctx.lineTo(starR * 0.28, starR * 0.28);
+  ctx.lineTo(0, starR);
+  ctx.lineTo(-starR * 0.28, starR * 0.28);
+  ctx.lineTo(-starR, 0);
+  ctx.lineTo(-starR * 0.28, -starR * 0.28);
+  ctx.closePath();
+  ctx.fill();
+
+  // Blazing white center ember
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(0, 0, starR * 0.36, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 };
 
-// Rainbow wildcard: a disc split into coloured wedges.
+// Rainbow wildcard: 8-wedge iridescent pinwheel with glass gloss dome and radiant star core.
 ICONS.rainbow = (ctx, x, y, s, color) => {
   const u = s / 2;
   const r = u * 0.72;
-  const wedges = ['#e0435a', '#f2960b', '#f2d43d', '#3fae5c', '#4c6ef5', '#8e44ad'];
+  const wedges = ['#ff2a55', '#ff7a00', '#ffc700', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899'];
   ctx.save();
   wedges.forEach((c, i) => {
     ctx.beginPath();
@@ -136,7 +232,29 @@ ICONS.rainbow = (ctx, x, y, s, color) => {
     ctx.fillStyle = c;
     ctx.fill();
   });
+
+  // Upper glass dome gloss
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(x, y - r * 0.35, r * 0.85, r * 0.45, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.42)';
+  ctx.fill();
+
+  // Center diamond star core
+  ctx.fillStyle = '#ffffff';
+  const starR = r * 0.36;
+  ctx.beginPath();
+  ctx.moveTo(x, y - starR);
+  ctx.quadraticCurveTo(x, y, x + starR, y);
+  ctx.quadraticCurveTo(x, y, x, y + starR);
+  ctx.quadraticCurveTo(x, y, x - starR, y);
+  ctx.quadraticCurveTo(x, y, x, y - starR);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
+
   withStyle(ctx, color, s * 0.08);
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -183,15 +301,13 @@ ICONS.palette = (ctx, x, y, s, color) => {
   });
 };
 
-// Cog: a filled disc, eight radiating teeth, a punched-out center. Menu hub
-// button (7.1) for audio/haptics settings.
+// Cog: radiating bevelled teeth and an annular ring with clean vector center hole.
+// Menu hub button (7.1) for audio/haptics settings.
 ICONS.gear = (ctx, x, y, s, color) => {
   const u = s / 2;
   ctx.save();
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x, y, u * 0.62, 0, Math.PI * 2);
-  ctx.fill();
+  // Eight radiating teeth
   const teeth = 8;
   const toothLen = u * 0.28;
   const toothW = u * 0.26;
@@ -199,14 +315,13 @@ ICONS.gear = (ctx, x, y, s, color) => {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate((i / teeth) * Math.PI * 2);
-    ctx.fillRect(u * 0.5, -toothW / 2, toothLen, toothW);
+    ctx.fillRect(u * 0.48, -toothW / 2, toothLen, toothW);
     ctx.restore();
   }
-  // Punched out rather than left as a stroked ring, so the hole is genuinely
-  // transparent regardless of what the icon sits on top of.
-  ctx.globalCompositeOperation = 'destination-out';
+  // Annular gear disc with clean non-destructive center hole
   ctx.beginPath();
-  ctx.arc(x, y, u * 0.3, 0, Math.PI * 2);
+  ctx.arc(x, y, u * 0.62, 0, Math.PI * 2);
+  ctx.arc(x, y, u * 0.28, 0, Math.PI * 2, true);
   ctx.fill();
   ctx.restore();
 };
@@ -222,14 +337,21 @@ ICONS.back = (ctx, x, y, s, color) => {
   ctx.stroke();
 };
 
-// Two vertical bars: the universal pause glyph. 9.3's in-HUD pause control.
+// Two rounded vertical bars: the universal pause glyph. 9.3's in-HUD pause control.
 ICONS.pause = (ctx, x, y, s, color) => {
   const u = s / 2;
-  withStyle(ctx, color, s * 0.1);
-  const barW = u * 0.42;
-  const barH = u * 1.3;
-  ctx.fillRect(x - u * 0.55, y - barH / 2, barW, barH);
-  ctx.fillRect(x + u * 0.13, y - barH / 2, barW, barH);
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(2, u * 0.38);
+  ctx.lineCap = 'round';
+  const halfH = u * 0.46;
+  ctx.beginPath();
+  ctx.moveTo(x - u * 0.34, y - halfH);
+  ctx.lineTo(x - u * 0.34, y + halfH);
+  ctx.moveTo(x + u * 0.34, y - halfH);
+  ctx.lineTo(x + u * 0.34, y + halfH);
+  ctx.stroke();
+  ctx.restore();
 };
 
 export function drawIcon(ctx, name, x, y, size, color = '#3a2b20') {

@@ -16,12 +16,81 @@ import {
   BOMB_RING_DURATION_SEC, LEVEL_CALLOUT_SEC,
 } from './constants.js';
 
-// Crude vibrance boost: pushes each channel away from the colour's own grey
-// point (its average) by a fixed factor. Cheaper than a full hex->hsl->hex
-// round trip and good enough for the small nudge 7.2 asks for -- this is not
-// meant to hit an exact saturation percentage, just to keep particle colours
-// from reading as pale against the brighter boards.
+// --- Static Object Pools (Zero GC in 60 FPS loop) ----------------------------
+const PARTICLE_POOL_SIZE = 768;
+const SQUASH_POOL_SIZE = 64;
+const GHOST_POOL_SIZE = 64;
+const BOMB_RING_POOL_SIZE = 48;
+
+const particlePool = [];
+for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+  particlePool.push({
+    x: 0, y: 0, vx: 0, vy: 0, t: 0, life: 0, color: '', size: 0,
+    kind: 0, rot: 0, vRot: 0,
+  });
+}
+
+const squashPool = [];
+for (let i = 0; i < SQUASH_POOL_SIZE; i++) {
+  squashPool.push({ row: 0, col: 0, tier: 0, t: 0, duration: 0, amount: 0 });
+}
+
+const ghostPool = [];
+for (let i = 0; i < GHOST_POOL_SIZE; i++) {
+  ghostPool.push({ x: 0, y: 0, tier: 0, color: '', t: 0 });
+}
+
+const bombRingPool = [];
+for (let i = 0; i < BOMB_RING_POOL_SIZE; i++) {
+  bombRingPool.push({ x: 0, y: 0, t: 0, duration: 0 });
+}
+
+function allocParticle() {
+  return particlePool.pop() || {
+    x: 0, y: 0, vx: 0, vy: 0, t: 0, life: 0, color: '', size: 0,
+    kind: 0, rot: 0, vRot: 0,
+  };
+}
+
+function freeParticle(p) {
+  if (particlePool.length < PARTICLE_POOL_SIZE) particlePool.push(p);
+}
+
+function allocSquash() {
+  return squashPool.pop() || { row: 0, col: 0, tier: 0, t: 0, duration: 0, amount: 0 };
+}
+
+function freeSquash(s) {
+  if (squashPool.length < SQUASH_POOL_SIZE) squashPool.push(s);
+}
+
+function allocGhost() {
+  return ghostPool.pop() || { x: 0, y: 0, tier: 0, color: '', t: 0 };
+}
+
+function freeGhost(g) {
+  if (ghostPool.length < GHOST_POOL_SIZE) ghostPool.push(g);
+}
+
+function allocBombRing() {
+  return bombRingPool.pop() || { x: 0, y: 0, t: 0, duration: 0 };
+}
+
+function freeBombRing(r) {
+  if (bombRingPool.length < BOMB_RING_POOL_SIZE) bombRingPool.push(r);
+}
+
+// Cached return structures to eliminate per-frame object literal instantiations
+const SQUASH_RESULT = { sx: 1, sy: 1 };
+const SHAKE_RESULT = { x: 0, y: 0 };
+
+const VIBRANCE_CACHE = new Map();
+
 function boostVibrance(hex, factor) {
+  const key = `${hex}|${factor}`;
+  const cached = VIBRANCE_CACHE.get(key);
+  if (cached) return cached;
+
   const n = parseInt(hex.replace('#', ''), 16);
   const r = (n >> 16) & 255;
   const g = (n >> 8) & 255;
@@ -29,13 +98,15 @@ function boostVibrance(hex, factor) {
   const avg = (r + g + b) / 3;
   const push = (c) => Math.max(0, Math.min(255, Math.round(avg + (c - avg) * factor)));
   const toHex = (c) => c.toString(16).padStart(2, '0');
-  return `#${toHex(push(r))}${toHex(push(g))}${toHex(push(b))}`;
+  const res = `#${toHex(push(r))}${toHex(push(g))}${toHex(push(b))}`;
+  if (VIBRANCE_CACHE.size < 256) VIBRANCE_CACHE.set(key, res);
+  return res;
 }
 
 export function createEffects() {
   return {
-    squashes: [], // { row, col, t, duration, amount }
-    particles: [], // { x, y, vx, vy, t, life, color, size }
+    squashes: [], // { row, col, tier, t, duration, amount }
+    particles: [], // { x, y, vx, vy, t, life, color, size, kind, rot, vRot }
     shake: { t: 0, duration: 0, magnitude: 0 },
     // 21: fruit that have already left the grid but have not popped yet --
     // see spawnGhost and js/render.js's drawGhosts.
@@ -44,11 +115,7 @@ export function createEffects() {
     levelCallout: null, // the callout SHOWING now -- 15, see triggerLevelUp
     // 21.1: the ones waiting their turn. Until now this was a single slot and
     // every trigger simply assigned to it, so two callouts in one event batch
-    // meant one of them was never seen. Proven, not theorised: a drop that
-    // both levels up and crosses a milestone puts levelUp and unlocked in the
-    // SAME batch, main.js drains them in order, and the unlock silently ate
-    // the level-up. Level 3 makes it worse -- the floor starts, the first
-    // stone arrives and the level-up fires together.
+    // meant one of them was never seen.
     calloutQueue: [], // [{ callout, priority }]
   };
 }
@@ -83,21 +150,7 @@ function pushCallout(fx, callout) {
   }
 }
 
-// 15: the level-up reaction's two purely-visual pieces (the sound and the
-// haptic are main.js's job, same seam as every other event). Ambient shake
-// during ordinary play was rejected in docs/phase15-spec.md section 6.2 --
-// shake already means "you just did something big," and a level change is
-// exactly the kind of instant that is true of, not a state to hold shake
-// under. A single pulse here, not a comparison against the current shake the
-// way spawnMergeEffects' top-tier pulse is (that one only grows if the new
-// hit is bigger; this one always fires, since a level-up is not competing
-// with a merge for "biggest thing on screen right now" -- it wins by
-// definition).
-//
-// Reduced motion cuts the shake (mirroring spawnMergeEffects' own gate) but
-// NOT the callout -- js/render.js still draws it, fading without scaling, per
-// docs/phase15-spec.md section 6.3. The sound and haptic are unaffected
-// either way; only motion is what this preference asks to remove.
+// 15: the level-up reaction's two purely-visual pieces
 export function triggerLevelUp(fx, level) {
   if (!reducedMotion) {
     fx.shake.t = 0;
@@ -107,11 +160,7 @@ export function triggerLevelUp(fx, level) {
   pushCallout(fx, { kind: 'level', level, t: 0 });
 }
 
-// 20: the same callout, carrying an unlock instead of a level. Reuses the
-// whole envelope, shake and draw path rather than growing a second one -- the
-// only difference on screen is what it says and that it names the reward on a
-// second line. Fired the instant the score crosses the threshold; see
-// announceUnlocks in js/state.js.
+// 20: the same callout, carrying an unlock instead of a level.
 export function triggerUnlock(fx, name) {
   if (!reducedMotion) {
     fx.shake.t = 0;
@@ -121,45 +170,36 @@ export function triggerUnlock(fx, name) {
   pushCallout(fx, { kind: 'unlock', unlock: name, t: 0 });
 }
 
-// 21.1: the same envelope again, carrying a rule the player has to be told
-// once. There is no shake and no sound of its own: a teach rides an event
-// that already made a noise (a floor rise, a stone cracking), and stacking a
-// third cue on top of those reads as chaos rather than emphasis.
-//
-// Why this exists at all: 21 put a grey slab on the board that never merges
-// and breaks only when a merge lands beside it. The second half of that rule
-// is not discoverable by accident inside a five-minute session, and an
-// unexplained thing appearing on the board is the exact complaint this phase
-// was built to fix. Reviewed and reported as a gap in the phase 21 diff, and
-// it was right.
+// 21.1: the same envelope again, carrying a rule the player has to be told once.
 export function triggerTeach(fx, title, line) {
   pushCallout(fx, { kind: 'teach', teach: title, line, t: 0 });
 }
 
-// Expanding ring on a bomb detonation -- the loudest action in the game
-// otherwise had no visual beyond the particle bursts per cleared cell.
 // 21: a fruit that a merge has already removed from the grid, still drawn at
 // the spot it was in, until its link of the chain actually pops.
-//
-// This is the half of the cascade fix that matters. The grid still resolves a
-// whole chain inside one frame -- physics stays synchronous and the entire
-// difficulty design depends on it -- but the PLAYER now sees the chain travel,
-// because each fruit waits its turn to disappear instead of all of them going
-// at once. `delay` is the same staged offset the burst uses, so a fruit and
-// its own confetti always leave together.
 export function spawnGhost(fx, { x, y, tier, color, delay }) {
-  if (delay <= 0) return;            // nothing to hold back
-  fx.ghosts.push({ x, y, tier, color, t: -delay });
+  if (delay <= 0) return; // nothing to hold back
+  const g = allocGhost();
+  g.x = x;
+  g.y = y;
+  g.tier = tier;
+  g.color = color;
+  g.t = -delay;
+  fx.ghosts.push(g);
 }
 
+// Expanding ring on a bomb detonation or apex merge
 export function spawnBombRing(fx, x, y) {
-  fx.bombRings.push({ x, y, t: 0, duration: BOMB_RING_DURATION_SEC });
+  const r = allocBombRing();
+  r.x = x;
+  r.y = y;
+  r.t = 0;
+  r.duration = BOMB_RING_DURATION_SEC;
+  fx.bombRings.push(r);
 }
 
 let hapticsOn = true;
 
-// Sets the flag from the loaded save (main.js's boot, before the first
-// frame). This module never reads storage itself -- see js/platform.js.
 export function hydrate(save) {
   hapticsOn = save ? save.hapticsOn !== false : true;
 }
@@ -173,13 +213,6 @@ export function toggleHaptics() {
   return hapticsOn;
 }
 
-// Read once at startup, the same as devicePixelRatio -- an OS-level
-// accessibility preference, not a player-facing toggle like sound, music or
-// haptics, so there is no in-game control for it. Feature-checked and
-// swallowed the same way vibrate() is below: an environment with no
-// matchMedia (or one that throws under a restrictive permissions policy)
-// simply gets full motion, matching how those environments behaved before
-// this existed.
 let reducedMotion = false;
 try {
   if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
@@ -193,84 +226,75 @@ export function isReducedMotion() {
   return reducedMotion;
 }
 
-// Test-only: unit tests run under plain Node, with no window/matchMedia to
-// read a real preference from.
 export function _setReducedMotion(value) {
   reducedMotion = value;
 }
 
-// 0 at tier 0, 1 at the top tier.
 function tierRatio(tier) {
   return Math.max(0, Math.min(1, tier / MAX_TIER));
 }
 
-// `silent: true` skips the haptic only -- visuals still fire. Used when a batch
-// of bursts is spawned in one frame (a bomb clears up to nine cells): each
-// navigator.vibrate() cancels the one in flight, so nine calls would collapse
-// into a single arbitrary-length tick decided by whichever cell the scan
-// visited last. The caller fires one deliberate pulse for the whole batch
-// instead. Mirrors the state.suppressCombo pattern used for the same reason.
-// 20: `delay` staggers this burst by that many seconds, used to play a merge
-// CHAIN out in the order it happened -- see CASCADE_STEP_SEC in constants.js.
-// Implemented as a negative start time rather than a queue: every effect
-// already has a clock, so "not yet" is just t < 0, and updateEffects/
-// squashScaleAt/drawParticles each skip an effect that has not started.
+// Spawns merge bursts with high-velocity directional particle elongation,
+// sparkling starbursts, splash micro-droplets, and expanding shockwave rings.
 export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x, y, bright = false, delay = 0 }) {
   const ratio = tierRatio(tier);
   const squashScale = reducedMotion ? REDUCED_MOTION_SQUASH_SCALE : 1;
 
-  fx.squashes.push({
-    row,
-    col,
-    // Recorded so the lookup can reject a cell whose contents changed. During a
-    // cascade, settleColumns can drop a different fruit into a cell that still
-    // has a live squash, and matching on position alone made that fruit inherit
-    // a pop it never earned.
-    tier,
-    t: -delay,
-    duration: SQUASH_DURATION_SEC,
-    amount: (SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio) * squashScale,
-  });
+  const s = allocSquash();
+  s.row = row;
+  s.col = col;
+  s.tier = tier;
+  s.t = -delay;
+  s.duration = SQUASH_DURATION_SEC;
+  s.amount = (SQUASH_MIN + (SQUASH_MAX - SQUASH_MIN) * ratio) * squashScale;
+  fx.squashes.push(s);
 
-  // Reduced motion: no particles, no shake -- a merge should still register
-  // (the squash above still fires, just smaller), but the moving, flying
-  // pieces are exactly what the preference asks to remove.
   if (reducedMotion) {
     if (!silent) vibrate(tier >= SHAKE_MIN_TIER ? HAPTIC_TOP_TIER_MS : HAPTIC_MERGE_MS);
     return;
   }
 
   const count = Math.round(PARTICLE_MIN + (PARTICLE_MAX - PARTICLE_MIN) * ratio);
-  // Prefer the caller's own frozen (x, y) when it has one -- see the comment
-  // on mergeCells in physics.js for why row/col alone is not safe here during
-  // a cascade. Callers with no cascade risk (remover, bomb) just pass row/col.
   const cx = x ?? (col * CELL + CELL / 2);
   const cy = y ?? (row * CELL + CELL / 2);
-  // Against the brighter boards, plain particle colours read as pale and
-  // linger -- a touch more vibrance and a shorter life keeps a burst popping
-  // rather than turning to mush (7.2). Decided by the caller (js/main.js),
-  // not looked up here, so this module stays free of a theme.js dependency.
   const particleColor = bright ? boostVibrance(color, PARTICLE_BRIGHT_VIBRANCE_BOOST) : color;
   const lifeScale = bright ? PARTICLE_BRIGHT_LIFE_SCALE : 1;
+
   for (let i = 0; i < count; i++) {
-    // Spread evenly around the circle with jitter so bursts don't look banded.
-    const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
-    const speed = PARTICLE_SPEED * (0.45 + 0.75 * Math.random()) * (0.7 + 0.5 * ratio);
-    fx.particles.push({
-      x: cx,
-      y: cy,
-      vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed - 40,
-      t: -delay,
-      life: PARTICLE_LIFE_SEC * lifeScale * (0.7 + 0.6 * Math.random()),
-      color: particleColor,
-      size: 1.8 + 2.6 * ratio * Math.random() + 1,
-    });
+    // Dynamic angular distribution with high-velocity bursts
+    const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    const speed = PARTICLE_SPEED * (0.55 + 0.85 * Math.random()) * (0.7 + 0.55 * ratio);
+    const p = allocParticle();
+    p.x = cx;
+    p.y = cy;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed - 45; // upward lift
+    p.t = -delay;
+    p.life = PARTICLE_LIFE_SEC * lifeScale * (0.65 + 0.6 * Math.random());
+    p.color = particleColor;
+    p.size = 2.0 + 2.8 * ratio * Math.random() + 1;
+    p.rot = Math.random() * Math.PI * 2;
+    p.vRot = (Math.random() - 0.5) * 10;
+
+    // Variety classification:
+    // kind 0: directional velocity-elongated juice droplet
+    // kind 1: 4-pointed sparkle starburst (frequent on higher tiers)
+    // kind 2: micro-droplet splash
+    // kind 3: radiant prism shard
+    if (ratio > 0.28 && i % 4 === 0) {
+      p.kind = 1;
+    } else if (ratio > 0.45 && i % 5 === 2) {
+      p.kind = 3;
+    } else if (i % 3 === 0) {
+      p.kind = 2;
+    } else {
+      p.kind = 0;
+    }
+
+    fx.particles.push(p);
   }
 
   if (tier >= SHAKE_MIN_TIER) {
-    // Scale within the top three tiers only, and cap hard: this should register
-    // as impact, not as the screen coming loose.
     const topRatio = (tier - SHAKE_MIN_TIER) / Math.max(1, MAX_TIER - SHAKE_MIN_TIER);
     const magnitude = SHAKE_MAX_PX * (0.55 + 0.45 * topRatio);
     if (magnitude > fx.shake.magnitude || fx.shake.t >= fx.shake.duration) {
@@ -283,8 +307,6 @@ export function spawnMergeEffects(fx, { row, col, tier, color, silent = false, x
   if (!silent) vibrate(tier >= SHAKE_MIN_TIER ? HAPTIC_TOP_TIER_MS : HAPTIC_MERGE_MS);
 }
 
-// Feature-checked and fully swallowed: unsupported browsers, and the ones that
-// throw when vibration is blocked by permissions policy, must not surface here.
 export function vibrate(ms) {
   try {
     if (!hapticsOn) return false;
@@ -301,33 +323,41 @@ export function hasHaptics() {
 }
 
 export function updateEffects(fx, dt) {
+  // O(1) swap-and-pop deallocation: eliminates Array.splice churn
   for (let i = fx.squashes.length - 1; i >= 0; i--) {
     const s = fx.squashes[i];
     s.t += dt;
-    if (s.t >= s.duration) fx.squashes.splice(i, 1);
+    if (s.t >= s.duration) {
+      freeSquash(s);
+      fx.squashes[i] = fx.squashes[fx.squashes.length - 1];
+      fx.squashes.pop();
+    }
   }
 
   for (let i = fx.particles.length - 1; i >= 0; i--) {
     const p = fx.particles[i];
     p.t += dt;
-    // 20: a staggered burst starts at a negative t. It must not drift or age
-    // while it waits, or a delayed pop would arrive already half spent and
-    // in the wrong place.
-    if (p.t < 0) continue;
+    if (p.t < 0) continue; // Waiting delayed burst
     if (p.t >= p.life) {
-      fx.particles.splice(i, 1);
+      freeParticle(p);
+      fx.particles[i] = fx.particles[fx.particles.length - 1];
+      fx.particles.pop();
       continue;
     }
     p.vy += PARTICLE_GRAVITY * dt;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+    p.rot += p.vRot * dt;
   }
 
-  // A ghost lives only until its own pop -- t reaching zero IS the pop, and
-  // the burst it was waiting for fires on the same frame.
   for (let i = fx.ghosts.length - 1; i >= 0; i--) {
-    fx.ghosts[i].t += dt;
-    if (fx.ghosts[i].t >= 0) fx.ghosts.splice(i, 1);
+    const g = fx.ghosts[i];
+    g.t += dt;
+    if (g.t >= 0) {
+      freeGhost(g);
+      fx.ghosts[i] = fx.ghosts[fx.ghosts.length - 1];
+      fx.ghosts.pop();
+    }
   }
 
   if (fx.shake.t < fx.shake.duration) {
@@ -338,7 +368,11 @@ export function updateEffects(fx, dt) {
   for (let i = fx.bombRings.length - 1; i >= 0; i--) {
     const r = fx.bombRings[i];
     r.t += dt;
-    if (r.t >= r.duration) fx.bombRings.splice(i, 1);
+    if (r.t >= r.duration) {
+      freeBombRing(r);
+      fx.bombRings[i] = fx.bombRings[fx.bombRings.length - 1];
+      fx.bombRings.pop();
+    }
   }
 
   if (fx.levelCallout) {
@@ -351,72 +385,186 @@ export function updateEffects(fx, dt) {
 }
 
 // Scale factors for the fruit at (row, col), if it is mid-pop.
-// Overshoots outward then settles, preserving area so it reads as squash.
 export function squashScaleAt(fx, row, col, tier) {
-  for (const s of fx.squashes) {
+  for (let i = 0; i < fx.squashes.length; i++) {
+    const s = fx.squashes[i];
     if (s.row !== row || s.col !== col) continue;
-    // Reject if the cell no longer holds the fruit this pop belongs to.
     if (tier !== undefined && s.tier !== tier) continue;
-    if (s.t < 0) continue; // staggered: this link of the chain has not popped yet
+    if (s.t < 0) continue;
     const p = Math.min(1, s.t / s.duration);
-    // One damped oscillation: big overshoot, quick settle.
     const wave = Math.sin(p * Math.PI * 1.5) * (1 - p);
     const k = s.amount * wave;
-    return { sx: 1 + k, sy: 1 - k * 0.85 };
+    SQUASH_RESULT.sx = 1 + k;
+    SQUASH_RESULT.sy = 1 - k * 0.85;
+    return SQUASH_RESULT;
   }
   return null;
 }
 
 export function shakeOffset(fx) {
   const s = fx.shake;
-  if (s.t >= s.duration || s.magnitude <= 0) return { x: 0, y: 0 };
+  if (s.t >= s.duration || s.magnitude <= 0) {
+    SHAKE_RESULT.x = 0;
+    SHAKE_RESULT.y = 0;
+    return SHAKE_RESULT;
+  }
   const decay = 1 - s.t / s.duration;
   const m = s.magnitude * decay * decay;
-  return {
-    x: (Math.random() * 2 - 1) * m,
-    y: (Math.random() * 2 - 1) * m,
-  };
+  SHAKE_RESULT.x = (Math.random() * 2 - 1) * m;
+  SHAKE_RESULT.y = (Math.random() * 2 - 1) * m;
+  return SHAKE_RESULT;
 }
 
+// Zero-allocation particle rendering loop
 export function drawParticles(ctx, fx) {
+  if (!fx.particles.length) return;
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
-  for (const p of fx.particles) {
-    if (p.t < 0) continue; // staggered: not started
-    const life = 1 - p.t / p.life;
-    ctx.globalAlpha = Math.max(0, life);
+
+  for (let i = 0; i < fx.particles.length; i++) {
+    const p = fx.particles[i];
+    if (p.t < 0) continue;
+    const life = Math.max(0, 1 - p.t / p.life);
+    ctx.globalAlpha = life;
     ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * life), 0, Math.PI * 2);
-    ctx.fill();
+
+    if (p.kind === 1) {
+      // Kind 1: Multi-stage sparkle starburst
+      const starScale = life < 0.2 ? (life / 0.2) : (1 - (life - 0.2) / 0.8);
+      const r = p.size * (0.8 + 1.2 * starScale);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 1.8);
+      ctx.quadraticCurveTo(0, 0, r * 1.8, 0);
+      ctx.quadraticCurveTo(0, 0, 0, r * 1.8);
+      ctx.quadraticCurveTo(0, 0, -r * 1.8, 0);
+      ctx.quadraticCurveTo(0, 0, 0, -r * 1.8);
+      ctx.fill();
+
+      // Brilliant white central glint core
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (p.kind === 3) {
+      // Kind 3: Radiant diamond gem shard
+      const r = p.size * (0.5 + 0.6 * life);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 1.4);
+      ctx.lineTo(r, 0);
+      ctx.lineTo(0, r * 1.4);
+      ctx.lineTo(-r, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 0.7);
+      ctx.lineTo(r * 0.5, 0);
+      ctx.lineTo(0, r * 0.7);
+      ctx.lineTo(-r * 0.5, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    } else if (p.kind === 2) {
+      // Kind 2: Micro-droplet pop
+      const r = p.size * 0.55 * (0.4 + 0.6 * life);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.beginPath();
+      ctx.arc(p.x - r * 0.25, p.y - r * 0.25, r * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Kind 0: High-velocity vector droplet with directional velocity elongation
+      const speed = Math.hypot(p.vx, p.vy);
+      const angle = Math.atan2(p.vy, p.vx);
+      const stretch = Math.min(2.4, 1 + speed / 280);
+      const radius = p.size * (0.35 + 0.65 * life);
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, radius * stretch, radius / Math.sqrt(stretch), 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Sharp specular highlight streak along the leading spine
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath();
+      ctx.ellipse(radius * stretch * 0.2, -radius * 0.2, radius * stretch * 0.45, radius * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
+
   ctx.restore();
 }
 
-// Expanding, fading rings from a bomb detonation (7.3). Drawn in the board's
-// own colour-neutral way (white, alpha-faded) so it reads on every skin.
+// Expanding shockwave rings from a bomb detonation or apex celebration
 export function drawBombRings(ctx, fx) {
+  if (!fx.bombRings.length) return;
   ctx.save();
   ctx.translate(0, HUD_HEIGHT);
-  for (const r of fx.bombRings) {
+
+  for (let i = 0; i < fx.bombRings.length; i++) {
+    const r = fx.bombRings[i];
     const p = Math.min(1, r.t / r.duration);
-    ctx.globalAlpha = Math.max(0, 1 - p) * 0.6;
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 3 * (1 - p) + 1;
+    const ease = 1 - Math.pow(1 - p, 2.5); // Rapid explosive expansion easing
+    const waveRadius = CELL * 0.35 + CELL * 2.3 * ease;
+
+    // Dual-layer expanding shockwave
+    // 1. Soft glowing outer atmospheric dispersion
+    ctx.globalAlpha = Math.max(0, 1 - p) * 0.4;
+    ctx.strokeStyle = 'rgba(255, 225, 160, 0.7)';
+    ctx.lineWidth = 5 * (1 - p) + 1;
     ctx.beginPath();
-    ctx.arc(r.x, r.y, CELL * 0.4 + CELL * 2.2 * p, 0, Math.PI * 2);
+    ctx.arc(r.x, r.y, waveRadius + 2, 0, Math.PI * 2);
     ctx.stroke();
+
+    // 2. Razor-sharp pure white compression wave
+    ctx.globalAlpha = Math.max(0, 1 - p) * 0.95;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.lineWidth = 2.5 * (1 - p) + 1;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, waveRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 3. Four cardinal/diagonal radiant fracture ticks
+    if (p < 0.7) {
+      const tickAlpha = (1 - p / 0.7) * 0.8;
+      ctx.globalAlpha = tickAlpha;
+      ctx.lineWidth = 2;
+      const tLen = 6 * (1 - p);
+      for (let a = 0; a < 4; a++) {
+        const rad = (a * Math.PI / 2) + Math.PI / 4;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        ctx.beginPath();
+        ctx.moveTo(r.x + cos * (waveRadius - tLen), r.y + sin * (waveRadius - tLen));
+        ctx.lineTo(r.x + cos * (waveRadius + tLen), r.y + sin * (waveRadius + tLen));
+        ctx.stroke();
+      }
+    }
   }
+
   ctx.restore();
 }
 
 export function clearEffects(fx) {
-  fx.squashes.length = 0;
-  fx.particles.length = 0;
+  while (fx.squashes.length > 0) freeSquash(fx.squashes.pop());
+  while (fx.particles.length > 0) freeParticle(fx.particles.pop());
+  while (fx.ghosts.length > 0) freeGhost(fx.ghosts.pop());
+  while (fx.bombRings.length > 0) freeBombRing(fx.bombRings.pop());
   fx.shake.t = 0;
   fx.shake.duration = 0;
   fx.shake.magnitude = 0;
-  fx.bombRings.length = 0;
   fx.levelCallout = null;
   fx.calloutQueue.length = 0;
 }
