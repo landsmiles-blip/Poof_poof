@@ -10,9 +10,11 @@ import {
   SPAWN_CHUTE_TINT_ALPHA, SPAWN_CHUTE_FADE_ROWS, SPAWN_CHUTE_MARK_ALPHA, SPAWN_CHUTE_MARK_INSET,
   CEILING_LINE_ALPHA, CEILING_LINE_ALPHA_MAX, CEILING_LINE_DASH,
   RISE_METER_HEIGHT, RISE_METER_TRACK_ALPHA, RISE_METER_FILL_ALPHA, RISE_METER_IMMINENT_ALPHA,
+  PRESSURE_RISE_AT,
 } from './constants.js';
 import {
   tierColor, comboMultiplier, hudPowerUps, comboWindowSecFor, levelFor, floorRiseCadenceDrops,
+  pressurePerDrop,
 } from './state.js';
 import { spawnColumnFor } from './physics.js';
 import {
@@ -418,13 +420,18 @@ export function drawCeilingLine(ctx, state, rows, theme) {
 }
 
 // 19: The countdown to the next floor rise. Must emit EXACTLY two fillRect calls: track and fill.
+// 22: reads PRESSURE now, not the drop counter. The counter stopped deciding
+// anything when the trigger moved (see PRESSURE_RISE_AT in constants.js), and
+// a meter that fills on a number the game no longer acts on is just a lie
+// drawn at 60fps. Same two fillRects, same bar -- different truth behind it.
 export function drawRiseMeter(ctx, state, rows, theme) {
   const cadence = floorRiseCadenceDrops(levelFor(state.spawnIndex));
   if (!Number.isFinite(cadence) || cadence <= 0) return;
 
-  const done = Math.max(0, Math.min(cadence, state.dropsSinceFloorRise));
-  const progress = Math.min(1, (done + 1) / cadence);
-  const imminent = cadence - done <= 1;
+  const filled = Math.max(0, state.pressure);
+  const progress = Math.min(1, filled / PRESSURE_RISE_AT);
+  // one more average drop would tip it
+  const imminent = filled + pressurePerDrop(levelFor(state.spawnIndex)) >= PRESSURE_RISE_AT;
 
   const y = rows * CELL - RISE_METER_HEIGHT;
   const w = COLS * CELL;

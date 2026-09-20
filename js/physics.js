@@ -8,10 +8,12 @@ import {
   SPAWN_MIN_REACTION_SEC, STONE_TIER, STONE_DEF, STONE_CRACK_POINTS,
   STONE_TEACH_TITLE, STONE_TEACH_LINE, CRACK_TEACH_TITLE, CRACK_TEACH_LINE,
   TEACH_STONE, TEACH_STONE_CRACK,
+  PRESSURE_RISE_AT, PRESSURE_BANK_FLOOR, PRESSURE_DRAIN_RISE_CASCADE, RISE_RESOLVES_MERGES,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
   floorRiseCadenceDrops, expireArmedPowerUp, stonesPerRise, maybeTeach,
+  pressurePerDrop, pressureDrainFor,
 } from './state.js';
 
 // Tier lookup that also answers for the rainbow and bomb sentinels, so
@@ -172,12 +174,19 @@ export function spawnFruit(state) {
   // complaint 19 was built to remove, on the one rise a new player meets
   // first. Holding the counter at zero until the mechanic is actually live
   // also makes the first gap the 16 drops constants.js claims, instead of 0.
+  // 22: the trigger is pressure now, not the drop counter. dropsSinceFloorRise
+  // is still maintained because the HUD meter and the save blob both read it,
+  // but nothing decides anything on it -- see PRESSURE_RISE_AT in constants.js
+  // for the measurement that moved it.
   const cadence = floorRiseCadenceDrops(levelFor(state.spawnIndex));
   if (!Number.isFinite(cadence)) {
     state.dropsSinceFloorRise = 0;
+    state.pressure = 0;
   } else {
     state.dropsSinceFloorRise += 1;
-    if (state.dropsSinceFloorRise >= cadence) {
+    state.pressure += pressurePerDrop(levelFor(state.spawnIndex));
+    if (state.pressure >= PRESSURE_RISE_AT) {
+      state.pressure -= PRESSURE_RISE_AT;
       state.dropsSinceFloorRise = 0;
       // 21: this branch is currently UNREACHABLE -- raiseFloor returns
       // toppedOut: false unconditionally, because a rise can no longer end a
@@ -330,7 +339,7 @@ function lockFruit(state, row, col, tier) {
   // frames of falling earlier. resolveMerges below is a no-op for it either
   // way (pairTier rejects the bomb outright), so this is safe to set first.
   if (tier === BOMB_TIER) state.bombFuseDrops = BOMB_FUSE_DROPS;
-  resolveMerges(state);
+  resolveMerges(state, [{ row, col }]);
 }
 
 // Repeatedly finds one adjacent equal-tier pair, merges it, settles the
@@ -342,14 +351,34 @@ function lockFruit(state, row, col, tier) {
 // never persisted, and resolveMerges is never re-entrant.
 let cascadeStep = 0;
 
-export function resolveMerges(state) {
+export function resolveMerges(state, seed = null) {
   cascadeStep = 0;
-  let mergedSomething = true;
-  while (mergedSomething) {
-    mergedSomething = mergeOnePair(state);
-    if (mergedSomething) {
-      settleColumns(state);
-      cascadeStep += 1;
+  const rows = state.grid.length;
+  // 22: liveness. `null` keeps the whole-board sweep (the bomb and the unit
+  // tests still want it); an array of {row, col} starts a LOCAL chain that
+  // spreads only through cells a merge actually touched.
+  let live = seed === null ? null : new Set();
+  if (live) for (const sd of seed) addNeighbourhood(live, sd.row, sd.col, rows);
+
+  let merged = true;
+  while (merged) {
+    const hit = mergeOnePair(state, live);
+    merged = hit !== null;
+    if (!merged) break;
+    // Where the survivor lands after the column repacks. settleColumns keeps
+    // vertical order and grounds the column, so "how many fruit sit below it"
+    // is the one description of its position the repack cannot invalidate --
+    // the same invariant rebaseSwapSelection relies on.
+    let below = 0;
+    for (let r = hit.keepR + 1; r < rows; r++) if (state.grid[r][hit.keepC] !== null) below++;
+    settleColumns(state);
+    cascadeStep += 1;
+    if (live) {
+      live.clear();
+      addNeighbourhood(live, rows - 1 - below, hit.keepC, rows);
+      // everything above the cleared cell fell one row, so that slot now holds
+      // a fruit meeting new neighbours.
+      addNeighbourhood(live, hit.clearR, hit.clearC, rows);
     }
   }
   // 20: the biggest chain a single action set off, which is the number a
@@ -384,7 +413,23 @@ function pairTier(a, b) {
   return a === b ? a : null;
 }
 
-function mergeOnePair(state) {
+// 22: the live set, as cell keys. A merge makes its own result and everything
+// orthogonally touching it live -- that, and nothing else, is how a chain
+// travels. Bounded on purpose: it is what stops the floor rise from quietly
+// tidying up a board the player never touched.
+function cellKey(r, c) { return r * COLS + c; }
+function addNeighbourhood(live, r, c, rows) {
+  const near = [[r, c], [r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]];
+  for (const [rr, cc] of near) {
+    if (rr < 0 || rr >= rows || cc < 0 || cc >= COLS) continue;
+    live.add(cellKey(rr, cc));
+  }
+}
+
+// Finds one mergeable adjacent pair and merges it. With `live` non-null, at
+// least one half of the pair must be a live cell. Returns the two cells it
+// consumed so the caller can re-seed the chain, or null when nothing merged.
+function mergeOnePair(state, live = null) {
   const rows = state.grid.length;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -393,18 +438,20 @@ function mergeOnePair(state) {
       // Check right neighbor and down neighbor only -- checking every cell
       // against both directions covers every adjacent pair exactly once.
       const right = c + 1 < COLS ? pairTier(state.grid[r][c], state.grid[r][c + 1]) : null;
-      if (right !== null) {
+      if (right !== null && (!live || live.has(cellKey(r, c)) || live.has(cellKey(r, c + 1)))) {
         mergeCells(state, r, c, r, c + 1, right);
-        return true;
+        // mergeCells keeps the lower cell; both rows are r here, so its
+        // `r2 >= r1` tiebreak keeps the RIGHT one.
+        return { keepR: r, keepC: c + 1, clearR: r, clearC: c };
       }
       const down = r + 1 < rows ? pairTier(state.grid[r][c], state.grid[r + 1][c]) : null;
-      if (down !== null) {
+      if (down !== null && (!live || live.has(cellKey(r, c)) || live.has(cellKey(r + 1, c)))) {
         mergeCells(state, r, c, r + 1, c, down);
-        return true;
+        return { keepR: r + 1, keepC: c, clearR: r, clearC: c };
       }
     }
   }
-  return false;
+  return null;
 }
 
 // 21: a merge cracks any stone orthogonally touching either of the two cells
@@ -461,6 +508,12 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   // detonating the cheapest way to run the multiplier up. Those merges still
   // score (they are real merges) but at 1x, and they do not extend the streak.
   const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
+  // 22: the player buys time by merging. A rise's own cascade buys none --
+  // it is a gift of score, not of time (PRESSURE_DRAIN_RISE_CASCADE).
+  const drain = state.riseCascade
+    ? PRESSURE_DRAIN_RISE_CASCADE
+    : pressureDrainFor(tier, cascadeStep);
+  state.pressure = Math.max(PRESSURE_BANK_FLOOR, state.pressure - drain);
   // Same gate as the combo streak above, same reason (8.1): a bomb's cascade
   // must not also be a way to farm free charges.
   if (!state.suppressCombo) fillMergeMeter(state, tier >= MAX_TIER ? MAX_TIER : tier + 1);
@@ -650,7 +703,7 @@ export function swapFruits(state, r1, c1, r2, c2) {
 
   state.grid[r1][c1] = tierB;
   state.grid[r2][c2] = tierA;
-  resolveMerges(state);
+  resolveMerges(state, [{ row: r1, col: c1 }, { row: r2, col: c2 }]);
   return true;
 }
 
@@ -760,7 +813,16 @@ export function raiseFloor(state) {
   // The new fruit can sit under a matching fruit, or a settling cascade can
   // bring matches together -- resolve them. This is the seam that lets a good
   // player FIGHT the floor: a well-built bottom row eats part of the rise.
-  resolveMerges(state);
+  // 22: flagged so those merges score but do not drain pressure.
+  state.riseCascade = true;
+  try {
+    // 22: inert on purpose. See RISE_RESOLVES_MERGES in constants.js for the
+    // measurement -- the old auto-resolve was rescuing exactly the boards that
+    // had earned the rise.
+    if (RISE_RESOLVES_MERGES) resolveMerges(state);
+  } finally {
+    state.riseCascade = false;
+  }
 
   // Deliberately always false. A rise can no longer end a run; only having
   // nowhere to put the next fruit can, which spawnFruit checks itself. Kept

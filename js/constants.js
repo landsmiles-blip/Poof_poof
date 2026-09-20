@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.07-26';
+export const BUILD_VERSION = '2026.09.20-27';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -295,6 +295,54 @@ export const DANGER_ROWS_REMAINING = 2;
 // exceptional careful run still tops out near level 40, the bounded "how far
 // can you go" ceiling, not the old unbounded one. See docs/phase17brief.md for
 // the full distributions and the sweep behind these.
+// --- 22: pressure, and why the cadence below is no longer the trigger ------
+//
+// Measured on the shipped build (2026.09.07-26), 300 runs per policy, with a
+// bot steering through setDragTarget exactly as a player does:
+//
+//   policy    median drops   median score
+//   suicide        180           7,585     <- deliberately stacking the worst column
+//   random         165           7,436
+//   decent         188          12,470     <- merges whenever it can
+//
+// Score answers to skill. SURVIVAL DOES NOT: a player actively trying to lose
+// lasted 180 drops, a player playing well lasted 188. Four percent apart.
+// The reason is directly above -- the rise fires on a pure function of
+// spawnIndex, so the board fills on a schedule nobody can push back on. The
+// game asks "how far can you last", and the answer was the same number for
+// everybody.
+//
+// So the trigger moves off the clock and onto the play. Each drop adds
+// pressure; each merge the PLAYER caused takes it away, more for higher tiers
+// and for deeper links of a chain; the floor rises when pressure crosses
+// PRESSURE_RISE_AT. Fill grows with level, so even flawless play eventually
+// loses -- the run still ends, it just ends where the player put it.
+//
+// Units: PRESSURE_RISE_AT is 100 so every other number reads as "percent of
+// one rise". Calibrated by sweep, not by feel -- see docs/phase22brief.md.
+export const PRESSURE_RISE_AT = 100;
+export const PRESSURE_PER_DROP_BASE = 18;      // a run with no merges at all rises every 6 drops
+export const PRESSURE_PER_DROP_PER_LEVEL = 1.2; // ...and that tightens every level
+export const PRESSURE_DRAIN_BASE = 20;         // what one plain tier-0 merge buys back
+export const PRESSURE_DRAIN_TIER_BONUS = 0.10; // +10% of base per tier above 0
+export const PRESSURE_DRAIN_CASCADE_BONUS = 0.35; // +35% per extra link in a chain
+// A big chain may bank credit against the next rise, but only so much -- an
+// unbounded bank lets one lucky cascade buy a minute of immunity.
+export const PRESSURE_BANK_FLOOR = -60;
+// A rise's own cascade is a gift of SCORE, not of time: it drains nothing.
+// Measured at 35-45% of all merges in a run, and letting the rise partly pay
+// for itself is a third of why skill washed out in the first place.
+export const PRESSURE_DRAIN_RISE_CASCADE = 0;
+
+// 22: the rise arrives INERT -- it no longer resolves merges of its own.
+// Measured: rise-merges ran at 0.48 per drop for a player stacking the worst
+// column and 0.13 for one playing well, so the old behaviour was a subsidy
+// that scaled with how badly you were playing. Removing it is what moved the
+// survival spread from 1.14x to 2.16x and the score spread from 1.68x to
+// 7.3x. A well-built bottom row still pays -- it pays on the next DROP, when
+// the player triggers it, which is the point.
+export const RISE_RESOLVES_MERGES = false;
+
 export const FLOOR_RISE_START_LEVEL = 3;        // grace: no rises during levels 1-2
 export const FLOOR_RISE_DROPS_START = 16;       // at the start level, one rise per this many drops
 export const FLOOR_RISE_DROPS_MIN = 5;          // the tightest cadence, reached late in a run

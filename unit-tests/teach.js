@@ -103,33 +103,56 @@ const teachEvents = (s) => s.events.filter((e) => e.type === 'teach');
 }
 
 // --- 3b. STONE is always taught before BROKEN -------------------------------
-// A rise can deliver a stone AND set off a cascade that cracks one in the very
-// same frame. If BROKEN arrived first it would explain a thing the player had
-// not been told about yet.
+// 22: the rise no longer resolves merges of its own (RISE_RESOLVES_MERGES),
+// so the two lessons can no longer land in one frame -- the rise delivers the
+// stone, and the player's NEXT drop is what cracks it. That ordering is now
+// structural rather than a race, but it is still the thing that matters: a
+// player must never be told what a broken stone is before being told what a
+// stone is. Asserted across the real sequence, not a contrived single frame.
 {
   const state = createInitialState();
   startRun(state, {});
   state.spawnIndex = 200;
   const rows = state.grid.length;
-  // Fill the bottom of every column with a pair that will merge on the rise,
-  // maximising the chance the new row's stone is cracked in the same frame.
   for (let c = 0; c < COLS; c++) {
     state.grid[rows - 1][c] = 0;
     state.grid[rows - 2][c] = 0;
     state.stackHeight[c] = 2;
   }
+
+  // Frame one: the rise arrives. It brings stone, and it teaches STONE -- and
+  // because it is inert now, it teaches nothing else.
   state.events.length = 0;
   raiseFloor(state);
-  const keys = teachEvents(state).map((e) => e.key);
-  // Asserted hard, not guarded by an `if`: this board produces both lessons in
-  // one frame on every trial (measured 2000/2000), so a conditional check here
-  // could go vacuous without anyone noticing.
-  assert.ok(keys.includes(TEACH_STONE), 'the rise delivered a stone and taught it');
-  assert.ok(keys.includes(TEACH_STONE_CRACK), 'and the cascade cracked one in the same frame');
-  assert.ok(keys.indexOf(TEACH_STONE) < keys.indexOf(TEACH_STONE_CRACK),
-    'STONE must be queued before BROKEN when both happen in one frame');
-  assert.equal(keys.filter((k) => k === TEACH_STONE).length, 1, 'once each, even here');
-  assert.equal(keys.filter((k) => k === TEACH_STONE_CRACK).length, 1);
+  const afterRise = teachEvents(state).map((e) => e.key);
+  assert.ok(afterRise.includes(TEACH_STONE), 'the rise delivered a stone and taught it');
+  assert.ok(!afterRise.includes(TEACH_STONE_CRACK),
+    'and taught nothing about breaking one, because it cracked nothing itself');
+
+  // Frame two: find a stone and merge a pair orthogonally beside it, which is
+  // the only way a stone breaks. That is what teaches BROKEN.
+  let taughtCrack = false;
+  outer:
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (state.grid[r][c] !== STONE_TIER) continue;
+      for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= COLS) continue;
+        if (state.grid[nr][nc] === STONE_TIER) continue;
+        // plant a matching pair at that cell and its right-hand neighbour
+        const pc = nc + 1 < COLS ? nc + 1 : nc - 1;
+        if (pc < 0 || pc >= COLS || state.grid[nr][pc] === STONE_TIER) continue;
+        state.grid[nr][nc] = 1;
+        state.grid[nr][pc] = 1;
+        state.events.length = 0;
+        resolveMerges(state);
+        const keys = teachEvents(state).map((e) => e.key);
+        if (keys.includes(TEACH_STONE_CRACK)) { taughtCrack = true; break outer; }
+      }
+    }
+  }
+  assert.ok(taughtCrack, 'merging beside a stone cracks it and teaches BROKEN');
+  assert.ok(hasTaught(state, TEACH_STONE), 'and STONE was already on the record by then');
 }
 
 // --- 4. the record survives a save round-trip, and a legacy save is owed it -

@@ -3,6 +3,8 @@
 
 import {
   COLS, ROWS, CELL, SPAWN_POOL_BY_BAND, LEVELS_PER_SPAWN_BAND, COINS_PER_SCORE, TIERS,
+  PRESSURE_PER_DROP_BASE, PRESSURE_PER_DROP_PER_LEVEL, PRESSURE_DRAIN_BASE,
+  PRESSURE_DRAIN_TIER_BONUS, PRESSURE_DRAIN_CASCADE_BONUS,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   RAINBOW_TIER, RAINBOW_DEF, RAINBOW_SCHEDULE, BOMB_TIER, BOMB_DEF,
@@ -70,6 +72,22 @@ export function floorRiseCadenceDrops(level) {
   const levelsPastFloor = level - stageOneFloorLevel();
   const slowShave = Math.floor(levelsPastFloor / FLOOR_RISE_SLOW_LEVELS);
   return Math.max(FLOOR_RISE_DROPS_HARD_MIN, FLOOR_RISE_DROPS_MIN - slowShave);
+}
+
+// 22: how much pressure one drop adds at this level. Grows without bound, on
+// purpose -- it is the only thing guaranteeing a run ends.
+export function pressurePerDrop(level) {
+  const over = Math.max(0, level - FLOOR_RISE_START_LEVEL);
+  return PRESSURE_PER_DROP_BASE + PRESSURE_PER_DROP_PER_LEVEL * over;
+}
+
+// What a single merge buys back. `step` is how deep into a chain this link is
+// (0 for the first), so a chain is worth far more than the same merges made
+// one at a time -- that is where the skill ceiling lives.
+export function pressureDrainFor(tier, step) {
+  const tierPart = 1 + PRESSURE_DRAIN_TIER_BONUS * Math.max(0, tier);
+  const chainPart = 1 + PRESSURE_DRAIN_CASCADE_BONUS * Math.max(0, step);
+  return PRESSURE_DRAIN_BASE * tierPart * chainPart;
 }
 
 // 21: how many of a rising row's COLS cells arrive as stone at a given level.
@@ -251,6 +269,8 @@ export function createInitialState(save) {
     // rise (js/physics.js spawnFruit) and at startRun; never persisted -- a
     // resumed save begins its floor cadence fresh, same as spawnIndex.
     dropsSinceFloorRise: 0,
+    pressure: 0,          // 22: per-run, never persisted -- a save resumes at 0
+    riseCascade: false,   // 22: true only while a rise's own cascade resolves
     lockedFlash: null, // { id, t } while a locked/out-of-stock chip is flashing
 
     // 8.1: fills as you merge (see fillMergeMeter) and grants a free,
@@ -602,6 +622,8 @@ export function startRun(state, { useSlowDrop, useExtraRow, useRainbow } = {}) {
   if (state.rainbowChargeSpent) state.inventory.rainbow -= 1;
   state.spawnIndex = 0;
   state.dropsSinceFloorRise = 0;
+  state.pressure = 0;
+  state.riseCascade = false;
 
   state.removerArmed = false;
   state.bombInPlay = false;

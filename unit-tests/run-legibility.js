@@ -10,14 +10,14 @@
 // those rules -- a mark that is merely decorative is worse than none, because
 // the player will trust it.
 import assert from 'node:assert/strict';
-import { createInitialState, startRun, floorRiseCadenceDrops } from '../js/state.js';
+import { createInitialState, startRun, floorRiseCadenceDrops, pressurePerDrop } from '../js/state.js';
 import { raiseFloor } from '../js/physics.js';
 import { drawCeilingLine, drawRiseMeter } from '../js/render.js';
 import { _setReducedMotion } from '../js/effects.js';
 import {
   COLS, CELL, LEVEL_DROPS, RISE_METER_HEIGHT,
   CEILING_LINE_ALPHA, CEILING_LINE_ALPHA_MAX,
-  RISE_METER_FILL_ALPHA, RISE_METER_IMMINENT_ALPHA,
+  RISE_METER_FILL_ALPHA, RISE_METER_IMMINENT_ALPHA, PRESSURE_RISE_AT,
   FLOOR_RISE_START_LEVEL,
 } from '../js/constants.js';
 
@@ -144,25 +144,31 @@ function riseMeter(state) {
   const cadence = floorRiseCadenceDrops(FLOOR_RISE_START_LEVEL);
   assert.ok(Number.isFinite(cadence) && cadence > 1, 'the start level has a real cadence');
 
-  // dropsSinceFloorRise counts the fruit currently in hand, so the bar reads
-  // (done + 1) / cadence -- full means "place this one and the floor pushes".
-  for (let done = 0; done < cadence; done++) {
-    state.dropsSinceFloorRise = done;
+  // 22: the bar reads PRESSURE / PRESSURE_RISE_AT, because pressure is what
+  // the rule in spawnFruit actually tests. Swept across the whole range, so
+  // the bar cannot be right at the ends and wrong in the middle.
+  for (let tenth = 0; tenth <= 10; tenth++) {
+    state.pressure = (PRESSURE_RISE_AT * tenth) / 10;
     const rects = riseMeter(state);
     assert.equal(rects.length, 2, 'a track and a fill');
     const [track, fill] = rects;
     assert.equal(track.w, COLS * CELL, 'the track spans the board');
     assert.equal(track.y, rows * CELL - RISE_METER_HEIGHT, 'and sits on the bottom edge -- the edge the floor pushes from');
-    assert.equal(fill.w, COLS * CELL * ((done + 1) / cadence),
-      `the fill is exactly ${done + 1}/${cadence} of the board, not an approximation`);
+    assert.equal(fill.w, COLS * CELL * (tenth / 10),
+      `the fill is exactly ${tenth}/10 of the board, not an approximation`);
   }
+
+  // Banked pressure (a big chain can push it below zero) must read as empty,
+  // never as a negative-width rect.
+  state.pressure = -40;
+  assert.equal(riseMeter(state)[1].w, 0, 'banked credit draws as an empty bar, not a backwards one');
 
   // The load-bearing half: a FULL bar has to mean the rise is one drop away,
   // and it has to be reachable. If these drift apart the mark becomes a lie
   // at the exact moment the player is relying on it.
-  state.dropsSinceFloorRise = cadence - 1;
-  assert.equal(riseMeter(state)[1].w, COLS * CELL, 'the bar is full on the last drop before a rise');
-  state.dropsSinceFloorRise = cadence - 2;
+  state.pressure = PRESSURE_RISE_AT;
+  assert.equal(riseMeter(state)[1].w, COLS * CELL, 'the bar is full when the next drop pushes the floor');
+  state.pressure = PRESSURE_RISE_AT * 0.5;
   assert.ok(riseMeter(state)[1].w < COLS * CELL, 'and is not full before that');
 }
 
@@ -176,31 +182,34 @@ function riseMeter(state) {
   state.spawnIndex = (FLOOR_RISE_START_LEVEL - 1) * LEVEL_DROPS;
   const cadence = floorRiseCadenceDrops(FLOOR_RISE_START_LEVEL);
 
-  state.dropsSinceFloorRise = cadence - 2;
+  // 22: "imminent" is now "one average drop would tip it", measured against
+  // pressurePerDrop at this level rather than a drop count.
+  const perDrop = pressurePerDrop(FLOOR_RISE_START_LEVEL);
+  state.pressure = PRESSURE_RISE_AT - perDrop * 2.5;
   const calm = riseMeter(state)[1].alpha;
-  state.dropsSinceFloorRise = cadence - 1;
+  state.pressure = PRESSURE_RISE_AT - perDrop * 0.5;
   const loud = riseMeter(state)[1].alpha;
 
-  assert.ok(Math.abs(calm - RISE_METER_FILL_ALPHA) < 1e-9, 'two drops out is the resting alpha');
+  assert.ok(Math.abs(calm - RISE_METER_FILL_ALPHA) < 1e-9, 'well short of a rise is the resting alpha');
   assert.ok(Math.abs(loud - RISE_METER_IMMINENT_ALPHA) < 1e-9, 'one drop out is the imminent alpha');
   assert.ok(loud > calm, 'and imminent must actually be louder');
 }
 
-// --- 5. it cannot overrun, whatever the counter says ------------------------
-// dropsSinceFloorRise is reset by spawnFruit the instant it reaches the
-// cadence, so it should never exceed it -- but a bar that renders past the
-// board's edge on a state nobody expected is a rendering bug in the one
-// frame the player is panicking.
+// --- 5. it cannot overrun, whatever the number says -------------------------
+// 22: pressure is reset by spawnFruit the instant it crosses the threshold,
+// and floored at PRESSURE_BANK_FLOOR by every drain -- but a bar that renders
+// past the board's edge, or backwards, on a state nobody expected is a
+// rendering bug in the one frame the player is panicking.
 {
   const state = createInitialState();
   startRun(state, {});
   state.spawnIndex = (FLOOR_RISE_START_LEVEL - 1) * LEVEL_DROPS;
-  state.dropsSinceFloorRise = 999;
+  state.pressure = PRESSURE_RISE_AT * 9;
   const fill = riseMeter(state)[1];
   assert.equal(fill.w, COLS * CELL, 'the fill clamps to the full board width');
-  state.dropsSinceFloorRise = -5;
-  assert.equal(riseMeter(state)[1].w, COLS * CELL / floorRiseCadenceDrops(FLOOR_RISE_START_LEVEL),
-    'a negative counter clamps to the first step, never to a negative width');
+  state.pressure = -9999;
+  assert.equal(riseMeter(state)[1].w, 0,
+    'pressure far below the bank floor still clamps to empty, never to a negative width');
 }
 
 // Left as this file found it: run.js imports every test into ONE process, so
@@ -208,4 +217,4 @@ function riseMeter(state) {
 // behaves. unit-tests/reduced-motion.js follows the same rule.
 _setReducedMotion(false);
 
-console.log('run-legibility: the ceiling line sits on the real topout rule and brightens monotonically with it; the rise meter is an exact drop-indexed readout, silent during the grace, loud on the last drop, and clamped at both ends');
+console.log('run-legibility: the ceiling line sits on the real topout rule and brightens monotonically with it; the rise meter is an exact pressure readout, silent during the grace, loud on the last drop, and clamped at both ends');
