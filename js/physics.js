@@ -9,6 +9,7 @@ import {
   STONE_TEACH_TITLE, STONE_TEACH_LINE, CRACK_TEACH_TITLE, CRACK_TEACH_LINE,
   TEACH_STONE, TEACH_STONE_CRACK,
   PRESSURE_RISE_AT, PRESSURE_BANK_FLOOR, PRESSURE_DRAIN_RISE_CASCADE, RISE_RESOLVES_MERGES,
+  PRESSURE_DRAIN_BOMB_CASCADE,
 } from './constants.js';
 import {
   effectiveRows, nextTierFor, addScore, registerComboHit, currentGravityPxPerSec, fillMergeMeter, levelFor,
@@ -510,9 +511,13 @@ function mergeCells(state, r1, c1, r2, c2, tier) {
   const multiplier = state.suppressCombo ? 1 : registerComboHit(state);
   // 22: the player buys time by merging. A rise's own cascade buys none --
   // it is a gift of score, not of time (PRESSURE_DRAIN_RISE_CASCADE).
+  // 23: suppressCombo is set only by detonateBomb, so it is also the flag for
+  // "this cascade is the bomb's, not the player's".
   const drain = state.riseCascade
     ? PRESSURE_DRAIN_RISE_CASCADE
-    : pressureDrainFor(tier, cascadeStep);
+    : state.suppressCombo
+      ? PRESSURE_DRAIN_BOMB_CASCADE
+      : pressureDrainFor(tier, cascadeStep, state.pressure);
   state.pressure = Math.max(PRESSURE_BANK_FLOOR, state.pressure - drain);
   // Same gate as the combo streak above, same reason (8.1): a bomb's cascade
   // must not also be a way to farm free charges.

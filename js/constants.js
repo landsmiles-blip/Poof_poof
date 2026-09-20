@@ -6,7 +6,7 @@
 // cache name. Bump this on every deploy: it is the only way either a player or
 // a developer can tell which build a browser is actually running, which is
 // exactly the question that went unanswerable across three earlier deploys.
-export const BUILD_VERSION = '2026.09.20-27';
+export const BUILD_VERSION = '2026.09.20-28';
 
 export const COLS = 6;
 // 11.1: back to 7. 10.2 cut this to 5 to force the danger state to fire more
@@ -319,20 +319,53 @@ export const DANGER_ROWS_REMAINING = 2;
 // loses -- the run still ends, it just ends where the player put it.
 //
 // Units: PRESSURE_RISE_AT is 100 so every other number reads as "percent of
-// one rise". Calibrated by sweep, not by feel -- see docs/phase22brief.md.
+// one rise". Calibrated by sweep, not by feel -- see docs/phase22brief.md,
+// and docs/phase23brief.md for the re-tune these values carry now.
+//
+// 23: phase 22 shipped a curve that did not bite until it was nearly over.
+// Measured on 2026.09.20-27, 250 runs, competent play: survival was 100% all
+// the way to level 15 and the floor first moved at level 12 -- three minutes
+// of a four-minute run with nothing at stake, then a cliff. These numbers
+// move the whole curve forward and make it climb the whole way, and
+// PRESSURE_CLUTCH_BONUS below is what keeps that from turning the ending into
+// a coin flip.
 export const PRESSURE_RISE_AT = 100;
-export const PRESSURE_PER_DROP_BASE = 18;      // a run with no merges at all rises every 6 drops
-export const PRESSURE_PER_DROP_PER_LEVEL = 1.2; // ...and that tightens every level
-export const PRESSURE_DRAIN_BASE = 20;         // what one plain tier-0 merge buys back
+export const PRESSURE_PER_DROP_BASE = 20;      // a run with no merges at all rises every 5 drops
+export const PRESSURE_PER_DROP_PER_LEVEL = 2.5; // ...and that tightens every level
+export const PRESSURE_DRAIN_BASE = 18;         // what one plain tier-0 merge buys back
 export const PRESSURE_DRAIN_TIER_BONUS = 0.10; // +10% of base per tier above 0
-export const PRESSURE_DRAIN_CASCADE_BONUS = 0.35; // +35% per extra link in a chain
+export const PRESSURE_DRAIN_CASCADE_BONUS = 0.55; // +55% per extra link in a chain
 // A big chain may bank credit against the next rise, but only so much -- an
 // unbounded bank lets one lucky cascade buy a minute of immunity.
-export const PRESSURE_BANK_FLOOR = -60;
+export const PRESSURE_BANK_FLOOR = -20;   // 23: was -60, which was the real reason
+// nothing was at stake before level 15 -- a buffer that deep meant the meter
+// had 160 points to climb before it could ever fire, so it never did.
 // A rise's own cascade is a gift of SCORE, not of time: it drains nothing.
 // Measured at 35-45% of all merges in a run, and letting the rise partly pay
 // for itself is a third of why skill washed out in the first place.
+// 23: the comeback. A merge is worth MORE the closer the floor is to moving,
+// scaling linearly from no bonus at an empty meter to this much extra at a
+// full one. It is what lets the curve above be genuinely steep without the
+// run becoming a coin flip: the game leans harder on you every level, and
+// fighting back pays more the harder it leans. Invisible as a rule, obvious
+// as a feeling -- a chain pulled off with the bar nearly full visibly throws
+// it back down, which is the moment the whole game is built around.
+export const PRESSURE_CLUTCH_BONUS = 1.0;
+
 export const PRESSURE_DRAIN_RISE_CASCADE = 0;
+
+// 23: the bomb's collapse drains nothing either, for the same reason the
+// rise's does not. Measured on 2026.09.20-27, 200 detonations on real
+// mid-run boards: one bomb refunded a median 47.8 pressure (half a rise, and
+// a full one at p90) to a player dropping at random, and EXACTLY ZERO to a
+// player merging as they went -- because a competent board has no backlog for
+// its full-board sweep to find. That is the same subsidy-for-bad-play shape
+// phase 22 removed from the rise, hiding in an item. The bomb still clears
+// its nine cells, still sweeps, still scores; it just stops also buying time
+// nobody earned. PRESSURE_CLUTCH_BONUS would have made this worse, since a
+// bomb is used when the meter is high, which is exactly when a drain is
+// worth most.
+export const PRESSURE_DRAIN_BOMB_CASCADE = 0;
 
 // 22: the rise arrives INERT -- it no longer resolves merges of its own.
 // Measured: rise-merges ran at 0.48 per drop for a player stacking the worst

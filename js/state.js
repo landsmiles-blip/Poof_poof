@@ -5,6 +5,7 @@ import {
   COLS, ROWS, CELL, SPAWN_POOL_BY_BAND, LEVELS_PER_SPAWN_BAND, COINS_PER_SCORE, TIERS,
   PRESSURE_PER_DROP_BASE, PRESSURE_PER_DROP_PER_LEVEL, PRESSURE_DRAIN_BASE,
   PRESSURE_DRAIN_TIER_BONUS, PRESSURE_DRAIN_CASCADE_BONUS,
+  PRESSURE_CLUTCH_BONUS, PRESSURE_RISE_AT,
   COMBO_WINDOW_FALL_MULTIPLIER, COMBO_STEP, COMBO_MAX_MULTIPLIER,
   SKINS, DEFAULT_SKIN_ID, POWERUPS, MILESTONE_SCORES,
   RAINBOW_TIER, RAINBOW_DEF, RAINBOW_SCHEDULE, BOMB_TIER, BOMB_DEF,
@@ -84,10 +85,14 @@ export function pressurePerDrop(level) {
 // What a single merge buys back. `step` is how deep into a chain this link is
 // (0 for the first), so a chain is worth far more than the same merges made
 // one at a time -- that is where the skill ceiling lives.
-export function pressureDrainFor(tier, step) {
+export function pressureDrainFor(tier, step, pressure = 0) {
   const tierPart = 1 + PRESSURE_DRAIN_TIER_BONUS * Math.max(0, tier);
   const chainPart = 1 + PRESSURE_DRAIN_CASCADE_BONUS * Math.max(0, step);
-  return PRESSURE_DRAIN_BASE * tierPart * chainPart;
+  // 23: the comeback. Worth more the closer the floor is to moving, so the
+  // curve can climb hard without the ending becoming arbitrary.
+  const danger = Math.max(0, Math.min(1, pressure / PRESSURE_RISE_AT));
+  const clutchPart = 1 + PRESSURE_CLUTCH_BONUS * danger;
+  return PRESSURE_DRAIN_BASE * tierPart * chainPart * clutchPart;
 }
 
 // 21: how many of a rising row's COLS cells arrive as stone at a given level.
