@@ -150,7 +150,7 @@ export function renderMenu(root, state, onStart) {
   clearPendingUnlocks(state);
 }
 
-export function renderGameOver(root, state, onPlayAgain) {
+export function renderGameOver(root, state, onPlayAgain, onBackToMenu) {
   const isNewBest = state.score >= state.highScore && state.score > 0;
   const bestBadge = isNewBest
     ? `<span class="score-pill new-best">NEW BEST!</span>`
@@ -183,6 +183,7 @@ export function renderGameOver(root, state, onPlayAgain) {
     `,
     playLabel: 'Play Again',
     onStart: onPlayAgain,
+    onBackToMenu,
   });
 }
 
@@ -221,15 +222,19 @@ export function renderPausePanel(root, state, { onResume, onBackToMenu }) {
           ${soundButtonHTML()}
           ${musicButtonHTML()}
         </div>
-        <button class="sound-btn" id="pause-menu-btn">Back to menu</button>
+        <button class="sound-btn" id="pause-menu-btn" aria-label="Main Menu">Main Menu</button>
       </div>
     `;
-    root.querySelector('#pause-resume-btn').addEventListener('click', () => {
+    root.querySelector('#pause-resume-btn').addEventListener('click', (e) => {
+      e?.preventDefault?.();
       window.removeEventListener('keydown', onKeyDown);
+      playUiTick();
       onResume();
     });
-    root.querySelector('#pause-menu-btn').addEventListener('click', () => {
+    root.querySelector('#pause-menu-btn').addEventListener('click', (e) => {
+      e?.preventDefault?.();
       window.removeEventListener('keydown', onKeyDown);
+      playUiTick();
       onBackToMenu();
     });
     wireSoundButton(root, draw, state);
@@ -246,7 +251,7 @@ export function renderPausePanel(root, state, { onResume, onBackToMenu }) {
 // Play, an icon row); the icon row opens one of three panels within the same
 // overlay, each with its own back control. The overlay still fully replaces
 // the canvas either way -- this only restructures what's inside it.
-function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onStart }) {
+function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onStart, onBackToMenu }) {
   // Held across redraws so buying something does not clear the toggles.
   const opts = { useSlowDrop: false, useExtraRow: false, useRainbow: false };
   let panel = 'home'; // 'home' | 'cart' | 'palette' | 'gear'
@@ -258,7 +263,15 @@ function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onS
   // when this screen instance is torn down (start()), so repeated
   // menu/game-over cycles never accumulate listeners.
   function onKeyDown(evt) {
-    if (evt.key !== 'Escape' || panel === 'home') return;
+    if (evt.key !== 'Escape') return;
+    if (panel === 'home') {
+      if (onBackToMenu) {
+        window.removeEventListener('keydown', onKeyDown);
+        playUiTick();
+        onBackToMenu();
+      }
+      return;
+    }
     panel = 'home';
     draw();
   }
@@ -290,6 +303,7 @@ function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onS
         <h1${titleClass ? ` class="${titleClass}"` : ''}>${title}</h1>
         ${lead}
         <button class="primary" id="play-btn">${playLabel}</button>
+        ${onBackToMenu ? '<button class="sound-btn" id="gameover-menu-btn" aria-label="Main Menu">Main Menu</button>' : ''}
         <div class="icon-row">
           <button class="icon-btn" id="open-cart">
             <span class="icon-slot" data-icon="cart"></span>
@@ -374,6 +388,15 @@ function renderShopScreen(root, state, { title, titleClass, lead, playLabel, onS
       root.querySelector('#open-palette').addEventListener('click', openPanel('palette'));
       root.querySelector('#open-gear').addEventListener('click', openPanel('gear'));
       root.querySelector('#play-btn').addEventListener('click', start);
+      const menuBtn = root.querySelector('#gameover-menu-btn');
+      if (menuBtn && onBackToMenu) {
+        menuBtn.addEventListener('click', (e) => {
+          e?.preventDefault?.();
+          window.removeEventListener('keydown', onKeyDown);
+          playUiTick();
+          onBackToMenu();
+        });
+      }
       return;
     }
 

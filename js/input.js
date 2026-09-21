@@ -9,7 +9,9 @@ import {
 import { removeFruitAt, setDragTarget, hardDrop, swapFruits, validateSwapSelection } from './physics.js';
 import {
   hudPowerUps, canUsePowerUp, armRemover, consumeRemover, plantBomb, armSwap, consumeSwap,
+  SCREEN,
 } from './state.js';
+import { gameOverHomeButtonRect } from './render.js';
 import { unlockAudio, playUiTick } from './audio.js';
 
 function inRect(point, rect) {
@@ -138,6 +140,13 @@ export function attachInput(canvas, state) {
     unlockAudio();
 
     const point = toCanvasPoint(evt);
+
+    if (state.screen === SCREEN.GAMEOVER) {
+      if (inRect(point, gameOverHomeButtonRect(state))) {
+        state.events.push({ type: 'homeRequested' });
+        return;
+      }
+    }
 
     if (point.y <= HUD_HEIGHT) {
       if (inRect(point, pauseButtonRect())) {

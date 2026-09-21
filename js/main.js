@@ -10,6 +10,7 @@ import {
 import {
   createInitialState, SCREEN, startRun, endRun, tickCombo, skinColor, tierColor, devModeEnabled,
   triggerLockedFlash, tickLockedFlash, tickChipPulse, toSaveBlob,
+  makeEmptyGrid, effectiveRows,
 } from './state.js';
 import * as platform from './platform.js';
 import { spawnFruit, stepPhysics, isGameOver } from './physics.js';
@@ -274,6 +275,8 @@ function showScreen() {
       // this is the Play Again path, the one the freeze's reproduction
       // actually hits.
       if (rafHandle === null) startLoop();
+    }, () => {
+      backToMenuFromGameOver();
     });
   }
 }
@@ -393,6 +396,8 @@ function drainEvents() {
         // set by grantEarnedCharge (state.js); this is just the sound/haptic.
         playChargeEarned();
         vibrate(HAPTIC_CHARGE_EARNED_MS);
+      } else if (event.type === 'homeRequested' || event.type === 'mainMenuRequested') {
+        backToMenuFromGameOver();
       } else if (event.type === 'pauseRequested') {
         // 9.3: routed through state.events (not a callback) so input.js's
         // attachInput can stay exactly (canvas, state) -- see its own comment
@@ -640,24 +645,44 @@ function closePauseMenu() {
   resumeRun();
 }
 
-// "Back to menu" means the game's OWN menu (a Playables hard requirement --
-// no exit/quit control of any kind may leave the Playable itself), not the
-// results screen endRun normally leads to next. The score/coins/unlock
-// tallying endRun does still has to run -- leaving voluntarily should not
-// erase progress this run already earned -- only the SCREEN it chose is
-// overridden here, straight to the menu instead of showScreen()'s GAMEOVER
-// branch. closePauseMenu runs first so the loop/audio are back in their
-// normal always-on state before this screen transition -- otherwise the
-// NEXT run would start with a permanently cancelled rAF loop.
+// Main Menu / Back to menu: leaves the active run and routes back to the
+// game's root Menu screen. Closes the pause panel, cancels any pending rAF
+// handles, halts music playback immediately, resets the active grid and
+// run-scoped state, persists earned progress, and transitions to SCREEN.MENU.
 function backToMenuFromPause() {
-  closePauseMenu();
+  if (pausePanelOpen) {
+    pausePanelOpen = false;
+    pausePanelRoot.hidden = true;
+    pausePanelRoot.innerHTML = '';
+  }
+  if (rafHandle !== null) {
+    cancelAnimationFrame(rafHandle);
+    rafHandle = null;
+  }
+  stopWatchdog();
+  state.paused = false;
+  resumeAudio();
+  stopMusic(true);
   endRun(state, 'quit-to-menu');
+  state.grid = makeEmptyGrid(effectiveRows(state));
+  state.stackHeight.fill(0);
+  state.pressure = 0;
+  state.active = null;
+  state.armPreviewCell = null;
+  state.events.length = 0;
   persistNow();
   platform.submitScore(state.highScore);
-  stopMusic();
   state.screen = SCREEN.MENU;
   clearEffects(fx);
   showScreen();
+  if (rafHandle === null) startLoop();
+}
+
+// Game Over "Back Home" / "Main Menu": returns the player to the root Menu.
+// Clears active grid, stops active render frame requests, stops music loops,
+// resets state variables, and routes cleanly back to the root MAIN_MENU.
+function backToMenuFromGameOver() {
+  backToMenuFromPause();
 }
 
 // Order: SDK script tag (index.html, before this module) -> platform.init()

@@ -41,6 +41,20 @@ export function roundRectPath(ctx, x, y, w, h, r) {
   }
 }
 
+// Pass A layout helper: Game Over "Back Home" / "Main Menu" button bounds
+export function gameOverHomeButtonRect(state) {
+  const width = BOARD_WIDTH;
+  const height = canvasHeightFor(state);
+  const btnW = 160;
+  const btnH = 40;
+  return {
+    x: (width - btnW) / 2,
+    y: height / 2 + 50,
+    w: btnW,
+    h: btnH,
+  };
+}
+
 function tierDefFor(tierIndex) {
   if (tierIndex === RAINBOW_TIER) return RAINBOW_DEF;
   if (tierIndex === BOMB_TIER) return BOMB_DEF;
@@ -830,6 +844,24 @@ function highlightAngleFor(tierIndex) {
 // Sculpted organic silhouettes with bezierCurveTo, clipped 4-stop createRadialGradient
 // volumetric 3D lighting, conforming inner rim highlight, and crisp specular glints.
 function drawOrganicFruitBody(ctx, x, y, radius, fill, resolvedTier) {
+  // Phase 3: High-Contrast Satiation Palettes - glowing radial matrices for high-tier fruit (tier >= 6)
+  if (resolvedTier >= 6) {
+    ctx.save();
+    const auraRadius = radius * 1.45;
+    const auraGrad = ctx.createRadialGradient(x, y, radius * 0.4, x, y, auraRadius);
+    const baseColor = (typeof fill === 'string' && fill.startsWith('#'))
+      ? `rgba(${parseInt(fill.slice(1, 3), 16)},${parseInt(fill.slice(3, 5), 16)},${parseInt(fill.slice(5, 7), 16)},`
+      : 'rgba(255, 180, 50,';
+    auraGrad.addColorStop(0, `${baseColor}0.38)`);
+    auraGrad.addColorStop(0.55, `${baseColor}0.14)`);
+    auraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = auraGrad;
+    ctx.beginPath();
+    ctx.arc(x, y, auraRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   ctx.save();
 
   // 1. Build organic bezier silhouette path
