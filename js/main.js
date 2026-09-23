@@ -579,6 +579,21 @@ function update(dt) {
       playGameOver();
       stopMusic();
       showScreen();
+      // Playgama's sixth required step: "Show interstitial ads at natural
+      // pauses, such as level transitions or game over." Fired AFTER
+      // showScreen() so the ad closes back onto the finished board and the
+      // Play Again button, not onto a blank frame.
+      //
+      // Deliberately not also fired on quit-to-menu: that is the player
+      // choosing to leave, and charging them an ad for it reads as a
+      // punishment. Game over is the natural break.
+      //
+      // No throttle here on purpose -- both hosts enforce their own minimum
+      // gap between interstitials (the Bridge defaults to 60s and drops
+      // early calls itself), and a second timer on our side would only
+      // disagree with theirs. A no-op wherever ads are unsupported, which is
+      // every local and Pages run.
+      platform.showInterstitial('game_over');
     }
   }
 

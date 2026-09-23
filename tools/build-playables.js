@@ -17,7 +17,52 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const OUT = path.join(ROOT, 'dist', 'playables');
+
+// Two archives come out of this one script:
+//
+//   node tools/build-playables.js              -> dist/playables/
+//   node tools/build-playables.js --playgama   -> dist/playgama/
+//
+// One script and not two on purpose. Every guard below -- the orientation
+// check, the ?dev=1 strip, the debug-hook strip, the createLocalImpl
+// certification strip, the index.html sync check -- has to hold for BOTH
+// archives, because Playgama holds a master publisher account with YouTube
+// and can distribute the Playgama archive to Playables. A forked second
+// script would drift from this one and quietly lose a guard.
+//
+// The Playgama archive differs by exactly three things, all additive: the
+// vendored Bridge SDK file, its config, and one extra script tag.
+const PLAYGAMA = process.argv.includes('--playgama');
+const BUILD_NAME = PLAYGAMA ? 'playgama' : 'playables';
+const OUT = path.join(ROOT, 'dist', BUILD_NAME);
+
+// The Bridge polls window.ytgame forever (its waitFor helper is a bare
+// setInterval with no timeout), so on Playables its initialize() never
+// resolves unless something loads Google's SDK. That means the YouTube tag
+// below is NOT optional in the Playgama archive -- dropping it would hang
+// the game on the loading screen with no error to read.
+const BRIDGE_FILE = 'playgama-bridge.js';
+const BRIDGE_CONFIG_FILE = 'playgama-bridge-config.json';
+
+// id must match BRIDGE_LEADERBOARD_ID in js/platform.js. isMain is what makes
+// the YouTube path accept the score at all: Playgama's YoutubePlatformBridge
+// rejects a non-main leaderboard outright, and routes a main one to the same
+// ytgame.engagement.sendScore({ value }) the direct build already calls.
+//
+// Deliberately minimal. No crossPromo block: with one configured the Bridge
+// renders <a target="_blank"> tiles to other games on pause, which is a
+// straight breach of the Playables rule against links to external content --
+// left out, the module finds no games and never renders. Analytics is left
+// ON (the default): the Bridge disables it by itself on YouTube, where its
+// own platform bridge reports external calls unsupported, and everywhere
+// else it is what feeds the Playgama dashboard's play counts.
+//
+// videoPreviews is the one thing still missing here -- image + videoId puts
+// a channel video in the corner of the desktop loading screen, opened
+// through ytgame.engagement.openYTContent. Add it once a video is chosen.
+const BRIDGE_CONFIG = {
+  leaderboards: [{ id: 'highscore', isMain: true }],
+};
 
 const INCLUDE_DIRS = ['css', 'js', path.join('assets', 'fonts')];
 
@@ -178,7 +223,13 @@ function buildIndexHtml() {
      (developers.google.com/youtube/gaming/playables/reference/getting_started).
      Phase 16 closed the gap left open since phase 2 -- see docs/phase16brief.md. -->
 <script src="https://www.youtube.com/game_api/v1"></script>
-<script type="module" src="js/main.js"></script>
+${PLAYGAMA ? `<!-- Playgama Bridge. Served from the archive, never from their CDN: the
+     Playables requirements forbid external calls to anything that is not a
+     Google or YouTube API, and this archive can be distributed to Playables.
+     A classic script, so window.bridge exists before the deferred module
+     below evaluates -- which is what js/platform.js selects on. -->
+<script src="${BRIDGE_FILE}"></script>
+` : ''}<script type="module" src="js/main.js"></script>
 </body>
 </html>
 `;
@@ -399,6 +450,11 @@ function stripLocalImplForCertification() {
     onAudioEnabledChange() {}, // never fires locally -- audio is always enabled
     async submitScore() {},
     async language() { return 'en'; },
+    // No ad network outside a host container, so the game asks and is told
+    // no. Returning false (rather than omitting the method) keeps every
+    // implementation answering the same interface.
+    isInterstitialSupported() { return false; },
+    showInterstitial() {},
     // Not part of the Playables-facing interface -- a local-only extension so
     // ?dev=1 (js/state.js's devModeEnabled) can keep inflating inventory and
     // highScore in memory without ever persisting it over a real save.
@@ -446,6 +502,8 @@ function createLocalImpl() {
     onAudioEnabledChange() {},
     async submitScore() {},
     async language() { return 'en'; },
+    isInterstitialSupported() { return false; },
+    showInterstitial() {},
     setReadOnly(value) { readOnly = Boolean(value); },
     isReadOnly() { return readOnly; },
   };
@@ -536,12 +594,33 @@ function main() {
   stripDebugHook();
   stripLocalImplForCertification();
   buildIndexHtml();
+
+  if (PLAYGAMA) {
+    const bridgeSrc = path.join(ROOT, 'vendor', BRIDGE_FILE);
+    if (!fs.existsSync(bridgeSrc)) {
+      throw new Error(`build-playables: vendor/${BRIDGE_FILE} is missing -- see vendor/README.md.`);
+    }
+    fs.copyFileSync(bridgeSrc, path.join(OUT, BRIDGE_FILE));
+    fs.writeFileSync(
+      path.join(OUT, BRIDGE_CONFIG_FILE),
+      `${JSON.stringify(BRIDGE_CONFIG, null, 2)}\n`,
+    );
+    // The Bridge reads './playgama-bridge-config.json' relative to the page,
+    // so both files have to sit beside index.html at the archive root --
+    // which is also Playgama's own upload rule ("Your ZIP archive should
+    // include a single index.html file at the root").
+    for (const f of [BRIDGE_FILE, BRIDGE_CONFIG_FILE, 'index.html']) {
+      if (!fs.existsSync(path.join(OUT, f))) {
+        throw new Error(`build-playables: ${f} did not land at the archive root.`);
+      }
+    }
+  }
   assertNoDebugHookString();
   assertNoLocalStorageOrVisibilityAPI();
 
   const { files, bytes } = countFilesAndBytes(OUT);
   const mib = (bytes / (1024 * 1024)).toFixed(3);
-  console.log(`dist/playables/: ${files} files, ${bytes} bytes (${mib} MiB)`);
+  console.log(`dist/${BUILD_NAME}/: ${files} files, ${bytes} bytes (${mib} MiB)`);
   console.log('Limits: 30 MiB initial (measured to gameReady), 250 MiB total, 30 MiB/file, 8000 files.');
   if (files > 8000) throw new Error(`build-playables: ${files} files exceeds the 8000-file limit.`);
   if (bytes > 250 * 1024 * 1024) throw new Error(`build-playables: ${bytes} bytes exceeds the 250 MiB total limit.`);
